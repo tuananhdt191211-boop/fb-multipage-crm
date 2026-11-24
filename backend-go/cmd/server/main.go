@@ -1,0 +1,138 @@
+package main
+
+import (
+	"log"
+	"net/http"
+
+	"fb-multipage-crm/internal/config"
+	"fb-multipage-crm/internal/database"
+	"fb-multipage-crm/internal/handlers"
+	"fb-multipage-crm/internal/middleware"
+
+	"github.com/gin-gonic/gin"
+)
+
+func main() {
+	cfg := config.Load()
+	db := database.Connect(cfg.DatabaseURL)
+
+	authHandler := handlers.NewAuthHandler(db, cfg)
+	postHandler := handlers.NewPostHandler(db, cfg)
+	pageHandler := handlers.NewFacebookPageHandler(db, cfg)
+	aiHandler := handlers.NewAIHandler(db, cfg)
+	inboxHandler := handlers.NewInboxHandler(db, cfg)
+	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
+	roleHandler := handlers.NewRoleHandler(db)
+	webhookHandler := handlers.NewWebhookHandler(db, cfg, aiHandler)
+
+	r := gin.Default()
+
+	r.Use(func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", cfg.FrontendURL)
+		c.Header("Access-Control-Allow-Credentials", "true")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		if c.Request.Method == http.MethodOptions {
+			c.AbortWithStatus(http.StatusNoContent)
+			return
+		}
+		c.Next()
+	})
+
+	r.Static("/uploads", "./uploads")
+
+	// Route trả ảnh đại diện khách hàng từ Graph API
+	r.GET("/api/v1/inbox/avatar/:page_id/:psid", inboxHandler.GetCustomerAvatar)
+
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	r.GET("/favicon.ico", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+
+	// Facebook Webhook công khai (Meta gọi trực tiếp không qua JWT)
+	r.GET("/api/v1/webhook/facebook", webhookHandler.VerifyWebhook)
+	r.POST("/api/v1/webhook/facebook", webhookHandler.HandleWebhook)
+
+	// Route công khai (không cần đăng nhập trước)
+	authPublic := r.Group("/api/v1/auth")
+	{
+		authPublic.POST("/register", authHandler.Register)
+		authPublic.POST("/login", authHandler.Login)
+		authPublic.GET("/google", authHandler.GoogleLogin)
+		authPublic.GET("/google/callback", authHandler.GoogleCallback)
+		authPublic.GET("/facebook", authHandler.FacebookLogin)
+		authPublic.GET("/facebook/callback", authHandler.FacebookCallback)
+	}
+
+	// Route yêu cầu đăng nhập (JWT)
+	authProtected := r.Group("/api/v1/auth", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		authProtected.GET("/me", authHandler.Me)
+		authProtected.POST("/logout", authHandler.Logout)
+	}
+
+	// Route phân cấp bậc & phân quyền (Admin & Manager)
+	roles := r.Group("/api/v1/roles", middleware.JWTAuth(cfg.JWTSecret), middleware.RequireRoles(db, "admin", "manager"))
+	{
+		roles.GET("/users", roleHandler.ListUsers)
+		roles.PATCH("/users/:id/role", middleware.RequireRoles(db, "admin"), roleHandler.AssignRole)
+		roles.PATCH("/users/:id/permissions", roleHandler.AssignStaffPermissions)
+	}
+
+	// Route gộp và quản lý Fanpage Facebook
+	pagesGroup := r.Group("/api/v1/pages", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		pagesGroup.GET("", pageHandler.ListPages)
+		pagesGroup.POST("/connect", middleware.RequireRoles(db, "admin", "manager"), pageHandler.ConnectPage)
+		pagesGroup.POST("/sync", pageHandler.SyncFromFacebook)
+		pagesGroup.PATCH("/:id/toggle", pageHandler.TogglePage)
+		pagesGroup.DELETE("/:id", pageHandler.DisconnectPage)
+	}
+
+	inboxGroup := r.Group("/api/v1/inbox", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		inboxGroup.GET("/conversations", inboxHandler.ListConversations)
+		inboxGroup.POST("/sync", inboxHandler.SyncMessages)
+		inboxGroup.POST("/upload", inboxHandler.UploadInboxImages)
+		inboxGroup.GET("/conversations/:id/messages", inboxHandler.GetMessages)
+		inboxGroup.POST("/conversations/:id/messages", inboxHandler.SendMessage)
+	}
+
+	aiGroup := r.Group("/api/v1/ai", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		aiGroup.GET("/settings", aiHandler.ListAllPageSettings)
+		aiGroup.GET("/settings/:page_id", aiHandler.GetPageSetting)
+		aiGroup.PUT("/settings/:page_id", aiHandler.SavePageSetting)
+		aiGroup.POST("/suggest/:conversation_id", aiHandler.SuggestReply)
+		aiGroup.POST("/generate-script", aiHandler.GenerateSalesScript)
+	}
+
+	// Route tự động lên lịch & đăng bài đa Fanpage
+	postsGroup := r.Group("/api/v1/posts", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		postsGroup.GET("", postHandler.ListScheduledPosts)
+		postsGroup.POST("", postHandler.CreateScheduledPost)
+		postsGroup.POST("/:id/publish-now", postHandler.PublishNowPost)
+		postsGroup.DELETE("/:id", postHandler.DeleteScheduledPost)
+	}
+
+	// Route nghiên cứu & bám kênh đối thủ
+	competitorsGroup := r.Group("/api/v1/competitors", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		competitorsGroup.GET("", competitorHandler.ListCompetitors)
+		competitorsGroup.GET("/search", competitorHandler.SearchByKeyword)
+		competitorsGroup.POST("", competitorHandler.AddCompetitor)
+		competitorsGroup.POST("/:id/sync", competitorHandler.SyncCompetitorPosts)
+		competitorsGroup.DELETE("/:id", competitorHandler.DeleteCompetitor)
+		competitorsGroup.POST("/posts/manual", competitorHandler.CreateManualCompetitorPost)
+		competitorsGroup.POST("/posts/:id/analyze", competitorHandler.AnalyzeAndRemixPost)
+	}
+
+	log.Printf("Backend Golang đang chạy tại http://localhost:%s", cfg.Port)
+	if err := r.Run(":" + cfg.Port); err != nil {
+		log.Fatal(err)
+	}
+}

@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: crm_user
+      POSTGRES_PASSWORD: mat_khau_db_manh_cua_ban
+      POSTGRES_DB: fb_crm
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend-go
+    restart: always
+    depends_on:
+      - postgres
+    env_file:
+      - ./backend-go/.env
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=crm_user
+      - DB_PASSWORD=mat_khau_db_manh_cua_ban
+      - DB_NAME=fb_crm
+      - PORT=8080
+    volumes:
+      - uploads_data:/app/uploads
+
+  frontend:
+    build: ./web-vue
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  pg_data:
+  uploads_data:

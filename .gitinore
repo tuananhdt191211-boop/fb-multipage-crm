@@ -1,0 +1,14 @@
+# Bảo mật biến môi trường & API Key
+.env
+*.env
+
+# Thư viện & file build nặng
+node_modules/
+dist/
+backend-go/server
+backend-go/server.exe
+*.db
+*.sqlite
+
+# Ảnh tải lên tạm thời
+uploads/
