@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.stores'
+import BroadcastView from '../views/BroadcastView.vue'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -61,6 +62,12 @@ const router = createRouter({
   component: () => import('@/views/CompetitorView.vue'),
   meta: { requiresAuth: true }
 },
+{
+  path: '/broadcasts',
+  name: 'broadcasts',
+  component: BroadcastView,
+  meta: { requiresAuth: true }
+}
   ]
 })
 

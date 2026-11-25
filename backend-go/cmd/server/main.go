@@ -43,6 +43,7 @@ func main() {
 	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
 	roleHandler := handlers.NewRoleHandler(db)
 	webhookHandler := handlers.NewWebhookHandler(db, cfg, aiHandler)
+	broadcastHandler := handlers.NewBroadcastHandler(db, cfg)
 
 	r := gin.Default()
 	// Tự động chuẩn hóa URL nếu Frontend gửi thừa dấu '/' (ví dụ /api/v1//auth/register)
@@ -173,6 +174,14 @@ func main() {
 		competitorsGroup.DELETE("/:id", competitorHandler.DeleteCompetitor)
 		competitorsGroup.POST("/posts/manual", competitorHandler.CreateManualCompetitorPost)
 		competitorsGroup.POST("/posts/:id/analyze", competitorHandler.AnalyzeAndRemixPost)
+	}
+
+	// Route chăm sóc khách cũ tự động (trong 24h & ngoài 24h, chống spam)
+	broadcastsGroup := r.Group("/api/v1/broadcasts", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		broadcastsGroup.GET("", broadcastHandler.ListCampaigns)
+		broadcastsGroup.POST("", broadcastHandler.CreateCampaign)
+		broadcastsGroup.PATCH("/:id/status", broadcastHandler.ToggleStatus)
 	}
 
 	log.Printf("Backend Golang đang chạy tại http://localhost:%s", cfg.Port)

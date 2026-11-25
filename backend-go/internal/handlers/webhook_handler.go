@@ -85,9 +85,12 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 				} `json:"recipient"`
 				Timestamp int64 `json:"timestamp"`
 				Message   *struct {
-					MID         string `json:"mid"`
-					Text        string `json:"text"`
-					IsEcho      bool   `json:"is_echo"`
+					MID        string `json:"mid"`
+					Text       string `json:"text"`
+					IsEcho     bool   `json:"is_echo"`
+					QuickReply *struct {
+						Payload string `json:"payload"`
+					} `json:"quick_reply"`
 					Attachments []struct {
 						Type    string `json:"type"`
 						Payload struct {
@@ -95,6 +98,10 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 						} `json:"payload"`
 					} `json:"attachments"`
 				} `json:"message"`
+				Postback *struct {
+					Title   string `json:"title"`
+					Payload string `json:"payload"`
+				} `json:"postback"`
 			} `json:"messaging"`
 		} `json:"entry"`
 	}
@@ -115,6 +122,15 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 			}
 
 			for _, event := range entry.Messaging {
+				// Xử lý sự kiện Postback (nếu khách bấm nút trên Template)
+				if event.Message == nil && event.Postback != nil {
+					customerPSID := event.Sender.ID
+					if customerPSID != "" && customerPSID != pageID {
+						h.handleCustomerInteraction(page, customerPSID, "", event.Postback.Title, event.Postback.Payload, "", "")
+					}
+					continue
+				}
+
 				if event.Message == nil {
 					continue
 				}
@@ -168,53 +184,136 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 					continue
 				}
 
-				now := time.Now()
-				var conv models.Conversation
-				if h.DB.Where("page_id = ? AND customer_psid = ?", pageID, customerPSID).First(&conv).Error != nil {
-					suffix := customerPSID
-					if len(customerPSID) > 4 {
-						suffix = customerPSID[len(customerPSID)-4:]
-					}
-					conv = models.Conversation{
-						PageID:          pageID,
-						PageName:        page.Name,
-						ThreadID:        "t_" + customerPSID,
-						CustomerPSID:    customerPSID,
-						CustomerName:    "Khách hàng #" + suffix,
-						LastMessage:     content,
-						LastMessageTime: now,
-						UnreadCount:     1,
-					}
-					_ = h.DB.Create(&conv).Error
-				} else {
-					conv.LastMessage = content
-					conv.LastMessageTime = now
-					conv.UnreadCount += 1
-					_ = h.DB.Save(&conv).Error
+				qrPayload := ""
+				if event.Message.QuickReply != nil {
+					qrPayload = strings.TrimSpace(event.Message.QuickReply.Payload)
 				}
 
-				customerMsg := models.Message{
-					ConversationID: conv.ID,
-					FBMessageID:    event.Message.MID,
-					SenderType:     "customer",
-					SenderName:     conv.CustomerName,
-					Content:        content,
-					AttachmentURL:  attURL,
-					AttachmentType: attType,
-					SentAt:         now,
-				}
-				_ = h.DB.Create(&customerMsg).Error
-
-				// Ưu tiên tự động trả lời ngay lập tức bằng tin nhắn mẫu đã lưu nếu khớp từ khóa
-				if sentTemplate := h.tryAutoReplyWithSavedTemplate(page, &conv, content); sentTemplate {
-					continue
-				}
-
-				// Nếu không khớp mẫu tự động: hẹn giờ 2 phút để AI phản hồi nếu nhân viên chưa nhắn
-				go h.scheduleAutoReplyAfter2Minutes(page, conv.ID, customerMsg.ID)
+				h.handleCustomerInteraction(page, customerPSID, event.Message.MID, content, qrPayload, attURL, attType)
 			}
 		}
 	}()
+}
+
+// handleCustomerInteraction lưu tin nhắn khách, xử lý Opt-out broadcast và kích hoạt AI/mẫu câu
+func (h *WebhookHandler) handleCustomerInteraction(
+	page models.FacebookPage,
+	customerPSID string,
+	fbMessageID string,
+	content string,
+	actionPayload string,
+	attURL string,
+	attType string,
+) {
+	now := time.Now()
+	var conv models.Conversation
+	if h.DB.Where("page_id = ? AND customer_psid = ?", page.PageID, customerPSID).First(&conv).Error != nil {
+		suffix := customerPSID
+		if len(customerPSID) > 4 {
+			suffix = customerPSID[len(customerPSID)-4:]
+		}
+		conv = models.Conversation{
+			PageID:          page.PageID,
+			PageName:        page.Name,
+			ThreadID:        "t_" + customerPSID,
+			CustomerPSID:    customerPSID,
+			CustomerName:    "Khách hàng #" + suffix,
+			LastMessage:     content,
+			LastMessageTime: now,
+			UnreadCount:     1,
+		}
+		_ = h.DB.Create(&conv).Error
+	} else {
+		conv.LastMessage = content
+		conv.LastMessageTime = now
+		conv.UnreadCount += 1
+		_ = h.DB.Save(&conv).Error
+	}
+
+	if strings.TrimSpace(content) != "" {
+		customerMsg := models.Message{
+			ConversationID: conv.ID,
+			FBMessageID:    fbMessageID,
+			SenderType:     "customer",
+			SenderName:     conv.CustomerName,
+			Content:        content,
+			AttachmentURL:  attURL,
+			AttachmentType: attType,
+			SentAt:         now,
+		}
+		_ = h.DB.Create(&customerMsg).Error
+
+		// Kiểm tra nếu khách bấm "Ngừng nhận tin" hoặc nhắn từ khóa từ chối broadcast
+		normalized := strings.ToLower(strings.TrimSpace(content))
+		if actionPayload == "OPT_OUT_BROADCAST" ||
+			normalized == "ngừng nhận tin" ||
+			normalized == "hủy nhận tin" ||
+			normalized == "stop" {
+
+			_ = h.DB.Exec(
+				`UPDATE conversations SET is_unsubscribed = TRUE, unsubscribed_at = NOW() WHERE id = ?`,
+				conv.ID,
+			).Error
+			_ = h.DB.Exec(
+				`UPDATE broadcast_messages SET status = 'cancelled', error_message = 'Khách hàng từ chối nhận tin' WHERE conversation_id = ? AND status = 'pending'`,
+				conv.ID,
+			).Error
+
+			h.sendOptOutConfirmation(page, conv)
+			return
+		}
+
+		// Nếu khách nhắn lại bình thường -> tự động mở lại trạng thái nhận tin & cửa sổ 24h
+		_ = h.DB.Exec(
+			`UPDATE conversations SET is_unsubscribed = FALSE, last_customer_message_at = NOW() WHERE id = ?`,
+			conv.ID,
+		).Error
+
+		// Ưu tiên tự động trả lời ngay lập tức bằng tin nhắn mẫu đã lưu nếu khớp từ khóa
+		if sentTemplate := h.tryAutoReplyWithSavedTemplate(page, &conv, content); sentTemplate {
+			return
+		}
+
+		// Nếu không khớp mẫu tự động: hẹn giờ 2 phút để AI phản hồi nếu nhân viên chưa nhắn
+		go h.scheduleAutoReplyAfter2Minutes(page, conv.ID, customerMsg.ID)
+	}
+}
+
+// sendOptOutConfirmation xác nhận đã ngừng gửi tin tự động khi khách yêu cầu
+func (h *WebhookHandler) sendOptOutConfirmation(page models.FacebookPage, conv models.Conversation) {
+	pageToken, err := security.DecryptSecret(page.EncryptedPageToken, h.getEncryptionKey())
+	if err != nil || pageToken == "" {
+		return
+	}
+
+	ackText := "Dạ shop đã ghi nhận và sẽ ngừng gửi tin nhắn thông báo tự động cho bạn ạ. Khi nào cần hỗ trợ bạn cứ nhắn lại cho shop nhé!"
+	payload := map[string]interface{}{
+		"recipient":      map[string]string{"id": conv.CustomerPSID},
+		"messaging_type": "RESPONSE",
+		"message":        map[string]string{"text": ackText},
+	}
+	bodyBytes, _ := json.Marshal(payload)
+
+	sendURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages?access_token=%s", page.PageID, pageToken)
+	resp, err := h.HTTPClient.Post(sendURL, "application/json", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	now := time.Now()
+	_ = h.DB.Create(&models.Message{
+		ConversationID: conv.ID,
+		SenderType:     "page",
+		SenderName:     page.Name,
+		Content:        ackText,
+		SentAt:         now,
+	}).Error
+
+	conv.LastMessage = ackText
+	conv.LastMessageTime = now
+	conv.UnreadCount = 0
+	_ = h.DB.Save(&conv).Error
 }
 
 // tryAutoReplyWithSavedTemplate đối chiếu nội dung tin nhắn khách với các mẫu có autoTrigger=true của Fanpage
