@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"fb-multipage-crm/internal/config"
 	"fb-multipage-crm/internal/database"
@@ -26,12 +27,24 @@ func main() {
 	webhookHandler := handlers.NewWebhookHandler(db, cfg, aiHandler)
 
 	r := gin.Default()
+	// Tự động chuẩn hóa URL nếu Frontend gửi thừa dấu '/' (ví dụ /api/v1//auth/register)
+	r.RemoveExtraSlash = true
+	r.HandleMethodNotAllowed = true
+
+	// Chuẩn hóa danh sách Frontend URL được phép gọi API (loại bỏ dấu '/' ở cuối nếu có)
+	allowedOrigin := strings.TrimRight(strings.TrimSpace(cfg.FrontendURL), "/")
 
 	r.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", cfg.FrontendURL)
+		origin := c.GetHeader("Origin")
+		if allowedOrigin == "*" || (origin != "" && origin == allowedOrigin) {
+			c.Header("Access-Control-Allow-Origin", origin)
+		} else if allowedOrigin != "" {
+			c.Header("Access-Control-Allow-Origin", allowedOrigin)
+		}
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
