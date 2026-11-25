@@ -18,6 +18,11 @@ const auth = useAuthStore()
 const email = ref('')
 const password = ref('')
 
+// Lấy URL Backend từ biến môi trường Cloudflare Pages, fallback về server Render
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL || 'https://fb-crm-backend.onrender.com/api/v1'
+).replace(/\/+$/, '')
+
 async function handleLogin() {
   if (!email.value.trim() || !password.value) return
   const ok = await auth.login({
@@ -33,11 +38,11 @@ async function handleLogin() {
 }
 
 function loginWithGoogle() {
-  window.location.href = '/api/v1/auth/google'
+  window.location.href = `${API_BASE_URL}/auth/google`
 }
 
 function loginWithFacebook() {
-  window.location.href = '/api/v1/auth/facebook'
+  window.location.href = `${API_BASE_URL}/auth/facebook`
 }
 </script>
 
