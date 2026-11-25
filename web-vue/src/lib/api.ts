@@ -1,7 +1,29 @@
 import axios from 'axios'
 
+const DEFAULT_API_BASE_URL = 'https://fb-crm-backend.onrender.com/api/v1'
+
+function resolveApiBaseUrl(): string {
+  const rawEnv = String(
+    import.meta.env.VITE_API_BASE_URL ||
+      import.meta.env.VITE_BACKEND_URL ||
+      DEFAULT_API_BASE_URL
+  ).trim()
+
+  // Nếu giá trị bị dính dạng Markdown [url](url) thì trích URL đầu tiên hợp lệ
+  const urlMatch = rawEnv.match(/https?:\/\/[^\s\]\)]+/i)
+  const cleaned = (urlMatch ? urlMatch[0] : rawEnv)
+    .replace(/^[\[\(]+|[\]\)]+$/g, '')
+    .replace(/\/+$/, '')
+
+  if (!/^https?:\/\//i.test(cleaned)) {
+    return DEFAULT_API_BASE_URL
+  }
+
+  return /\/api\/v1$/i.test(cleaned) ? cleaned : `${cleaned}/api/v1`
+}
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
+  baseURL: resolveApiBaseUrl(),
   timeout: 65000,
   headers: {
     'Content-Type': 'application/json'

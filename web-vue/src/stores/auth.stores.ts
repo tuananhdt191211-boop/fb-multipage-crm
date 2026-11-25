@@ -5,6 +5,33 @@ import type { AuthResponse, LoginPayload, RegisterPayload, User } from './../typ
 
 const TOKEN_KEY = 'access_token'
 const USER_KEY = 'auth_user'
+const DEFAULT_API_BASE_URL = 'https://fb-crm-backend.onrender.com/api/v1'
+
+function normalizeApiBaseUrl(raw?: string): string {
+  const value = String(raw || '').trim()
+  if (!value) return DEFAULT_API_BASE_URL
+
+  const urlMatch = value.match(/https?:\/\/[^\s\]\)]+/i)
+  const cleaned = (urlMatch ? urlMatch[0] : value)
+    .replace(/^[\[\(]+|[\]\)]+$/g, '')
+    .replace(/\/+$/, '')
+
+  if (!/^https?:\/\//i.test(cleaned)) {
+    return DEFAULT_API_BASE_URL
+  }
+
+  return /\/api\/v1$/i.test(cleaned) ? cleaned : `${cleaned}/api/v1`
+}
+
+// Đảm bảo instance `api` không bao giờ dùng baseURL bị lỗi ngoặc hoặc trỏ nhầm sang pages.dev
+if (api?.defaults) {
+  const currentBase = String(api.defaults.baseURL || '')
+  if (!currentBase || currentBase.includes('[') || currentBase.includes('pages.dev')) {
+    api.defaults.baseURL = normalizeApiBaseUrl(
+      import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_BACKEND_URL
+    )
+  }
+}
 
 function loadStoredUser(): User | null {
   try {

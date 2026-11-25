@@ -13,6 +13,24 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func isOriginAllowed(origin, primaryFrontend string) bool {
+	if origin == "" {
+		return false
+	}
+	cleanOrigin := strings.TrimRight(strings.TrimSpace(origin), "/")
+	if primaryFrontend != "" && cleanOrigin == primaryFrontend {
+		return true
+	}
+	// Cho phép chạy local dev ở localhost / 127.0.0.1
+	if strings.HasPrefix(cleanOrigin, "http://localhost:") ||
+		strings.HasPrefix(cleanOrigin, "http://127.0.0.1:") ||
+		cleanOrigin == "http://localhost" ||
+		cleanOrigin == "http://127.0.0.1" {
+		return true
+	}
+	return false
+}
+
 func main() {
 	cfg := config.Load()
 	db := database.Connect(cfg.DatabaseURL)
@@ -31,16 +49,25 @@ func main() {
 	r.RemoveExtraSlash = true
 	r.HandleMethodNotAllowed = true
 
-	// Chuẩn hóa danh sách Frontend URL được phép gọi API (loại bỏ dấu '/' ở cuối nếu có)
+	// Chuẩn hóa Frontend URL chính được phép gọi API (loại bỏ dấu '/' ở cuối nếu có)
 	allowedOrigin := strings.TrimRight(strings.TrimSpace(cfg.FrontendURL), "/")
 
 	r.Use(func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		if allowedOrigin == "*" || (origin != "" && origin == allowedOrigin) {
-			c.Header("Access-Control-Allow-Origin", origin)
+		c.Header("Vary", "Origin")
+
+		if allowedOrigin == "*" {
+			if origin != "" {
+				c.Header("Access-Control-Allow-Origin", origin)
+			} else {
+				c.Header("Access-Control-Allow-Origin", "*")
+			}
+		} else if isOriginAllowed(origin, allowedOrigin) {
+			c.Header("Access-Control-Allow-Origin", strings.TrimRight(strings.TrimSpace(origin), "/"))
 		} else if allowedOrigin != "" {
 			c.Header("Access-Control-Allow-Origin", allowedOrigin)
 		}
+
 		c.Header("Access-Control-Allow-Credentials", "true")
 		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
