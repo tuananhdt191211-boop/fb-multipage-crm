@@ -1,14 +1,27 @@
 <script setup lang="ts">
-const rawBase =
-  import.meta.env.VITE_API_BASE_URL ||
-  import.meta.env.VITE_BACKEND_URL ||
-  'https://fb-crm-backend.onrender.com'
+const DEFAULT_BACKEND_ORIGIN = 'https://fb-crm-backend.onrender.com'
 
-// Loại bỏ dấu '/' thừa ở cuối và bỏ hậu tố '/api/v1' nếu đã có để tránh lặp '/api/v1/api/v1'
-const backendOrigin = rawBase
-  .trim()
-  .replace(/\/+$/, '')
-  .replace(/\/api\/v1$/, '')
+function resolveBackendOrigin(): string {
+  const rawEnv = String(
+    import.meta.env.VITE_API_BASE_URL ||
+      import.meta.env.VITE_BACKEND_URL ||
+      DEFAULT_BACKEND_ORIGIN
+  ).trim()
+
+  // Nếu lỡ dán dạng [url](url) thì lấy URL đầu tiên khớp https://... hoặc http://...
+  const urlMatch = rawEnv.match(/https?:\/\/[^\s\]\)]+/i)
+  const candidate = (urlMatch ? urlMatch[0] : rawEnv)
+    .replace(/^[\[\(]+|[\]\)]+$/g, '')
+    .replace(/\/+$/, '')
+    .replace(/\/api\/v1$/i, '')
+
+  if (!/^https?:\/\//i.test(candidate)) {
+    return DEFAULT_BACKEND_ORIGIN
+  }
+  return candidate
+}
+
+const backendOrigin = resolveBackendOrigin()
 
 function loginWithProvider(provider: 'google' | 'facebook') {
   window.location.href = `${backendOrigin}/api/v1/auth/${provider}`

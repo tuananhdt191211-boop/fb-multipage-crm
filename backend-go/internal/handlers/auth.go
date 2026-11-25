@@ -30,20 +30,28 @@ type AuthHandler struct {
 }
 
 func NewAuthHandler(db *gorm.DB, cfg *config.Config) *AuthHandler {
+	clientID := strings.TrimSpace(cfg.GoogleClientID)
+	clientSecret := strings.TrimSpace(cfg.GoogleClientSecret)
+	googleRedirect := strings.TrimRight(strings.TrimSpace(cfg.GoogleRedirectURL), "/")
+
+	fbAppID := strings.TrimSpace(cfg.FacebookAppID)
+	fbAppSecret := strings.TrimSpace(cfg.FacebookAppSecret)
+	fbRedirect := strings.TrimRight(strings.TrimSpace(cfg.FacebookRedirectURL), "/")
+
 	return &AuthHandler{
 		DB:  db,
 		Cfg: cfg,
 		GoogleOAuth: &oauth2.Config{
-			ClientID:     cfg.GoogleClientID,
-			ClientSecret: cfg.GoogleClientSecret,
-			RedirectURL:  cfg.GoogleRedirectURL,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			RedirectURL:  googleRedirect,
 			Scopes:       []string{"openid", "email", "profile"},
 			Endpoint:     google.Endpoint,
 		},
 		FBOAuth: &oauth2.Config{
-			ClientID:     cfg.FacebookAppID,
-			ClientSecret: cfg.FacebookAppSecret,
-			RedirectURL:  cfg.FacebookRedirectURL,
+			ClientID:     fbAppID,
+			ClientSecret: fbAppSecret,
+			RedirectURL:  fbRedirect,
 			Scopes: []string{
 				"public_profile",
 				"email",
@@ -58,10 +66,35 @@ func NewAuthHandler(db *gorm.DB, cfg *config.Config) *AuthHandler {
 }
 
 func (h *AuthHandler) encKey() string {
-	if h.Cfg != nil && h.Cfg.JWTSecret != "" {
-		return h.Cfg.JWTSecret
+	if h.Cfg != nil && strings.TrimSpace(h.Cfg.JWTSecret) != "" {
+		return strings.TrimSpace(h.Cfg.JWTSecret)
 	}
 	return "default-dev-master-key-change-in-prod"
+}
+
+func (h *AuthHandler) frontendBaseURL() string {
+	if h.Cfg != nil {
+		clean := strings.TrimRight(strings.TrimSpace(h.Cfg.FrontendURL), "/")
+		if clean != "" {
+			return clean
+		}
+	}
+	return "https://fb-multipage-crm.pages.dev"
+}
+
+func (h *AuthHandler) isSecureRequest(c *gin.Context) bool {
+	if c.Request.TLS != nil {
+		return true
+	}
+	if strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(h.frontendBaseURL()), "https://")
+}
+
+func (h *AuthHandler) setOAuthStateCookie(c *gin.Context, state string, maxAge int) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie("oauth_state", state, maxAge, "/", "", h.isSecureRequest(c), true)
 }
 
 func (h *AuthHandler) Register(c *gin.Context) {
@@ -158,32 +191,52 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 }
 
 func (h *AuthHandler) GoogleLogin(c *gin.Context) {
-	if h.Cfg.GoogleClientID == "" || h.Cfg.GoogleClientSecret == "" {
-		h.redirectWithError(c, "Chưa cấu hình GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET trong file .env.")
+	if h.GoogleOAuth == nil || h.GoogleOAuth.ClientID == "" || h.GoogleOAuth.ClientSecret == "" || h.GoogleOAuth.RedirectURL == "" {
+		h.redirectWithError(c, "Chưa cấu hình đầy đủ GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URL.")
 		return
 	}
 	state := utils.RandomState()
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("oauth_state", state, 300, "/", "", false, true)
+	h.setOAuthStateCookie(c, state, 300)
 	c.Redirect(http.StatusTemporaryRedirect, h.GoogleOAuth.AuthCodeURL(state, oauth2.AccessTypeOnline))
 }
 
 func (h *AuthHandler) GoogleCallback(c *gin.Context) {
+	if oauthErr := strings.TrimSpace(c.Query("error")); oauthErr != "" {
+		desc := strings.TrimSpace(c.Query("error_description"))
+		if desc != "" {
+			h.redirectWithError(c, fmt.Sprintf("Google từ chối đăng nhập (%s): %s", oauthErr, desc))
+		} else {
+			h.redirectWithError(c, fmt.Sprintf("Google từ chối đăng nhập (%s).", oauthErr))
+		}
+		return
+	}
+
 	if !h.verifyOAuthState(c) {
 		h.redirectWithError(c, "Phiên xác thực Google không hợp lệ hoặc đã hết hạn.")
 		return
 	}
 
-	code := c.Query("code")
-	tok, err := h.GoogleOAuth.Exchange(context.Background(), code)
+	code := strings.TrimSpace(c.Query("code"))
+	if code == "" {
+		h.redirectWithError(c, "Thiếu mã xác thực code từ Google.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	tok, err := h.GoogleOAuth.Exchange(ctx, code)
 	if err != nil {
 		h.redirectWithError(c, "Không thể xác thực mã đăng nhập Google.")
 		return
 	}
 
-	client := h.GoogleOAuth.Client(context.Background(), tok)
+	client := h.GoogleOAuth.Client(ctx, tok)
 	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 	if err != nil || resp.StatusCode >= 400 {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		h.redirectWithError(c, "Không thể lấy thông tin tài khoản Google.")
 		return
 	}
@@ -204,34 +257,61 @@ func (h *AuthHandler) GoogleCallback(c *gin.Context) {
 }
 
 func (h *AuthHandler) FacebookLogin(c *gin.Context) {
-	if h.Cfg.FacebookAppID == "" || h.Cfg.FacebookAppSecret == "" {
-		h.redirectWithError(c, "Chưa cấu hình FACEBOOK_APP_ID / FACEBOOK_APP_SECRET trong file .env.")
+	if h.FBOAuth == nil || h.FBOAuth.ClientID == "" || h.FBOAuth.ClientSecret == "" || h.FBOAuth.RedirectURL == "" {
+		h.redirectWithError(c, "Chưa cấu hình đầy đủ FACEBOOK_APP_ID / FACEBOOK_APP_SECRET / FACEBOOK_REDIRECT_URL.")
 		return
 	}
 	state := utils.RandomState()
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie("oauth_state", state, 300, "/", "", false, true)
+	h.setOAuthStateCookie(c, state, 300)
 	// auth_type=rerequest buộc Facebook hiển thị lại màn hình chọn tất cả Fanpage nếu trước đó bị bỏ sót
 	authURL := h.FBOAuth.AuthCodeURL(state, oauth2.SetAuthURLParam("auth_type", "rerequest"))
 	c.Redirect(http.StatusTemporaryRedirect, authURL)
 }
 
 func (h *AuthHandler) FacebookCallback(c *gin.Context) {
+	if oauthErr := strings.TrimSpace(c.Query("error")); oauthErr != "" {
+		desc := strings.TrimSpace(c.Query("error_description"))
+		if desc != "" {
+			h.redirectWithError(c, fmt.Sprintf("Facebook từ chối đăng nhập (%s): %s", oauthErr, desc))
+		} else {
+			h.redirectWithError(c, fmt.Sprintf("Facebook từ chối đăng nhập (%s).", oauthErr))
+		}
+		return
+	}
+
 	if !h.verifyOAuthState(c) {
 		h.redirectWithError(c, "Phiên xác thực Facebook không hợp lệ hoặc đã hết hạn.")
 		return
 	}
 
-	code := c.Query("code")
-	tok, err := h.FBOAuth.Exchange(context.Background(), code)
+	code := strings.TrimSpace(c.Query("code"))
+	if code == "" {
+		h.redirectWithError(c, "Thiếu mã xác thực code từ Facebook.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	tok, err := h.FBOAuth.Exchange(ctx, code)
 	if err != nil {
 		h.redirectWithError(c, "Không thể xác thực mã đăng nhập Facebook.")
 		return
 	}
 
 	endpoint := "https://graph.facebook.com/v21.0/me?fields=id,name,email,picture.type(large)&access_token=" + url.QueryEscape(tok.AccessToken)
-	resp, err := http.Get(endpoint)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		h.redirectWithError(c, "Không thể tạo yêu cầu tới Facebook.")
+		return
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil || resp.StatusCode >= 400 {
+		if resp != nil {
+			resp.Body.Close()
+		}
 		h.redirectWithError(c, "Không thể lấy thông tin từ Facebook.")
 		return
 	}
@@ -272,7 +352,7 @@ func (h *AuthHandler) syncAllPagesFromOAuthToken(shortToken string) {
 			"https://graph.facebook.com/v21.0/oauth/access_token?grant_type=fb_exchange_token&client_id=%s&client_secret=%s&fb_exchange_token=%s",
 			strings.TrimSpace(h.Cfg.FacebookAppID),
 			strings.TrimSpace(h.Cfg.FacebookAppSecret),
-			shortToken,
+			url.QueryEscape(shortToken),
 		)
 		if resp, err := client.Get(exchangeURL); err == nil {
 			body, _ := io.ReadAll(resp.Body)
@@ -288,7 +368,7 @@ func (h *AuthHandler) syncAllPagesFromOAuthToken(shortToken string) {
 
 	nextURL := fmt.Sprintf(
 		"https://graph.facebook.com/v21.0/me/accounts?fields=id,name,category,access_token,picture.type(large)&limit=100&access_token=%s",
-		userToken,
+		url.QueryEscape(userToken),
 	)
 
 	for nextURL != "" {
@@ -363,6 +443,7 @@ func (h *AuthHandler) syncAllPagesFromOAuthToken(shortToken string) {
 
 func (h *AuthHandler) finishSocialLogin(c *gin.Context, provider, providerID, email, name, avatar string) {
 	email = strings.ToLower(strings.TrimSpace(email))
+	name = strings.TrimSpace(name)
 	if name == "" {
 		name = strings.Split(email, "@")[0]
 	}
@@ -388,8 +469,15 @@ func (h *AuthHandler) finishSocialLogin(c *gin.Context, provider, providerID, em
 			h.redirectWithError(c, "Tài khoản này đã bị vô hiệu hóa.")
 			return
 		}
+		updates := map[string]any{}
 		if user.AvatarURL == "" && avatar != "" {
-			h.DB.Model(&user).Update("avatar_url", avatar)
+			updates["avatar_url"] = avatar
+		}
+		if user.ProviderID == "" && providerID != "" {
+			updates["provider_id"] = providerID
+		}
+		if len(updates) > 0 {
+			h.DB.Model(&user).Updates(updates)
 		}
 	}
 
@@ -399,7 +487,7 @@ func (h *AuthHandler) finishSocialLogin(c *gin.Context, provider, providerID, em
 		return
 	}
 
-	target := fmt.Sprintf("%s/auth/callback?token=%s", strings.TrimRight(h.Cfg.FrontendURL, "/"), url.QueryEscape(jwtToken))
+	target := fmt.Sprintf("%s/auth/callback?token=%s", h.frontendBaseURL(), url.QueryEscape(jwtToken))
 	c.Redirect(http.StatusTemporaryRedirect, target)
 }
 
@@ -417,11 +505,11 @@ func (h *AuthHandler) verifyOAuthState(c *gin.Context) bool {
 	if err != nil || cookieState == "" {
 		return false
 	}
-	c.SetCookie("oauth_state", "", -1, "/", "", false, true)
+	h.setOAuthStateCookie(c, "", -1)
 	return cookieState == c.Query("state")
 }
 
 func (h *AuthHandler) redirectWithError(c *gin.Context, msg string) {
-	target := fmt.Sprintf("%s/auth/callback?error=%s", strings.TrimRight(h.Cfg.FrontendURL, "/"), url.QueryEscape(msg))
+	target := fmt.Sprintf("%s/auth/callback?error=%s", h.frontendBaseURL(), url.QueryEscape(msg))
 	c.Redirect(http.StatusTemporaryRedirect, target)
 }

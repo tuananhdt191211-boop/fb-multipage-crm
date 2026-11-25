@@ -18,10 +18,28 @@ const auth = useAuthStore()
 const email = ref('')
 const password = ref('')
 
-// Lấy URL Backend từ biến môi trường Cloudflare Pages, fallback về server Render
-const API_BASE_URL = (
-  import.meta.env.VITE_API_BASE_URL || 'https://fb-crm-backend.onrender.com/api/v1'
-).replace(/\/+$/, '')
+const DEFAULT_BACKEND_ORIGIN = 'https://fb-crm-backend.onrender.com'
+
+function resolveBackendOrigin(): string {
+  const rawEnv = String(
+    import.meta.env.VITE_API_BASE_URL ||
+      import.meta.env.VITE_BACKEND_URL ||
+      DEFAULT_BACKEND_ORIGIN
+  ).trim()
+
+  const urlMatch = rawEnv.match(/https?:\/\/[^\s\]\)]+/i)
+  const candidate = (urlMatch ? urlMatch[0] : rawEnv)
+    .replace(/^[\[\(]+\vert{}[\]\)]+$/g, '')
+    .replace(/\/+$/, '')
+    .replace(/\/api\/v1$/i, '')
+
+  if (!/^https?:\/\//i.test(candidate)) {
+    return DEFAULT_BACKEND_ORIGIN
+  }
+  return candidate
+}
+
+const BACKEND_ORIGIN = resolveBackendOrigin()
 
 async function handleLogin() {
   if (!email.value.trim() || !password.value) return
@@ -30,19 +48,16 @@ async function handleLogin() {
     password: password.value
   })
   if (ok) {
-    const redirect = typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
-      ? route.query.redirect
-      : '/'
+    const redirect =
+      typeof route.query.redirect === 'string' && route.query.redirect.startsWith('/')
+        ? route.query.redirect
+        : '/'
     router.replace(redirect)
   }
 }
 
-function loginWithGoogle() {
-  window.location.href = `${API_BASE_URL}/auth/google`
-}
-
-function loginWithFacebook() {
-  window.location.href = `${API_BASE_URL}/auth/facebook`
+function loginWithProvider(provider: 'google' | 'facebook') {
+  window.location.href = `${BACKEND_ORIGIN}/api/v1/auth/${provider}`
 }
 </script>
 
@@ -125,7 +140,7 @@ function loginWithFacebook() {
       <div class="grid grid-cols-2 gap-3">
         <button
           type="button"
-          @click="loginWithGoogle"
+          @click="loginWithProvider('google')"
           class="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 cursor-pointer"
         >
           <Sparkles class="h-4 w-4 text-amber-500" />
@@ -134,7 +149,7 @@ function loginWithFacebook() {
 
         <button
           type="button"
-          @click="loginWithFacebook"
+          @click="loginWithProvider('facebook')"
           class="flex items-center justify-center gap-2 rounded-xl border border-blue-200 bg-blue-50/70 px-3.5 py-2.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 cursor-pointer"
         >
           <span class="font-bold text-blue-600">f</span>
