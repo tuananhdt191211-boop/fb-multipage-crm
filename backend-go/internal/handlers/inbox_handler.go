@@ -38,8 +38,22 @@ type quickReplyTemplate struct {
 	Images      []string `json:"images"`
 }
 
+// conversationWithCRM mở rộng models.Conversation với các trường theo dõi & chăm sóc khách hàng
+type conversationWithCRM struct {
+	models.Conversation
+	LeadStatus      string     `gorm:"type:varchar(30);default:'new'" json:"lead_status"`
+	CustomerPhone   string     `gorm:"type:varchar(30)" json:"customer_phone"`
+	CustomerAddress string     `gorm:"type:text" json:"customer_address"`
+	CareNote        string     `gorm:"type:text" json:"care_note"`
+	NextFollowUpAt  *time.Time `json:"next_follow_up_at"`
+}
+
+func (conversationWithCRM) TableName() string {
+	return "conversations"
+}
+
 func NewInboxHandler(db *gorm.DB, cfg *config.Config) *InboxHandler {
-	_ = db.AutoMigrate(&models.Conversation{}, &models.Message{})
+	_ = db.AutoMigrate(&models.Conversation{}, &models.Message{}, &conversationWithCRM{})
 	h := &InboxHandler{
 		DB:         db,
 		Cfg:        cfg,
@@ -81,21 +95,21 @@ func sanitizeAvatarURL(raw string) string {
 	return trimmed
 }
 
-// ListConversations trả về danh sách hội thoại đã gộp từ tất cả Page đang bật
+// ListConversations trả về danh sách hội thoại đã gộp từ tất cả Page đang bật (kèm trạng thái chăm sóc khách)
 func (h *InboxHandler) ListConversations(c *gin.Context) {
 	pageID := strings.TrimSpace(c.Query("page_id"))
 	search := strings.TrimSpace(c.Query("q"))
 
-	query := h.DB.Model(&models.Conversation{})
+	query := h.DB.Model(&conversationWithCRM{})
 	if pageID != "" && pageID != "all" {
 		query = query.Where("page_id = ?", pageID)
 	}
 	if search != "" {
 		like := "%" + search + "%"
-		query = query.Where("customer_name ILIKE ? OR last_message ILIKE ?", like, like)
+		query = query.Where("customer_name ILIKE ? OR customer_phone ILIKE ? OR last_message ILIKE ?", like, like, like)
 	}
 
-	var conversations []models.Conversation
+	var conversations []conversationWithCRM
 	if err := query.Order("last_message_time DESC").Find(&conversations).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tải danh sách hội thoại"})
 		return
@@ -234,7 +248,7 @@ func TryAutoReplyWithTemplates(db *gorm.DB, encKey string, conv *models.Conversa
 		if strings.TrimSpace(imgURL) == "" {
 			continue
 		}
-		imgMID, err := sendImageAttachmentToFacebook(http.DefaultClient, conv.PageID, pageToken, conv.CustomerPSID, imgURL)
+		imgMID, _, err := sendImageAttachmentToFacebook(http.DefaultClient, conv.PageID, pageToken, conv.CustomerPSID, imgURL, "")
 		if err == nil && imgMID != "" {
 			now := time.Now()
 			_ = db.Create(&models.Message{
@@ -510,7 +524,7 @@ func (h *InboxHandler) GetMessages(c *gin.Context) {
 		return
 	}
 
-	var conv models.Conversation
+	var conv conversationWithCRM
 	convRes := h.DB.Where("id = ?", id).Limit(1).Find(&conv)
 	if convRes.Error != nil || convRes.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy hội thoại"})
@@ -536,11 +550,12 @@ func (h *InboxHandler) GetMessages(c *gin.Context) {
 }
 
 type sendMessageReq struct {
-	Content   string   `json:"content"`
-	ImageURLs []string `json:"image_urls"`
+	Content    string   `json:"content"`
+	ImageURLs  []string `json:"image_urls"`
+	MessageTag string   `json:"message_tag"`
 }
 
-// SendMessage gửi tin nhắn văn bản và/hoặc nhiều hình ảnh từ Page tới khách hàng qua Facebook Send API
+// SendMessage gửi tin nhắn văn bản và/hoặc nhiều hình ảnh từ Page tới khách hàng qua Facebook Send API (hỗ trợ Message Tag sau 24h)
 func (h *InboxHandler) SendMessage(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -555,6 +570,7 @@ func (h *InboxHandler) SendMessage(c *gin.Context) {
 	}
 
 	trimmedText := strings.TrimSpace(req.Content)
+	requestedTag := strings.TrimSpace(req.MessageTag)
 	var cleanImages []string
 	for _, img := range req.ImageURLs {
 		if u := strings.TrimSpace(img); u != "" {
@@ -588,6 +604,7 @@ func (h *InboxHandler) SendMessage(c *gin.Context) {
 	}
 
 	var createdMessages []models.Message
+	usedTag := ""
 
 	// 1. Gửi phần nội dung chữ nếu có
 	if trimmedText != "" {
@@ -628,28 +645,37 @@ func (h *InboxHandler) SendMessage(c *gin.Context) {
 			return fbSendResp.MessageID, ""
 		}
 
-		fbMsgID, errMsg := callFBSend("RESPONSE", "")
-
-		// Nếu quá 24h (#10), tự động thử lần lượt các Message Tag hợp lệ của Meta
-		if errMsg != "" && strings.Contains(errMsg, "(#10)") {
-			fallbackTags := []string{"HUMAN_AGENT", "POST_PURCHASE_UPDATE", "CONFIRMED_EVENT_UPDATE"}
-			for _, tag := range fallbackTags {
-				fbMsgID, errMsg = callFBSend("MESSAGE_TAG", tag)
-				if errMsg == "" {
-					break
+		var fbMsgID, errMsg string
+		if requestedTag != "" {
+			fbMsgID, errMsg = callFBSend("MESSAGE_TAG", requestedTag)
+			if errMsg == "" {
+				usedTag = requestedTag
+			}
+		} else {
+			fbMsgID, errMsg = callFBSend("RESPONSE", "")
+			// Nếu quá 24h (#10), tự động thử lần lượt các Message Tag hợp lệ của Meta
+			if errMsg != "" && strings.Contains(errMsg, "(#10)") {
+				fallbackTags := []string{"HUMAN_AGENT", "POST_PURCHASE_UPDATE", "CONFIRMED_EVENT_UPDATE"}
+				for _, tag := range fallbackTags {
+					fbMsgID, errMsg = callFBSend("MESSAGE_TAG", tag)
+					if errMsg == "" {
+						usedTag = tag
+						break
+					}
 				}
 			}
+		}
 
-			if errMsg != "" {
+		if errMsg != "" {
+			if strings.Contains(errMsg, "(#10)") || requestedTag != "" {
 				mbSuiteURL := fmt.Sprintf("https://business.facebook.com/latest/inbox/all?asset_id=%s&selected_item_id=%s", page.PageID, conv.CustomerPSID)
 				c.JSON(http.StatusBadRequest, gin.H{
-					"error":        "Hội thoại đã quá 24 giờ nên Meta khóa gửi qua API. Bấm nút bên dưới để trả lời trực tiếp trên Meta Business Suite.",
+					"error":        "Hội thoại đã quá 24 giờ và App chưa được cấp quyền Message Tag. Bấm nút bên dưới để trả lời trực tiếp trên Meta Business Suite.",
 					"code":         "OUTSIDE_24H_WINDOW",
 					"fb_inbox_url": mbSuiteURL,
 				})
 				return
 			}
-		} else if errMsg != "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Facebook từ chối gửi tin: " + errMsg})
 			return
 		}
@@ -671,9 +697,14 @@ func (h *InboxHandler) SendMessage(c *gin.Context) {
 		_ = h.DB.Save(&conv).Error
 	}
 
-	// 2. Gửi lần lượt từng hình ảnh nếu có
+	// 2. Gửi lần lượt từng hình ảnh nếu có (tự động kèm Message Tag nếu quá 24h)
+	activeImgTag := requestedTag
+	if activeImgTag == "" {
+		activeImgTag = usedTag
+	}
+
 	for _, imgURL := range cleanImages {
-		imgMsgID, imgErr := sendImageAttachmentToFacebook(h.HTTPClient, page.PageID, pageToken, conv.CustomerPSID, imgURL)
+		imgMsgID, tagUsedForImg, imgErr := sendImageAttachmentToFacebook(h.HTTPClient, page.PageID, pageToken, conv.CustomerPSID, imgURL, activeImgTag)
 		if imgErr != nil {
 			if len(createdMessages) == 0 {
 				if strings.Contains(imgErr.Error(), "(#10)") {
@@ -689,6 +720,9 @@ func (h *InboxHandler) SendMessage(c *gin.Context) {
 				return
 			}
 			break
+		}
+		if tagUsedForImg != "" {
+			usedTag = tagUsedForImg
 		}
 
 		now := time.Now()
@@ -720,6 +754,72 @@ func (h *InboxHandler) SendMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message":  firstMsg,
 		"messages": createdMessages,
+		"used_tag": usedTag,
+	})
+}
+
+type updateConversationCRMReq struct {
+	LeadStatus      string `json:"lead_status"`
+	CustomerPhone   string `json:"customer_phone"`
+	CustomerAddress string `json:"customer_address"`
+	CareNote        string `json:"care_note"`
+	NextFollowUpAt  string `json:"next_follow_up_at"`
+}
+
+// UpdateConversationCRM cập nhật trạng thái khách (Phân vân / Chốt đơn / Chăm lại), SĐT, địa chỉ và lịch hẹn
+func (h *InboxHandler) UpdateConversationCRM(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID hội thoại không hợp lệ"})
+		return
+	}
+
+	var conv conversationWithCRM
+	if err := h.DB.First(&conv, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy hội thoại"})
+		return
+	}
+
+	var req updateConversationCRMReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dữ liệu cập nhật không hợp lệ"})
+		return
+	}
+
+	allowedStatus := map[string]bool{
+		"new":       true,
+		"hesitant":  true,
+		"closed":    true,
+		"follow_up": true,
+	}
+	status := strings.TrimSpace(req.LeadStatus)
+	if allowedStatus[status] {
+		conv.LeadStatus = status
+	}
+
+	conv.CustomerPhone = strings.TrimSpace(req.CustomerPhone)
+	conv.CustomerAddress = strings.TrimSpace(req.CustomerAddress)
+	conv.CareNote = strings.TrimSpace(req.CareNote)
+
+	rawTime := strings.TrimSpace(req.NextFollowUpAt)
+	if rawTime == "" {
+		conv.NextFollowUpAt = nil
+	} else {
+		if t, err := time.ParseInLocation("2006-01-02T15:04", rawTime, time.Local); err == nil {
+			conv.NextFollowUpAt = &t
+		} else if t2, err2 := time.Parse(time.RFC3339, rawTime); err2 == nil {
+			conv.NextFollowUpAt = &t2
+		}
+	}
+
+	if err := h.DB.Save(&conv).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể lưu thông tin chăm sóc khách hàng"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "Đã cập nhật trạng thái & lịch chăm sóc khách hàng!",
+		"conversation": conv,
 	})
 }
 
@@ -818,8 +918,8 @@ func (h *InboxHandler) UploadInboxImages(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"urls": urls})
 }
 
-// sendImageAttachmentToFacebook đẩy file ảnh trực tiếp qua multipart/form-data lên Messenger Graph API
-func sendImageAttachmentToFacebook(client *http.Client, pageID, pageToken, recipientPSID, imageURL string) (string, error) {
+// sendImageAttachmentToFacebook đẩy file ảnh trực tiếp qua multipart/form-data lên Messenger Graph API (hỗ trợ fallback Message Tag sau 24h)
+func sendImageAttachmentToFacebook(client *http.Client, pageID, pageToken, recipientPSID, imageURL, requestedTag string) (string, string, error) {
 	var fileBytes []byte
 	var fileName string
 
@@ -827,65 +927,87 @@ func sendImageAttachmentToFacebook(client *http.Client, pageID, pageToken, recip
 	if strings.HasPrefix(cleanPath, "uploads/") {
 		data, err := os.ReadFile(filepath.FromSlash(cleanPath))
 		if err != nil {
-			return "", fmt.Errorf("không tìm thấy file ảnh nội bộ: %v", err)
+			return "", "", fmt.Errorf("không tìm thấy file ảnh nội bộ: %v", err)
 		}
 		fileBytes = data
 		fileName = filepath.Base(cleanPath)
 	} else if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
 		resp, err := client.Get(imageURL)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		defer resp.Body.Close()
 		fileBytes, err = io.ReadAll(resp.Body)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		fileName = "attachment.jpg"
 	} else {
-		return "", fmt.Errorf("đường dẫn ảnh không hợp lệ")
+		return "", "", fmt.Errorf("đường dẫn ảnh không hợp lệ")
 	}
 
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
+	attemptUpload := func(msgType, tag string) (string, error) {
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
 
-	recipientJSON, _ := json.Marshal(map[string]string{"id": recipientPSID})
-	_ = writer.WriteField("recipient", string(recipientJSON))
-	_ = writer.WriteField("messaging_type", "RESPONSE")
-	_ = writer.WriteField("message", `{"attachment":{"type":"image","payload":{"is_reusable":true}}}`)
+		recipientJSON, _ := json.Marshal(map[string]string{"id": recipientPSID})
+		_ = writer.WriteField("recipient", string(recipientJSON))
+		_ = writer.WriteField("messaging_type", msgType)
+		if tag != "" {
+			_ = writer.WriteField("tag", tag)
+		}
+		_ = writer.WriteField("message", `{"attachment":{"type":"image","payload":{"is_reusable":true}}}`)
 
-	part, err := writer.CreateFormFile("filedata", fileName)
-	if err != nil {
-		return "", err
-	}
-	if _, err := part.Write(fileBytes); err != nil {
-		return "", err
-	}
-	_ = writer.Close()
+		part, err := writer.CreateFormFile("filedata", fileName)
+		if err != nil {
+			return "", err
+		}
+		if _, err := part.Write(fileBytes); err != nil {
+			return "", err
+		}
+		_ = writer.Close()
 
-	sendURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages?access_token=%s", pageID, pageToken)
-	req, err := http.NewRequest(http.MethodPost, sendURL, &body)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+		sendURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages?access_token=%s", pageID, pageToken)
+		req, err := http.NewRequest(http.MethodPost, sendURL, &body)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
-	var fbRes struct {
-		MessageID string `json:"message_id"`
-		Error     *struct {
-			Message string `json:"message"`
-		} `json:"error"`
+		respBody, _ := io.ReadAll(resp.Body)
+		var fbRes struct {
+			MessageID string `json:"message_id"`
+			Error     *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(respBody, &fbRes)
+		if fbRes.Error != nil {
+			return "", fmt.Errorf("%s", fbRes.Error.Message)
+		}
+		return fbRes.MessageID, nil
 	}
-	_ = json.Unmarshal(respBody, &fbRes)
-	if fbRes.Error != nil {
-		return "", fmt.Errorf("%s", fbRes.Error.Message)
+
+	if requestedTag != "" {
+		mid, err := attemptUpload("MESSAGE_TAG", requestedTag)
+		return mid, requestedTag, err
 	}
-	return fbRes.MessageID, nil
+
+	mid, err := attemptUpload("RESPONSE", "")
+	if err != nil && strings.Contains(err.Error(), "(#10)") {
+		fallbackTags := []string{"HUMAN_AGENT", "POST_PURCHASE_UPDATE", "CONFIRMED_EVENT_UPDATE"}
+		for _, tag := range fallbackTags {
+			mid, err = attemptUpload("MESSAGE_TAG", tag)
+			if err == nil {
+				return mid, tag, nil
+			}
+		}
+	}
+	return mid, "", err
 }

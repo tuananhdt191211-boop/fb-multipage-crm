@@ -1,7 +1,40 @@
+# 1. File biến môi trường chứa mật khẩu & API Key (BẮT BUỘC LOẠI BỎ)
 .env
-*.env
+.env.*
+!.env.example
 backend-go/.env
+web-vue/.env
+
+# 2. Thư viện & file build của Frontend (Vue / Vite)
 node_modules/
+web-vue/node_modules/
 dist/
+web-vue/dist/
+.vite/
+*.local
+
+# 3. File biên dịch & thư mục tạm của Backend (Go)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+backend-go/bin/
+backend-go/tmp/
+backend-go/server
+
+# 4. Ảnh upload thực tế của khách hàng & Database local
 uploads/
+backend-go/uploads/
 *.db
+*.sqlite
+*.sqlite3
+
+# 5. File cấu hình máy cá nhân & Log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

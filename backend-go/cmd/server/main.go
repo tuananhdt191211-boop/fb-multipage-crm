@@ -99,6 +99,7 @@ func main() {
 		inboxGroup.POST("/upload", inboxHandler.UploadInboxImages)
 		inboxGroup.GET("/conversations/:id/messages", inboxHandler.GetMessages)
 		inboxGroup.POST("/conversations/:id/messages", inboxHandler.SendMessage)
+		inboxGroup.PUT("/conversations/:id/crm", inboxHandler.UpdateConversationCRM)
 	}
 
 	aiGroup := r.Group("/api/v1/ai", middleware.JWTAuth(cfg.JWTSecret))
@@ -108,6 +109,9 @@ func main() {
 		aiGroup.PUT("/settings/:page_id", aiHandler.SavePageSetting)
 		aiGroup.POST("/suggest/:conversation_id", aiHandler.SuggestReply)
 		aiGroup.POST("/generate-script", aiHandler.GenerateSalesScript)
+		aiGroup.GET("/config", aiHandler.GetGlobalAIConfig)
+		aiGroup.POST("/config", aiHandler.SaveGlobalAIConfig)
+		aiGroup.POST("/config/test", aiHandler.TestGlobalAIConfig)
 	}
 
 	// Route tự động lên lịch & đăng bài đa Fanpage

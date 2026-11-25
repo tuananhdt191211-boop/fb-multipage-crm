@@ -19,6 +19,15 @@ import (
 	"gorm.io/gorm"
 )
 
+// SystemAIConfig lưu cấu hình AI động trong Database (ưu tiên hơn file .env)
+type SystemAIConfig struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	BaseURL   string    `gorm:"type:text" json:"base_url"`
+	APIKeys   string    `gorm:"type:text" json:"api_keys"`
+	Model     string    `gorm:"type:varchar(150)" json:"model"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 type AIHandler struct {
 	DB         *gorm.DB
 	Cfg        *config.Config
@@ -26,47 +35,156 @@ type AIHandler struct {
 }
 
 func NewAIHandler(db *gorm.DB, cfg *config.Config) *AIHandler {
-	_ = db.AutoMigrate(&models.PageAISetting{})
+	_ = db.AutoMigrate(&models.PageAISetting{}, &SystemAIConfig{})
 	return &AIHandler{
-		DB:         db,
-		Cfg:        cfg,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		DB:  db,
+		Cfg: cfg,
+		HTTPClient: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: &http.Transport{Proxy: nil},
+		},
 	}
 }
 
 func (h *AIHandler) resolveAIConfig() (baseURL string, apiKeys []string, model string) {
-	baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("AI_BASE_URL")), "/")
-	model = strings.TrimSpace(os.Getenv("AI_MODEL"))
-	rawKeyStr := strings.TrimSpace(os.Getenv("AI_API_KEY"))
+	// 1. Ưu tiên đọc cấu hình đã lưu từ giao diện web trong Database
+	var dbCfg SystemAIConfig
+	if h.DB != nil {
+		if err := h.DB.First(&dbCfg, 1).Error; err == nil && strings.TrimSpace(dbCfg.APIKeys) != "" {
+			baseURL = strings.TrimRight(strings.TrimSpace(dbCfg.BaseURL), "/")
+			model = strings.TrimSpace(dbCfg.Model)
+			for _, k := range strings.Split(dbCfg.APIKeys, ",") {
+				if trimmed := strings.TrimSpace(k); trimmed != "" {
+					apiKeys = append(apiKeys, trimmed)
+				}
+			}
+		}
+	}
 
-	// Tự động tương thích ngược nếu .env chỉ mới có GEMINI_API_KEY
-	if rawKeyStr == "" && h.Cfg != nil {
-		rawKeyStr = strings.TrimSpace(h.Cfg.GeminiAPIKey)
+	// 2. Nếu Database chưa cấu hình thì đọc từ file .env
+	if len(apiKeys) == 0 {
 		if baseURL == "" {
-			baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+			baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("AI_BASE_URL")), "/")
 		}
 		if model == "" {
-			model = "gemini-3.8-flash"
+			model = strings.TrimSpace(os.Getenv("AI_MODEL"))
+		}
+		rawKeyStr := strings.TrimSpace(os.Getenv("AI_API_KEY"))
+
+		if rawKeyStr == "" && h.Cfg != nil {
+			rawKeyStr = strings.TrimSpace(h.Cfg.GeminiAPIKey)
+			if baseURL == "" {
+				baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+			}
+			if model == "" {
+				model = "gemini-3.5-flash-lite"
+			}
+		}
+
+		for _, k := range strings.Split(rawKeyStr, ",") {
+			if trimmed := strings.TrimSpace(k); trimmed != "" {
+				apiKeys = append(apiKeys, trimmed)
+			}
 		}
 	}
 
 	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
+		baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
 	}
 	if model == "" {
-		model = "gpt-4o-mini"
+		model = "gemini-3.5-flash-lite"
 	}
 
-	for _, k := range strings.Split(rawKeyStr, ",") {
-		if trimmed := strings.TrimSpace(k); trimmed != "" {
-			apiKeys = append(apiKeys, trimmed)
-		}
-	}
 	// Cho phép Ollama local chạy không cần API key
 	if len(apiKeys) == 0 && (strings.Contains(baseURL, "localhost") || strings.Contains(baseURL, "127.0.0.1")) {
 		apiKeys = []string{"ollama-local"}
 	}
 	return baseURL, apiKeys, model
+}
+
+// GetGlobalAIConfig lấy cấu hình AI hiện tại hiển thị lên giao diện cài đặt
+func (h *AIHandler) GetGlobalAIConfig(c *gin.Context) {
+	baseURL, apiKeys, model := h.resolveAIConfig()
+	rawKeys := strings.Join(apiKeys, ", ")
+	if rawKeys == "ollama-local" {
+		rawKeys = ""
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"base_url":  baseURL,
+		"api_keys":  rawKeys,
+		"model":     model,
+		"key_count": len(apiKeys),
+	})
+}
+
+// SaveGlobalAIConfig lưu API Key mới từ giao diện vào Database (áp dụng ngay lập tức)
+func (h *AIHandler) SaveGlobalAIConfig(c *gin.Context) {
+	var req struct {
+		BaseURL string `json:"base_url"`
+		APIKeys string `json:"api_keys"`
+		Model   string `json:"model"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Dữ liệu cấu hình không hợp lệ"})
+		return
+	}
+
+	// Chuẩn hóa danh sách key (chấp nhận cả xuống dòng hoặc dấu phẩy)
+	normalized := strings.ReplaceAll(req.APIKeys, "\n", ",")
+	normalized = strings.ReplaceAll(normalized, "\r", ",")
+	var cleanKeys []string
+	for _, k := range strings.Split(normalized, ",") {
+		if t := strings.TrimSpace(k); t != "" {
+			cleanKeys = append(cleanKeys, t)
+		}
+	}
+
+	if len(cleanKeys) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng nhập ít nhất 1 mã API Key hợp lệ"})
+		return
+	}
+
+	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	if baseURL == "" {
+		baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+	}
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = "gemini-3.5-flash-lite"
+	}
+
+	cfg := SystemAIConfig{
+		ID:      1,
+		BaseURL: baseURL,
+		APIKeys: strings.Join(cleanKeys, ","),
+		Model:   model,
+	}
+	if err := h.DB.Save(&cfg).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể lưu cấu hình vào Database"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":   fmt.Sprintf("Đã lưu thành công %d API Key! Hệ thống đã áp dụng ngay.", len(cleanKeys)),
+		"key_count": len(cleanKeys),
+	})
+}
+
+// TestGlobalAIConfig kiểm tra thử kết nối AI ngay sau khi nhập key
+func (h *AIHandler) TestGlobalAIConfig(c *gin.Context) {
+	reply, err := h.callUniversalChatAI(
+		"Bạn là trợ lý kiểm tra hệ thống.",
+		"Trả lời ngắn gọn 1 câu tiếng Việt: Kết nối AI thành công!",
+		false,
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Kết nối AI hoạt động tốt!",
+		"reply":   reply,
+	})
 }
 
 type chatMessagePayload struct {
@@ -77,7 +195,7 @@ type chatMessagePayload struct {
 func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMode bool) (string, error) {
 	baseURL, apiKeys, model := h.resolveAIConfig()
 	if len(apiKeys) == 0 {
-		return "", fmt.Errorf("chưa cấu hình AI_API_KEY (hoặc GEMINI_API_KEY) trong file .env của Backend")
+		return "", fmt.Errorf("chưa cấu hình API Key AI. Hãy bấm nút Cài đặt API Key để thêm mã")
 	}
 
 	messages := []chatMessagePayload{}
@@ -91,12 +209,17 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 		"messages":    messages,
 		"temperature": 0.65,
 	}
-	if jsonMode {
+	if jsonMode && !strings.Contains(baseURL, "openrouter.ai") {
 		reqPayload["response_format"] = map[string]string{"type": "json_object"}
 	}
 	bodyBytes, _ := json.Marshal(reqPayload)
 
 	endpoint := baseURL + "/chat/completions"
+	referer := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+	if referer == "" {
+		referer = "http://localhost:5173"
+	}
+
 	var lastErr error
 
 	for idx, apiKey := range apiKeys {
@@ -107,11 +230,14 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+apiKey)
+			req.Header.Set("HTTP-Referer", referer)
+			req.Header.Set("X-Title", "PagePilot CRM")
+			req.Header.Set("User-Agent", "PagePilot-CRM/1.0")
 
 			resp, err := h.HTTPClient.Do(req)
 			if err != nil {
 				lastErr = fmt.Errorf("lỗi kết nối AI (%s): %v", model, err)
-				log.Printf("[AI][Key #%d][Attempt %d] %v", idx+1, attempt, lastErr)
+				log.Printf("[AI][URL: %s][Key #%d][Attempt %d] %v", endpoint, idx+1, attempt, lastErr)
 				time.Sleep(1 * time.Second)
 				continue
 			}
@@ -133,7 +259,7 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 
 			if err := json.Unmarshal(respData, &chatResp); err != nil {
 				lastErr = fmt.Errorf("phản hồi AI không hợp lệ (HTTP %d): %s", resp.StatusCode, string(respData))
-				log.Printf("[AI] %v", lastErr)
+				log.Printf("[AI][URL: %s] %v", endpoint, lastErr)
 				break
 			}
 
@@ -143,7 +269,7 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 					errMsg = chatResp.Error.Message
 				}
 				lastErr = fmt.Errorf("AI báo lỗi (%d): %s", resp.StatusCode, errMsg)
-				log.Printf("[AI][Model: %s][Key #%d][Attempt %d] %v", model, idx+1, attempt, lastErr)
+				log.Printf("[AI][URL: %s][Model: %s][Key #%d][Attempt %d] %v", endpoint, model, idx+1, attempt, lastErr)
 
 				if resp.StatusCode == http.StatusTooManyRequests {
 					break
@@ -166,7 +292,7 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 	}
 
 	if lastErr != nil && strings.Contains(lastErr.Error(), "(429)") {
-		return "", fmt.Errorf("API Key hiện tại đã chạm giới hạn lượt gọi (429). Hãy thêm key dự phòng hoặc đổi nhà cung cấp trong .env.")
+		return "", fmt.Errorf("Tất cả API Key đã chạm giới hạn lượt gọi (429). Hãy mở Cài đặt AI để thêm key dự phòng.")
 	}
 	return "", lastErr
 }
@@ -235,12 +361,10 @@ func (h *AIHandler) SavePageSetting(c *gin.Context) {
 	})
 }
 
-// GenerateReplyForConversation dùng cho worker tự động sau 2 phút
 func (h *AIHandler) GenerateReplyForConversation(conv models.Conversation) (string, error) {
 	return h.GenerateReplyWithContext(conv, "", "")
 }
 
-// GenerateReplyWithContext sinh câu trả lời AI có hỗ trợ tin nhắn được chọn và chỉ đạo riêng từ nhân viên
 func (h *AIHandler) GenerateReplyWithContext(conv models.Conversation, selectedMessage, customInstruction string) (string, error) {
 	var setting models.PageAISetting
 	_ = h.DB.Where("page_id = ?", conv.PageID).Limit(1).Find(&setting).Error
@@ -305,7 +429,6 @@ Quy tắc bắt buộc: Viết DUY NHẤT 1 câu trả lời tự nhiên để g
 	return h.callUniversalChatAI(systemPrompt, userPrompt, false)
 }
 
-// SuggestReply endpoint cho nút "AI Gợi ý câu trả lời" (nhận thêm tin nhắn chọn & chỉ đạo của nhân viên)
 func (h *AIHandler) SuggestReply(c *gin.Context) {
 	convID, err := strconv.Atoi(c.Param("conversation_id"))
 	if err != nil || convID <= 0 {
@@ -388,9 +511,9 @@ Trả về kết quả JSON chính xác theo cấu trúc sau (không thêm markd
 }`, req.PageName, prod, strings.TrimSpace(req.ExtraNotes), prod, prod)
 
 	rawOut, err := h.callUniversalChatAI(
-		"Bạn là chuyên gia xây dựng kịch bản chốt đơn Messenger thực chiến tại Việt Nam. Chỉ trả về JSON thuần túy.",
+		"Bạn là chuyên gia xây dựng kịch bản chốt đơn Messenger thực chiến tại Việt Nam. Chỉ trả về JSON thuần túy, không giải thích thêm.",
 		userPrompt,
-		true,
+		false,
 	)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

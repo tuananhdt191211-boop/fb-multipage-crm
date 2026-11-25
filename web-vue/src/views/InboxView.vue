@@ -11,6 +11,7 @@ import {
   Facebook,
   Hash,
   ImagePlus,
+  KeyRound,
   Layers,
   Loader2,
   MessageSquare,
@@ -20,13 +21,16 @@ import {
   Search,
   Send,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
   Tag,
   Trash2,
+  UserCheck,
   X,
   Zap
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import AIConfigModal from '../components/AIConfigModal.vue'
 import type { FacebookPageItem } from '../types/page'
 
 interface ConversationItem {
@@ -40,6 +44,11 @@ interface ConversationItem {
   last_message: string
   last_message_time: string
   unread_count: number
+  lead_status?: 'new' | 'hesitant' | 'closed' | 'follow_up'
+  customer_phone?: string
+  customer_address?: string
+  care_note?: string
+  next_follow_up_at?: string | null
 }
 
 interface MessageItem {
@@ -84,6 +93,11 @@ interface NewMessageAlert {
 
 const router = useRouter()
 
+// Điều khiển giao diện Mobile Drawer & Tab cột phải
+const showMobileDrawer = ref(false)
+const rightPanelTab = ref<'crm' | 'templates' | 'ai'>('crm')
+const showAIConfig = ref(false)
+
 const pages = ref<FacebookPageItem[]>([])
 const conversations = ref<ConversationItem[]>([])
 const messages = ref<MessageItem[]>([])
@@ -92,16 +106,88 @@ const pageSettingsMap = ref<Record<string, PageSettingMeta>>({})
 
 const selectedPageFilter = ref('all')
 const readFilter = ref<'all' | 'unread'>('all')
+const leadStatusFilter = ref<'all' | 'hesitant' | 'closed' | 'follow_up'>('all')
+const dateFilter = ref('')
 const searchQuery = ref('')
 const draftMessage = ref('')
 
-// Chức năng mới: Chọn tin nhắn cụ thể + Chỉ đạo AI + Khung duyệt trước khi gửi
+// Trạng thái CRM chăm sóc khách hàng
+const savingCRM = ref(false)
+const crmForm = ref({
+  lead_status: 'new' as 'new' | 'hesitant' | 'closed' | 'follow_up',
+  customer_phone: '',
+  customer_address: '',
+  care_note: '',
+  next_follow_up_at: ''
+})
+
+const leadStatusMeta: Record<string, { label: string; badge: string; activeBtn: string }> = {
+  new: {
+    label: 'Khách mới',
+    badge: 'bg-slate-100 text-slate-600 border-slate-200',
+    activeBtn: 'border-slate-700 bg-slate-800 text-white'
+  },
+  hesitant: {
+    label: 'Phân vân',
+    badge: 'bg-amber-100 text-amber-800 border-amber-200',
+    activeBtn: 'border-amber-500 bg-amber-500 text-white'
+  },
+  closed: {
+    label: 'Chốt đơn',
+    badge: 'bg-emerald-100 text-emerald-800 border-emerald-200',
+    activeBtn: 'border-emerald-600 bg-emerald-600 text-white'
+  },
+  follow_up: {
+    label: 'Chăm lại',
+    badge: 'bg-blue-100 text-blue-800 border-blue-200',
+    activeBtn: 'border-blue-600 bg-blue-600 text-white'
+  }
+}
+
+function toDatetimeLocalInput(iso?: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+function isFollowUpDue(iso?: string | null): boolean {
+  if (!iso) return false
+  return new Date(iso).getTime() <= Date.now()
+}
+
+function formatFullDateTime(iso?: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+async function applyQuickFollowUp(hours: number, baseMode: 'msg' | 'now' = 'msg') {
+  if (!selectedConv.value) return
+  const baseTime =
+    baseMode === 'msg' && selectedConv.value.last_message_time
+      ? new Date(selectedConv.value.last_message_time).getTime()
+      : Date.now()
+
+  const targetDate = new Date(baseTime + hours * 60 * 60 * 1000)
+  crmForm.value.next_follow_up_at = toDatetimeLocalInput(targetDate.toISOString())
+
+  if (crmForm.value.lead_status === 'new') {
+    crmForm.value.lead_status = 'follow_up'
+  }
+  await saveConversationCRM()
+}
+
+// Chọn tin nhắn cụ thể + Chỉ đạo AI + Khung duyệt trước khi gửi
 const selectedTargetMsg = ref<MessageItem | null>(null)
 const aiCustomInstruction = ref('')
 const aiAskBeforeSend = ref(true)
 const aiApprovalDraft = ref('')
 
-// Hình ảnh đính kèm trong khung chat (chọn nhiều file hoặc dán Ctrl+V)
+// Hình ảnh đính kèm trong khung chat
 const pendingImages = ref<string[]>([])
 const uploadingImages = ref(false)
 const chatFileInputRef = ref<HTMLInputElement | null>(null)
@@ -119,6 +205,7 @@ const copiedField = ref('')
 const noticeMsg = ref('')
 const errorMsg = ref('')
 const fbInboxFallbackUrl = ref('')
+const selectedMessageTag = ref('')
 const chatBoxRef = ref<HTMLElement | null>(null)
 const generatingScript = ref(false)
 
@@ -155,6 +242,23 @@ let pollTimer: number | null = null
 
 const brokenAvatars = ref<Record<string, boolean>>({})
 
+const avatarGradients = [
+  'from-emerald-500 to-teal-600',
+  'from-blue-500 to-indigo-600',
+  'from-amber-500 to-orange-600',
+  'from-rose-500 to-pink-600',
+  'from-purple-500 to-violet-600',
+  'from-cyan-500 to-sky-600'
+]
+
+function getAvatarGradient(name: string) {
+  let hash = 0
+  for (let i = 0; i < (name || '').length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  }
+  return avatarGradients[Math.abs(hash) % avatarGradients.length]
+}
+
 const tagColorOptions = [
   { id: 'emerald', label: 'Xanh lá', badge: 'bg-emerald-100 text-emerald-800 border-emerald-200', dot: 'bg-emerald-500' },
   { id: 'blue', label: 'Xanh dương', badge: 'bg-blue-100 text-blue-800 border-blue-200', dot: 'bg-blue-500' },
@@ -168,10 +272,9 @@ const quickInstructionPresets = [
   'Báo giá ưu đãi & miễn phí ship',
   'Xin SĐT + địa chỉ lên đơn',
   'Hỏi nhu cầu sử dụng của khách',
-  'Tư vấn chính sách bảo hành 12 tháng'
+  'Tư vấn bảo hành 12 tháng'
 ]
 
-// Trạng thái bật/tắt nhanh Auto-Rep bằng Mẫu từ khóa trên Page hiện tại
 const isAnyTemplateAutoEnabled = computed(() =>
   pageQuickReplies.value.some((qr) => qr.autoTrigger)
 )
@@ -191,7 +294,9 @@ async function togglePageAIAutoReply() {
 async function toggleAllPageTemplatesAuto() {
   if (!selectedConv.value) return
   if (pageQuickReplies.value.length === 0) {
-    errorMsg.value = 'Fanpage này chưa có tin nhắn mẫu nào. Hãy thêm mẫu ở cột bên phải trước!'
+    errorMsg.value = 'Fanpage này chưa có tin nhắn mẫu nào. Hãy thêm mẫu ở tab Mẫu & Auto!'
+    rightPanelTab.value = 'templates'
+    showMobileDrawer.value = true
     return
   }
   const nextState = !isAnyTemplateAutoEnabled.value
@@ -200,8 +305,8 @@ async function toggleAllPageTemplatesAuto() {
   }
   await persistPageConfigSilently()
   noticeMsg.value = nextState
-    ? `Đã BẬT tự động trả lời bằng mẫu (${pageQuickReplies.value.length} mẫu) cho ${selectedConv.value.page_name}`
-    : `Đã TẮT tự động trả lời bằng mẫu cho ${selectedConv.value.page_name}`
+    ? `Đã BẬT tự động trả lời bằng mẫu (${pageQuickReplies.value.length} mẫu)`
+    : `Đã TẮT tự động trả lời bằng mẫu`
   setTimeout(() => {
     noticeMsg.value = ''
   }, 2500)
@@ -561,14 +666,26 @@ const filteredConversations = computed(() => {
   return conversations.value.filter((c) => {
     const matchPage = selectedPageFilter.value === 'all' || c.page_id === selectedPageFilter.value
     const matchUnread = readFilter.value === 'all' || c.unread_count > 0
+    const status = c.lead_status || 'new'
+    const matchLead = leadStatusFilter.value === 'all' || status === leadStatusFilter.value
+
+    let matchDate = true
+    if (dateFilter.value && c.last_message_time) {
+      const d = new Date(c.last_message_time)
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const localYMD = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+      matchDate = localYMD === dateFilter.value
+    }
+
     const tag = (pageSettingsMap.value[c.page_id]?.product_tag || '').toLowerCase()
     const matchText =
       !q ||
       c.customer_name.toLowerCase().includes(q) ||
+      (c.customer_phone || '').toLowerCase().includes(q) ||
       c.last_message.toLowerCase().includes(q) ||
       c.page_name.toLowerCase().includes(q) ||
       tag.includes(q)
-    return matchPage && matchUnread && matchText
+    return matchPage && matchUnread && matchLead && matchDate && matchText
   })
 })
 
@@ -577,8 +694,7 @@ function handleAvatarError(key: string) {
 }
 
 function getCustomerAvatarUrl(conv: ConversationItem) {
-  const baseURL = (api.defaults.baseURL || '/api/v1').replace(/\/$/, '')
-  return `${baseURL}/inbox/avatar/${encodeURIComponent(conv.page_id)}/${encodeURIComponent(conv.customer_psid)}`
+  return conv.customer_avatar || ''
 }
 
 function getInitials(name: string) {
@@ -873,7 +989,6 @@ async function handleAISuggest() {
     )
 
     if (aiAskBeforeSend.value) {
-      // Hỏi duyệt trước: hiển thị hộp duyệt để nhân viên xem trước khi gửi
       aiApprovalDraft.value = data.reply
     } else {
       draftMessage.value = data.reply
@@ -942,6 +1057,104 @@ async function handleGenerateSalesScript() {
   }
 }
 
+function insertAITrainingTemplate() {
+  const prod = pageProductTag.value.trim() || '[Tên sản phẩm]'
+  aiPrompt.value = `1. THÔNG TIN & GIÁ BÁN (${prod}):
+- Giá niêm yết: ... | Giá ưu đãi hôm nay: ...
+- Phí ship: Miễn phí giao hàng toàn quốc, nhận hàng được kiểm tra trước khi thanh toán.
+- Bảo hành: Bảo hành 12 tháng, lỗi 1 đổi 1 trong 30 ngày.
+
+2. QUY TRÌNH TƯ VẤN CHỐT ĐƠN:
+- Bước 1: Chào khách thân thiện, hỏi khách đang mua dùng cho nhu cầu gì.
+- Bước 2: Báo giá ưu đãi kèm quà tặng/freeship và nêu 2 điểm nổi bật nhất của sản phẩm.
+- Bước 3: Khi khách đồng ý mua, xin đầy đủ: Tên người nhận + Số điện thoại + Địa chỉ nhận hàng.
+
+3. QUY TẮC BẮT BUỘC:
+- Trả lời ngắn gọn 2-3 câu mỗi lượt như nhân viên tư vấn thật trên Messenger.
+- Tuyệt đối không tự bịa giá hoặc khuyến mãi ngoài danh sách trên.`
+}
+
+async function applyAIConfigToOtherPages(onlySameTag: boolean) {
+  if (!selectedConv.value || applyingToAllPages.value) return
+  const currentPageId = selectedConv.value.page_id
+  const currentTag = pageProductTag.value.trim().toLowerCase()
+
+  const targets = pages.value.filter((p) => {
+    if (p.page_id === currentPageId) return false
+    if (onlySameTag) {
+      const pTag = (pageSettingsMap.value[p.page_id]?.product_tag || '').trim().toLowerCase()
+      return currentTag !== '' && pTag === currentTag
+    }
+    return true
+  })
+
+  if (targets.length === 0) {
+    noticeMsg.value = onlySameTag
+      ? 'Không có Fanpage nào khác đang gắn cùng nhãn sản phẩm này.'
+      : 'Không có Fanpage nào khác để đồng bộ.'
+    setTimeout(() => (noticeMsg.value = ''), 3000)
+    return
+  }
+
+  applyingToAllPages.value = true
+  errorMsg.value = ''
+  try {
+    await Promise.all(
+      targets.map(async (p) => {
+        const existing = pageSettingsMap.value[p.page_id]
+        const { data } = await api.put<{ setting: PageSettingMeta }>(`/ai/settings/${p.page_id}`, {
+          enabled: true,
+          auto_reply: aiAutoReply.value,
+          product_tag: existing?.product_tag || pageProductTag.value,
+          tag_color: existing?.tag_color || pageTagColor.value,
+          quick_replies: existing?.quick_replies || JSON.stringify(pageQuickReplies.value),
+          tone: aiTone.value,
+          system_prompt: aiPrompt.value
+        })
+        if (data.setting) {
+          pageSettingsMap.value[p.page_id] = data.setting
+        }
+      })
+    )
+    noticeMsg.value = `Đã chép kịch bản AI sang ${targets.length} Fanpage!`
+    setTimeout(() => (noticeMsg.value = ''), 3500)
+  } catch {
+    errorMsg.value = 'Có lỗi khi chép kịch bản AI sang các Fanpage khác.'
+  } finally {
+    applyingToAllPages.value = false
+  }
+}
+
+async function saveConversationCRM(quickStatus?: 'new' | 'hesitant' | 'closed' | 'follow_up') {
+  if (!selectedConv.value || savingCRM.value) return
+  if (quickStatus) {
+    crmForm.value.lead_status = quickStatus
+  }
+  savingCRM.value = true
+  errorMsg.value = ''
+  try {
+    const { data } = await api.put<{ message: string; conversation: ConversationItem }>(
+      `/inbox/conversations/${selectedConv.value.id}/crm`,
+      crmForm.value
+    )
+    const updated = data.conversation
+    selectedConv.value = { ...selectedConv.value, ...updated }
+    const idx = conversations.value.findIndex((c) => c.id === updated.id)
+    if (idx !== -1) {
+      conversations.value[idx] = { ...conversations.value[idx], ...updated }
+    }
+    noticeMsg.value = data.message || 'Đã lưu trạng thái khách hàng!'
+    setTimeout(() => {
+      noticeMsg.value = ''
+    }, 2500)
+  } catch (err: any) {
+    if (err.response?.status === 401) return
+    errorMsg.value = err.response?.data?.error || 'Không thể lưu trạng thái khách hàng.'
+  } finally {
+    savingCRM.value = false
+  }
+}
+
 async function loadConversations() {
   if (!localStorage.getItem('access_token')) {
     router.replace('/login')
@@ -1004,6 +1217,15 @@ async function selectConversation(conv: ConversationItem) {
   loadingMessages.value = true
   errorMsg.value = ''
   fbInboxFallbackUrl.value = ''
+  selectedMessageTag.value = ''
+
+  crmForm.value = {
+    lead_status: conv.lead_status || 'new',
+    customer_phone: conv.customer_phone || '',
+    customer_address: conv.customer_address || '',
+    care_note: conv.care_note || '',
+    next_follow_up_at: toDatetimeLocalInput(conv.next_follow_up_at)
+  }
 
   if (isDifferentPage) {
     loadPageAISetting(conv.page_id)
@@ -1037,15 +1259,26 @@ async function handleSendMessage() {
   errorMsg.value = ''
   fbInboxFallbackUrl.value = ''
   try {
-    const { data } = await api.post<{ message?: MessageItem; messages?: MessageItem[] }>(
+    const { data } = await api.post<{ message?: MessageItem; messages?: MessageItem[]; used_tag?: string }>(
       `/inbox/conversations/${selectedConv.value.id}/messages`,
-      { content: text, image_urls: imgs }
+      {
+        content: text,
+        image_urls: imgs,
+        message_tag: selectedMessageTag.value
+      }
     )
     const sentList = data.messages || (data.message ? [data.message] : [])
     messages.value.push(...sentList)
     draftMessage.value = ''
     pendingImages.value = []
     selectedTargetMsg.value = null
+
+    if (data.used_tag) {
+      noticeMsg.value = `Đã gửi tin nhắn ngoài 24h bằng thẻ ${data.used_tag}`
+      setTimeout(() => {
+        noticeMsg.value = ''
+      }, 3500)
+    }
 
     const idx = conversations.value.findIndex((c) => c.id === selectedConv.value?.id)
     if (idx !== -1 && sentList.length > 0) {
@@ -1100,49 +1333,63 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 flex flex-col bg-slate-50 text-slate-900">
-    <!-- Top Header -->
-    <header class="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5">
-      <div class="flex items-center gap-3 min-w-0">
+  <div class="fixed inset-0 flex flex-col bg-slate-100 text-slate-900">
+    <!-- Top Header gọn gàng, tương thích Mobile & Desktop -->
+    <header class="flex h-13 shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 sm:px-5">
+      <div class="flex items-center gap-2 sm:gap-3 min-w-0">
         <button
           @click="router.push('/')"
-          class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+          class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+          title="Về trang chủ"
         >
           <ArrowLeft class="h-3.5 w-3.5" />
-          <span>Trang chủ</span>
+          <span class="hidden sm:inline">Trang chủ</span>
         </button>
 
-        <div class="h-5 w-px shrink-0 bg-slate-200" />
+        <div class="hidden sm:block h-4 w-px shrink-0 bg-slate-200" />
 
-        <div class="flex items-center gap-2.5 min-w-0">
-          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-xs">
+        <div class="flex items-center gap-2 min-w-0">
+          <div class="flex h-7 w-7 sm:h-8 sm:w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-xs">
             <MessageSquare class="h-4 w-4" />
           </div>
-          <div class="flex items-center gap-2 min-w-0">
-            <h1 class="truncate text-sm font-bold !text-slate-900">Hộp thư gộp đa Fanpage</h1>
-            <span class="shrink-0 whitespace-nowrap rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <div class="truncate !text-sm sm:!text-[15px] font-bold !text-slate-900 leading-none">
+              Hộp thư đa Page
+            </div>
+            <span class="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700 border border-emerald-200">
               {{ pages.length }} Page
             </span>
           </div>
         </div>
       </div>
 
-      <div class="flex items-center gap-2.5 shrink-0">
+      <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <button
+          @click="showAIConfig = true"
+          class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+          title="Cài đặt API Key AI"
+        >
+          <KeyRound class="h-3.5 w-3.5 text-emerald-600" />
+          <span class="hidden md:inline">API Key</span>
+        </button>
+
         <button
           @click="router.push('/pages')"
-          class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 cursor-pointer"
+          class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 cursor-pointer"
+          title="Quản lý Fanpage"
         >
           <Layers class="h-3.5 w-3.5 text-emerald-600" />
-          <span>Quản lý Page</span>
+          <span class="hidden md:inline">Quản lý Page</span>
         </button>
 
         <button
           @click="handleSyncMessages"
           :disabled="syncing"
-          class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
+          class="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-xs transition hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
         >
           <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': syncing }" />
-          <span>{{ syncing ? 'Đang kéo tin...' : 'Kéo tin nhắn từ FB' }}</span>
+          <span class="hidden sm:inline">{{ syncing ? 'Đang kéo tin...' : 'Kéo tin nhắn từ FB' }}</span>
+          <span class="sm:hidden">{{ syncing ? 'Đang kéo...' : 'Kéo tin' }}</span>
         </button>
       </div>
     </header>
@@ -1150,24 +1397,27 @@ onUnmounted(() => {
     <!-- Toast Thông báo -->
     <div
       v-if="noticeMsg"
-      class="flex shrink-0 items-center justify-center gap-2 border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-xs font-semibold text-emerald-800"
+      class="flex shrink-0 items-center justify-center gap-2 border-b border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800"
     >
-      <CheckCircle2 class="h-3.5 w-3.5 text-emerald-600" />
-      <span>{{ noticeMsg }}</span>
+      <CheckCircle2 class="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+      <span class="truncate">{{ noticeMsg }}</span>
     </div>
     <div
       v-if="errorMsg"
-      class="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-center text-xs font-semibold text-red-700"
+      class="shrink-0 border-b border-red-200 bg-red-50 px-3 py-1.5 text-center text-xs font-semibold text-red-700"
     >
       {{ errorMsg }}
     </div>
 
-    <!-- Main 3-Column Workspace -->
-    <div class="grid min-h-0 flex-1 grid-cols-12 overflow-hidden">
-      <!-- CỘT 1: Danh sách hội thoại đa Page -->
-      <aside class="col-span-12 flex min-h-0 flex-col border-r border-slate-200 bg-white md:col-span-4 lg:col-span-3">
+    <!-- Main Workspace (Flexbox đáp ứng tốt trên Mobile, Tablet & Desktop) -->
+    <div class="relative flex min-h-0 flex-1 overflow-hidden">
+      <!-- CỘT 1: Danh sách hội thoại (Trên Mobile tự ẩn khi đã chọn khách để mở khung chat) -->
+      <aside
+        class="flex min-h-0 w-full flex-col border-r border-slate-200 bg-white md:w-[300px] lg:w-[320px] xl:w-[340px] shrink-0"
+        :class="selectedConv ? 'hidden md:flex' : 'flex'"
+      >
         <!-- Bộ lọc Page + Search + Tabs -->
-        <div class="shrink-0 space-y-2.5 border-b border-slate-100 p-3">
+        <div class="shrink-0 space-y-2 border-b border-slate-100 p-3">
           <select
             v-model="selectedPageFilter"
             class="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs font-semibold text-slate-800 outline-none transition focus:border-emerald-600 focus:bg-white"
@@ -1183,7 +1433,7 @@ onUnmounted(() => {
             <input
               v-model="searchQuery"
               type="text"
-              placeholder="Tìm tên khách, sản phẩm hoặc nội dung..."
+              placeholder="Tìm tên khách, SĐT, sản phẩm..."
               class="w-full rounded-xl border border-slate-200 bg-white py-2 pl-8 pr-3 text-xs text-slate-800 placeholder:text-slate-400 outline-none transition focus:border-emerald-600"
             />
           </div>
@@ -1202,6 +1452,56 @@ onUnmounted(() => {
               :class="readFilter === 'unread' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-600 hover:text-slate-900'"
             >
               Chưa đọc ({{ totalUnread }})
+            </button>
+          </div>
+
+          <!-- Bộ lọc trạng thái CRM (Phân vân / Chốt đơn / Chăm lại) -->
+          <div class="grid grid-cols-4 gap-1">
+            <button
+              @click="leadStatusFilter = 'all'"
+              class="rounded-lg border py-1 text-[10px] font-bold transition cursor-pointer"
+              :class="leadStatusFilter === 'all' ? 'border-emerald-600 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'"
+            >
+              Tất cả
+            </button>
+            <button
+              @click="leadStatusFilter = 'hesitant'"
+              class="rounded-lg border py-1 text-[10px] font-bold transition cursor-pointer"
+              :class="leadStatusFilter === 'hesitant' ? 'border-amber-500 bg-amber-50 text-amber-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'"
+            >
+              Phân vân
+            </button>
+            <button
+              @click="leadStatusFilter = 'closed'"
+              class="rounded-lg border py-1 text-[10px] font-bold transition cursor-pointer"
+              :class="leadStatusFilter === 'closed' ? 'border-emerald-600 bg-emerald-50 text-emerald-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'"
+            >
+              Chốt đơn
+            </button>
+            <button
+              @click="leadStatusFilter = 'follow_up'"
+              class="rounded-lg border py-1 text-[10px] font-bold transition cursor-pointer"
+              :class="leadStatusFilter === 'follow_up' ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'"
+            >
+              Chăm lại
+            </button>
+          </div>
+
+          <!-- Lọc hội thoại theo Ngày / Tháng / Năm -->
+          <div class="flex items-center gap-1.5">
+            <input
+              v-model="dateFilter"
+              type="date"
+              title="Lọc tin nhắn theo ngày/tháng/năm"
+              class="flex-1 rounded-lg border border-slate-200 bg-slate-50/70 px-2.5 py-1 text-[11px] font-medium text-slate-700 outline-none focus:border-emerald-600 focus:bg-white"
+            />
+            <button
+              v-if="dateFilter"
+              type="button"
+              @click="dateFilter = ''"
+              class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-600 hover:bg-red-50 hover:text-red-600 cursor-pointer"
+            >
+              Xóa ngày
             </button>
           </div>
         </div>
@@ -1231,7 +1531,7 @@ onUnmounted(() => {
             <!-- Avatar Khách + Badge Avatar Page góc dưới -->
             <div class="relative h-11 w-11 shrink-0">
               <img
-                v-if="!brokenAvatars['c_' + conv.id]"
+                v-if="conv.customer_avatar && !brokenAvatars['c_' + conv.id]"
                 :src="getCustomerAvatarUrl(conv)"
                 :alt="conv.customer_name"
                 loading="lazy"
@@ -1240,12 +1540,12 @@ onUnmounted(() => {
               />
               <div
                 v-else
-                class="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-xs font-bold text-white shadow-2xs"
+                :class="getAvatarGradient(conv.customer_name)"
+                class="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br text-xs font-bold text-white shadow-2xs"
               >
                 {{ getInitials(conv.customer_name) }}
               </div>
 
-              <!-- Mini avatar của Fanpage -->
               <img
                 v-if="pageMap[conv.page_id]?.avatar_url && !brokenAvatars['p_' + conv.page_id]"
                 :src="pageMap[conv.page_id].avatar_url"
@@ -1283,9 +1583,25 @@ onUnmounted(() => {
                 {{ conv.last_message || 'Tin nhắn mới' }}
               </p>
 
-              <!-- Nhãn sản phẩm đặc trưng của Page + Tên Fanpage -->
+              <!-- Nhãn trạng thái CRM + Lịch hẹn + Nhãn sản phẩm + Tên Fanpage -->
               <div class="mt-1.5 flex items-center justify-between gap-1.5">
                 <div class="flex min-w-0 flex-wrap items-center gap-1">
+                  <span
+                    v-if="conv.lead_status && conv.lead_status !== 'new'"
+                    class="inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold"
+                    :class="leadStatusMeta[conv.lead_status]?.badge"
+                  >
+                    {{ leadStatusMeta[conv.lead_status]?.label }}
+                  </span>
+
+                  <span
+                    v-if="conv.next_follow_up_at"
+                    class="inline-flex shrink-0 items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold"
+                    :class="isFollowUpDue(conv.next_follow_up_at) ? 'bg-red-100 text-red-700' : 'bg-blue-50 text-blue-700'"
+                  >
+                    {{ isFollowUpDue(conv.next_follow_up_at) ? 'Đến giờ chăm!' : `Hẹn ${formatTime(conv.next_follow_up_at)}` }}
+                  </span>
+
                   <span
                     v-if="pageSettingsMap[conv.page_id]?.product_tag"
                     class="inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-bold"
@@ -1298,7 +1614,7 @@ onUnmounted(() => {
                     <span>{{ pageSettingsMap[conv.page_id].product_tag }}</span>
                   </span>
 
-                  <span class="inline-flex max-w-[140px] items-center gap-1 truncate rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                  <span class="inline-flex max-w-[130px] items-center gap-1 truncate rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
                     <Facebook class="h-2.5 w-2.5 shrink-0 text-blue-600" />
                     <span class="truncate">{{ conv.page_name }}</span>
                   </span>
@@ -1316,64 +1632,76 @@ onUnmounted(() => {
         </div>
       </aside>
 
-      <!-- CỘT 2: Khung chat trực tiếp -->
-      <section class="col-span-12 flex min-h-0 flex-col bg-[#f4f7f6] md:col-span-8 lg:col-span-6">
+      <!-- CỘT 2: Khung chat trực tiếp (Chiếm toàn bộ phần giữa, mở full-screen trên Mobile) -->
+      <section
+        class="flex min-h-0 flex-1 min-w-0 flex-col bg-[#f4f7f6]"
+        :class="selectedConv ? 'flex' : 'hidden md:flex'"
+      >
         <div v-if="!selectedConv" class="flex flex-1 flex-col items-center justify-center p-8 text-center">
           <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 border border-emerald-100">
             <MessageSquare class="h-8 w-8" />
           </div>
-          <h2 class="mt-4 text-base font-bold !text-slate-800">Chọn một hội thoại để bắt đầu tư vấn</h2>
+          <div class="mt-4 text-base font-bold text-slate-800">Chọn một hội thoại để bắt đầu tư vấn</div>
           <p class="mt-1 max-w-sm text-xs text-slate-500">
             Tin nhắn của khách hàng từ tất cả Fanpage đều tập trung tại cột bên trái và tự động trả lời đúng Page khách đã nhắn.
           </p>
         </div>
 
         <template v-else>
-          <!-- Header hội thoại + Thanh công tắc Bật/Tắt nhanh Auto Mẫu & AI -->
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-4 py-2.5">
-            <div class="flex min-w-0 items-center gap-3">
+          <!-- Header hội thoại + Nút quay lại (Mobile) + Nút mở Hồ sơ & AI (Mobile/Tablet) -->
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 sm:px-4 py-2">
+            <div class="flex min-w-0 items-center gap-2 sm:gap-3">
+              <!-- Nút quay lại danh sách trên điện thoại -->
+              <button
+                type="button"
+                @click="selectedConv = null"
+                class="inline-flex md:hidden h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-700 hover:bg-emerald-50 cursor-pointer"
+                title="Quay lại danh sách"
+              >
+                <ArrowLeft class="h-4 w-4" />
+              </button>
+
               <img
-                v-if="!brokenAvatars['c_' + selectedConv.id]"
+                v-if="selectedConv.customer_avatar && !brokenAvatars['c_' + selectedConv.id]"
                 :src="getCustomerAvatarUrl(selectedConv)"
                 :alt="selectedConv.customer_name"
                 @error="handleAvatarError('c_' + selectedConv.id)"
-                class="h-10 w-10 shrink-0 rounded-full object-cover border border-slate-200"
+                class="h-9 w-9 sm:h-10 sm:w-10 shrink-0 rounded-full object-cover border border-slate-200"
               />
               <div
                 v-else
-                class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-xs font-bold text-white"
+                :class="getAvatarGradient(selectedConv.customer_name)"
+                class="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-xs font-bold text-white"
               >
                 {{ getInitials(selectedConv.customer_name) }}
               </div>
 
               <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <h2 class="truncate text-sm font-bold !text-slate-900">
+                <div class="flex items-center gap-1.5">
+                  <div class="truncate text-sm font-bold text-slate-900">
                     {{ selectedConv.customer_name }}
-                  </h2>
+                  </div>
                   <span
-                    v-if="pageProductTag || pageSettingsMap[selectedConv.page_id]?.product_tag"
-                    class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold"
-                    :class="getBadgeStyle(pageTagColor || pageSettingsMap[selectedConv.page_id]?.tag_color).badge"
+                    v-if="crmForm.lead_status && crmForm.lead_status !== 'new'"
+                    class="inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[10px] font-bold"
+                    :class="leadStatusMeta[crmForm.lead_status]?.badge"
                   >
-                    <Tag class="h-2.5 w-2.5" />
-                    <span>{{ pageProductTag || pageSettingsMap[selectedConv.page_id]?.product_tag }}</span>
+                    {{ leadStatusMeta[crmForm.lead_status]?.label }}
                   </span>
                 </div>
-                <div class="flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
-                  <span class="h-2 w-2 rounded-full bg-emerald-500" />
+                <div class="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
+                  <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
                   <span class="truncate">{{ selectedConv.page_name }}</span>
                 </div>
               </div>
             </div>
 
-            <!-- Thanh công tắc Bật/Tắt nhanh Auto Mẫu & AI Tự động -->
-            <div class="flex flex-wrap items-center gap-1.5">
+            <!-- Thanh công tắc Bật/Tắt nhanh Auto Mẫu & AI + Nút mở Panel trên Mobile/Tablet -->
+            <div class="flex items-center gap-1.5">
               <button
                 type="button"
                 @click="toggleAllPageTemplatesAuto"
-                :title="isAnyTemplateAutoEnabled ? 'Bấm để TẮT tự động trả lời bằng mẫu từ khóa của Page này' : 'Bấm để BẬT tự động trả lời bằng mẫu từ khóa của Page này'"
-                class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition cursor-pointer"
+                class="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-bold transition cursor-pointer"
                 :class="
                   isAnyTemplateAutoEnabled
                     ? 'border-amber-300 bg-amber-50 text-amber-800'
@@ -1381,14 +1709,14 @@ onUnmounted(() => {
                 "
               >
                 <Zap class="h-3 w-3" :class="isAnyTemplateAutoEnabled ? 'text-amber-500' : 'text-slate-400'" />
-                <span>Auto Mẫu: {{ isAnyTemplateAutoEnabled ? 'BẬT' : 'TẮT' }}</span>
+                <span class="hidden sm:inline">Auto Mẫu:</span>
+                <span>{{ isAnyTemplateAutoEnabled ? 'BẬT' : 'TẮT' }}</span>
               </button>
 
               <button
                 type="button"
                 @click="togglePageAIAutoReply"
-                :title="aiAutoReply ? 'Bấm để TẮT AI tự động trả lời sau 2 phút' : 'Bấm để BẬT AI tự động trả lời sau 2 phút'"
-                class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-bold transition cursor-pointer"
+                class="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-bold transition cursor-pointer"
                 :class="
                   aiAutoReply
                     ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
@@ -1396,23 +1724,24 @@ onUnmounted(() => {
                 "
               >
                 <Bot class="h-3 w-3" :class="aiAutoReply ? 'text-emerald-600' : 'text-slate-400'" />
-                <span>AI Tự động: {{ aiAutoReply ? 'BẬT' : 'TẮT' }}</span>
+                <span class="hidden sm:inline">AI Auto:</span>
+                <span>{{ aiAutoReply ? 'BẬT' : 'TẮT' }}</span>
               </button>
 
+              <!-- Nút mở bảng Chăm khách / Mẫu / Kịch bản AI trên điện thoại & tablet -->
               <button
-                @click="copyText(selectedConv.customer_psid, 'psid')"
-                title="Sao chép PSID khách hàng"
-                class="hidden xl:inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-mono text-slate-600 transition hover:border-emerald-300 hover:bg-emerald-50 cursor-pointer"
+                type="button"
+                @click="showMobileDrawer = true"
+                class="inline-flex lg:hidden items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
               >
-                <span>PSID</span>
-                <Check v-if="copiedField === 'psid'" class="h-3 w-3 text-emerald-600" />
-                <Copy v-else class="h-3 w-3 text-slate-400" />
+                <SlidersHorizontal class="h-3.5 w-3.5" />
+                <span>Chăm khách & AI</span>
               </button>
             </div>
           </div>
 
           <!-- Vùng nội dung tin nhắn -->
-          <div ref="chatBoxRef" class="flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
+          <div ref="chatBoxRef" class="flex-1 space-y-3 overflow-y-auto px-3 sm:px-5 py-4">
             <div v-if="loadingMessages" class="flex items-center justify-center gap-2 py-8 text-xs text-slate-500">
               <Loader2 class="h-4 w-4 animate-spin text-emerald-600" />
               <span>Đang tải lịch sử tin nhắn...</span>
@@ -1421,13 +1750,13 @@ onUnmounted(() => {
             <div
               v-for="msg in messages"
               :key="msg.id"
-              class="group flex items-end gap-2.5"
+              class="group flex items-end gap-2"
               :class="msg.sender_type === 'page' ? 'justify-end' : 'justify-start'"
             >
               <!-- Avatar khách ở tin nhắn đến -->
               <template v-if="msg.sender_type === 'customer'">
                 <img
-                  v-if="!brokenAvatars['c_' + selectedConv.id]"
+                  v-if="selectedConv.customer_avatar && !brokenAvatars['c_' + selectedConv.id]"
                   :src="getCustomerAvatarUrl(selectedConv)"
                   :alt="selectedConv.customer_name"
                   @error="handleAvatarError('c_' + selectedConv.id)"
@@ -1435,15 +1764,16 @@ onUnmounted(() => {
                 />
                 <div
                   v-else
-                  class="mb-4 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-800"
+                  :class="getAvatarGradient(selectedConv.customer_name)"
+                  class="mb-4 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-[10px] font-bold text-white"
                 >
                   {{ getInitials(selectedConv.customer_name) }}
                 </div>
               </template>
 
-              <!-- Bong bóng tin nhắn (Bấm vào tin khách để chọn trả lời bằng AI) -->
+              <!-- Bong bóng tin nhắn -->
               <div
-                class="flex max-w-[72%] flex-col"
+                class="flex max-w-[82%] sm:max-w-[74%] flex-col"
                 :class="msg.sender_type === 'page' ? 'items-end' : 'items-start'"
               >
                 <div class="flex items-center gap-1.5">
@@ -1451,7 +1781,7 @@ onUnmounted(() => {
                     @click="msg.sender_type === 'customer' && msg.content ? toggleSelectMessageForAI(msg) : undefined"
                     class="overflow-hidden rounded-2xl text-[13.5px] leading-relaxed shadow-2xs transition"
                     :class="[
-                      msg.attachment_url && !msg.content ? 'p-1.5' : 'px-4 py-2.5',
+                      msg.attachment_url && !msg.content ? 'p-1.5' : 'px-3.5 py-2.5',
                       msg.sender_type === 'page'
                         ? 'bg-emerald-600 text-white rounded-br-xs'
                         : 'bg-white border text-slate-800 rounded-bl-xs cursor-pointer hover:border-emerald-400',
@@ -1459,7 +1789,6 @@ onUnmounted(() => {
                         ? 'border-emerald-600 ring-2 ring-emerald-200 bg-emerald-50/60'
                         : 'border-slate-200/90'
                     ]"
-                    :title="msg.sender_type === 'customer' ? 'Bấm để chọn tin nhắn này cho AI trả lời' : undefined"
                   >
                     <a
                       v-if="msg.attachment_url && msg.attachment_type === 'image'"
@@ -1473,7 +1802,7 @@ onUnmounted(() => {
                         :src="resolveMediaUrl(msg.attachment_url)"
                         alt="Hình ảnh đính kèm"
                         referrerpolicy="no-referrer"
-                        class="max-h-64 w-auto rounded-xl object-contain"
+                        class="max-h-60 w-auto rounded-xl object-contain"
                       />
                     </a>
 
@@ -1493,13 +1822,11 @@ onUnmounted(() => {
                     </p>
                   </div>
 
-                  <!-- Nút chọn nhanh tin nhắn khách để AI trả lời -->
                   <button
                     v-if="msg.sender_type === 'customer' && msg.content"
                     type="button"
                     @click="toggleSelectMessageForAI(msg)"
-                    :title="selectedTargetMsg?.id === msg.id ? 'Bỏ chọn tin nhắn này' : 'Chọn tin nhắn này để AI trả lời'"
-                    class="shrink-0 rounded-lg border px-2 py-1 text-[10px] font-semibold transition cursor-pointer"
+                    class="hidden sm:inline-flex shrink-0 rounded-lg border px-2 py-1 text-[10px] font-semibold transition cursor-pointer"
                     :class="
                       selectedTargetMsg?.id === msg.id
                         ? 'border-emerald-600 bg-emerald-600 text-white'
@@ -1539,41 +1866,49 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Khung soạn tin nhắn + Duyệt AI trước khi gửi + Chọn tin & Hỏi/Chỉ đạo AI -->
-          <form @submit.prevent="handleSendMessage" class="shrink-0 border-t border-slate-200 bg-white p-3.5 space-y-2">
+          <!-- Khung soạn tin nhắn -->
+          <form @submit.prevent="handleSendMessage" class="shrink-0 border-t border-slate-200 bg-white p-2.5 sm:p-3.5 space-y-2">
             <!-- Cảnh báo tự động nếu hội thoại đã quá 24h của Meta -->
             <div
               v-if="isOver24Hours(selectedConv.last_message_time) || fbInboxFallbackUrl"
-              class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+              class="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900"
             >
-              <span>
-                Hội thoại này đã quá <strong>24 giờ</strong> (quy định chống spam của Meta). Nếu API bị chặn, hãy mở thẳng hộp thư gốc:
-              </span>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span>Quá <strong>24h</strong>:</span>
+                <select
+                  v-model="selectedMessageTag"
+                  class="rounded-lg border border-amber-300 bg-white px-2 py-1 text-[11px] font-semibold text-amber-950 outline-none"
+                >
+                  <option value="">Tự động thử thẻ</option>
+                  <option value="HUMAN_AGENT">HUMAN_AGENT (7 ngày)</option>
+                  <option value="POST_PURCHASE_UPDATE">POST_PURCHASE_UPDATE (Đơn hàng)</option>
+                  <option value="CONFIRMED_EVENT_UPDATE">CONFIRMED_EVENT_UPDATE (Lịch hẹn)</option>
+                </select>
+              </div>
               <a
                 :href="fbInboxFallbackUrl || getMetaBusinessInboxUrl(selectedConv)"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="inline-flex shrink-0 items-center gap-1 rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-amber-700"
               >
-                <span>Mở trên Meta Business Suite ↗</span>
+                <span>Mở Meta Business ↗</span>
               </a>
             </div>
 
-            <!-- Hộp Hỏi duyệt câu trả lời AI trước khi gửi cho khách -->
+            <!-- Hộp Hỏi duyệt câu trả lời AI trước khi gửi -->
             <div
               v-if="aiApprovalDraft"
-              class="rounded-xl border border-emerald-300 bg-emerald-50/90 p-3 space-y-2 shadow-xs"
+              class="rounded-xl border border-emerald-300 bg-emerald-50/90 p-2.5 space-y-2 shadow-xs"
             >
               <div class="flex items-center justify-between gap-2">
                 <span class="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-900">
                   <ShieldCheck class="h-4 w-4 text-emerald-600" />
-                  <span>AI đã soạn xong — Bạn duyệt trước khi gửi cho khách:</span>
+                  <span>Duyệt câu trả lời của AI:</span>
                 </span>
                 <button
                   type="button"
                   @click="aiApprovalDraft = ''"
                   class="text-slate-400 hover:text-slate-700 cursor-pointer"
-                  title="Bỏ qua gợi ý này"
                 >
                   <X class="h-4 w-4" />
                 </button>
@@ -1582,10 +1917,10 @@ onUnmounted(() => {
               <textarea
                 v-model="aiApprovalDraft"
                 rows="2"
-                class="w-full resize-none rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs leading-relaxed text-slate-900 outline-none focus:border-emerald-600"
+                class="w-full resize-none rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs leading-relaxed text-slate-900 outline-none focus:border-emerald-600"
               />
 
-              <div class="flex flex-wrap items-center justify-end gap-2">
+              <div class="flex flex-wrap items-center justify-end gap-1.5">
                 <button
                   type="button"
                   @click="aiApprovalDraft = ''"
@@ -1598,133 +1933,86 @@ onUnmounted(() => {
                   @click="moveAIDraftToEditor"
                   class="rounded-lg border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-100 cursor-pointer"
                 >
-                  Đưa xuống ô chat
+                  Sửa lại
                 </button>
                 <button
                   type="button"
                   @click="approveAndSendAIReply"
                   :disabled="sending"
-                  class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white shadow-2xs hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
+                  class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
                 >
                   <Send class="h-3 w-3" />
-                  <span>Duyệt & Gửi ngay</span>
+                  <span>Duyệt & Gửi</span>
                 </button>
               </div>
             </div>
 
-            <!-- Thanh tin nhắn mẫu chuyên nghiệp của riêng Fanpage này -->
-            <div v-if="pageQuickReplies.length > 0" class="rounded-xl border border-slate-200/90 bg-slate-50/70 p-2 space-y-1.5">
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <div class="flex items-center gap-1.5">
-                  <span class="inline-flex items-center gap-1 text-[11px] font-bold text-slate-700">
-                    <Zap class="h-3.5 w-3.5 text-amber-500" />
-                    <span>Mẫu nhanh ({{ filteredQuickReplies.length }})</span>
-                  </span>
-                  <select
-                    v-model="quickReplyCategoryFilter"
-                    class="rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-700 outline-none focus:border-emerald-600"
-                  >
-                    <option value="all">Tất cả nhóm</option>
-                    <option value="Báo giá">Báo giá</option>
-                    <option value="Chốt đơn">Chốt đơn</option>
-                    <option value="Chính sách">Chính sách</option>
-                    <option value="Chào hỏi">Chào hỏi</option>
-                  </select>
-                </div>
-
-                <input
-                  v-model="quickReplySearch"
-                  type="text"
-                  placeholder="Lọc tên mẫu / từ khóa..."
-                  class="w-36 sm:w-44 rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-slate-700 outline-none focus:border-emerald-600"
-                />
-              </div>
-
-              <div class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-                <button
-                  v-for="qr in filteredQuickReplies"
-                  :key="qr.id"
-                  type="button"
-                  @click="applyQuickReply(qr)"
-                  :title="`${qr.category} • ${qr.content}${qr.images?.length ? ` (${qr.images.length} ảnh)` : ''}`"
-                  class="group inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 shadow-2xs transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+            <!-- Thanh tin nhắn mẫu nhanh -->
+            <div v-if="pageQuickReplies.length > 0" class="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+              <span class="inline-flex shrink-0 items-center gap-1 text-[11px] font-bold text-slate-600">
+                <Zap class="h-3.5 w-3.5 text-amber-500" />
+                <span>Mẫu:</span>
+              </span>
+              <button
+                v-for="qr in filteredQuickReplies"
+                :key="qr.id"
+                type="button"
+                @click="applyQuickReply(qr)"
+                class="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+              >
+                <span>{{ qr.title }}</span>
+                <span
+                  v-if="qr.images && qr.images.length > 0"
+                  class="rounded bg-blue-100 px-1 text-[9px] font-bold text-blue-700"
                 >
-                  <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500 group-hover:bg-emerald-100 group-hover:text-emerald-700">
-                    {{ qr.category }}
-                  </span>
-                  <span>{{ qr.title }}</span>
-                  <span
-                    v-if="qr.images && qr.images.length > 0"
-                    class="rounded bg-blue-50 px-1 py-0.5 text-[9px] font-bold text-blue-700"
-                  >
-                    +{{ qr.images.length }} ảnh
-                  </span>
-                  <span
-                    v-if="qr.autoTrigger"
-                    class="h-1.5 w-1.5 rounded-full bg-emerald-500"
-                    title="Đang bật tự động trả lời theo mẫu"
-                  />
-                </button>
-              </div>
+                  +{{ qr.images.length }}
+                </span>
+              </button>
             </div>
 
-            <!-- Thanh Chọn tin nhắn khách + Hỏi/Chỉ đạo AI + Nút AI Gợi ý -->
+            <!-- Thanh Chỉ đạo AI + Nút AI Gợi ý -->
             <div class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2 space-y-1.5">
-              <!-- Hiển thị tin nhắn của khách đang được chọn để AI tập trung trả lời -->
               <div
                 v-if="selectedTargetMsg"
-                class="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11px] text-emerald-900"
+                class="flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[11px] text-emerald-900"
               >
-                <div class="flex min-w-0 items-center gap-1.5">
+                <div class="flex min-w-0 items-center gap-1">
                   <CornerUpLeft class="h-3 w-3 shrink-0 text-emerald-600" />
-                  <span class="font-bold shrink-0">Đang chọn trả lời tin:</span>
                   <span class="truncate italic">"{{ selectedTargetMsg.content }}"</span>
                 </div>
-                <button
-                  type="button"
-                  @click="selectedTargetMsg = null"
-                  class="shrink-0 text-emerald-700 hover:text-red-600 cursor-pointer"
-                  title="Bỏ chọn tin nhắn"
-                >
+                <button type="button" @click="selectedTargetMsg = null" class="shrink-0 text-emerald-700 cursor-pointer">
                   <X class="h-3.5 w-3.5" />
                 </button>
               </div>
 
-              <div class="flex flex-wrap items-center gap-1.5">
+              <div class="flex items-center gap-1.5">
                 <input
                   v-model="aiCustomInstruction"
                   type="text"
-                  placeholder="Hỏi / chỉ đạo AI trước khi soạn (VD: Báo giá 450k, freeship)..."
-                  class="min-w-[180px] flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-emerald-600"
+                  placeholder="Chỉ đạo AI (VD: Báo giá 450k, freeship)..."
+                  class="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 outline-none focus:border-emerald-600"
                 />
 
                 <label
-                  class="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer"
-                  title="Khi bật, AI sẽ hiện bảng hỏi duyệt trước khi gửi cho khách"
+                  class="hidden sm:inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700 cursor-pointer"
                 >
-                  <input
-                    v-model="aiAskBeforeSend"
-                    type="checkbox"
-                    class="h-3.5 w-3.5 accent-emerald-600 cursor-pointer"
-                  />
-                  <span>Hỏi duyệt trước</span>
+                  <input v-model="aiAskBeforeSend" type="checkbox" class="h-3.5 w-3.5 accent-emerald-600" />
+                  <span>Duyệt</span>
                 </label>
 
                 <button
                   type="button"
                   @click="handleAISuggest"
                   :disabled="generatingAI"
-                  class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-2xs transition hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
+                  class="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
                 >
                   <Loader2 v-if="generatingAI" class="h-3.5 w-3.5 animate-spin" />
                   <Sparkles v-else class="h-3.5 w-3.5" />
-                  <span>{{ generatingAI ? 'AI đang soạn...' : 'AI Gợi ý trả lời' }}</span>
+                  <span>{{ generatingAI ? 'Đang soạn...' : 'AI Gợi ý' }}</span>
                 </button>
               </div>
 
-              <!-- Các chip chỉ đạo nhanh cho AI -->
               <div class="flex items-center gap-1 overflow-x-auto pb-0.5">
-                <span class="shrink-0 text-[10px] font-semibold text-slate-400">Chỉ đạo nhanh:</span>
                 <button
                   v-for="preset in quickInstructionPresets"
                   :key="preset"
@@ -1737,25 +2025,16 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- Xem trước nhiều ảnh chuẩn bị gửi -->
+            <!-- Xem trước ảnh chuẩn bị gửi -->
             <div
               v-if="pendingImages.length > 0 || uploadingImages"
               class="flex items-center gap-2 overflow-x-auto rounded-xl border border-slate-200 bg-slate-50 p-2"
             >
-              <div
-                v-for="(imgUrl, i) in pendingImages"
-                :key="imgUrl + i"
-                class="relative h-14 w-14 shrink-0"
-              >
-                <img
-                  :src="resolveMediaUrl(imgUrl)"
-                  alt="Ảnh chuẩn bị gửi"
-                  class="h-14 w-14 rounded-lg object-cover border border-slate-200 bg-white"
-                />
+              <div v-for="(imgUrl, i) in pendingImages" :key="imgUrl + i" class="relative h-12 w-12 shrink-0">
+                <img :src="resolveMediaUrl(imgUrl)" class="h-12 w-12 rounded-lg object-cover border border-slate-200 bg-white" />
                 <button
                   type="button"
                   @click="pendingImages.splice(i, 1)"
-                  title="Gỡ ảnh này"
                   class="absolute -right-1.5 -top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow cursor-pointer"
                 >
                   ×
@@ -1767,7 +2046,7 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="flex items-end gap-2">
+            <div class="flex items-end gap-1.5 sm:gap-2">
               <input
                 ref="chatFileInputRef"
                 type="file"
@@ -1779,170 +2058,256 @@ onUnmounted(() => {
               <button
                 type="button"
                 @click="chatFileInputRef?.click()"
-                title="Chọn nhiều hình ảnh để gửi"
-                class="inline-flex h-[46px] w-[46px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer"
+                title="Chọn hình ảnh"
+                class="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer"
               >
                 <ImagePlus class="h-5 w-5" />
               </button>
 
               <textarea
                 v-model="draftMessage"
-                rows="2"
+                rows="1"
                 @keydown="handleKeydown"
                 @paste="handleChatPaste"
-                placeholder="Nhập tin nhắn hoặc dán ảnh (Ctrl + V)... (Enter để gửi, Shift + Enter xuống dòng)"
-                class="max-h-32 min-h-[46px] flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-100"
+                placeholder="Nhập tin nhắn trả lời khách..."
+                class="max-h-28 min-h-[42px] flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-100"
               />
               <button
                 type="submit"
                 :disabled="sending || uploadingImages || (!draftMessage.trim() && pendingImages.length === 0)"
-                class="inline-flex h-[46px] shrink-0 items-center gap-1.5 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-xs transition hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
+                class="inline-flex h-[42px] shrink-0 items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 sm:px-4 text-sm font-semibold text-white shadow-xs transition hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
               >
                 <Loader2 v-if="sending" class="h-4 w-4 animate-spin" />
                 <Send v-else class="h-4 w-4" />
-                <span>Gửi</span>
+                <span class="hidden sm:inline">Gửi</span>
               </button>
             </div>
           </form>
         </template>
       </section>
 
-      <!-- CỘT 3: Hồ sơ khách hàng & Cấu hình Sản phẩm / Mẫu & Auto-Rep / AI cho Fanpage -->
-      <aside class="hidden min-h-0 overflow-y-auto border-l border-slate-200 bg-white p-5 lg:col-span-3 lg:block">
-        <div v-if="selectedConv" class="space-y-4">
-          <!-- Card Avatar + Tên khách -->
-          <div class="flex flex-col items-center rounded-2xl border border-slate-100 bg-slate-50/60 p-4 text-center">
-            <img
-              v-if="!brokenAvatars['c_' + selectedConv.id]"
-              :src="getCustomerAvatarUrl(selectedConv)"
-              :alt="selectedConv.customer_name"
-              @error="handleAvatarError('c_' + selectedConv.id)"
-              class="h-14 w-14 rounded-full object-cover border-2 border-white shadow-sm"
-            />
+      <!-- Backdrop khi mở Drawer trên Mobile / Tablet -->
+      <div
+        v-if="showMobileDrawer && selectedConv"
+        @click="showMobileDrawer = false"
+        class="fixed inset-0 z-40 bg-black/40 lg:hidden"
+      />
+
+      <!-- CỘT 3: Hồ sơ Chăm khách, Mẫu & Dạy AI (Chia 3 Tab gọn gàng; Drawer trên Mobile/Tablet, Cột cố định trên Desktop) -->
+      <aside
+        v-if="selectedConv"
+        class="fixed inset-y-0 right-0 z-50 flex w-[92vw] max-w-[380px] flex-col border-l border-slate-200 bg-white shadow-2xl transition-transform lg:static lg:z-auto lg:w-[350px] xl:w-[370px] lg:max-w-none lg:shadow-none shrink-0"
+        :class="showMobileDrawer ? 'translate-x-0' : 'translate-x-full lg:translate-x-0'"
+      >
+        <!-- Header tóm tắt khách + Nút đóng trên Mobile -->
+        <div class="flex items-center justify-between gap-2 border-b border-slate-200 bg-slate-50/70 px-4 py-3">
+          <div class="flex items-center gap-2.5 min-w-0">
             <div
-              v-else
-              class="flex h-14 w-14 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-base font-bold text-white shadow-sm"
+              :class="getAvatarGradient(selectedConv.customer_name)"
+              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br text-xs font-bold text-white"
             >
               {{ getInitials(selectedConv.customer_name) }}
             </div>
-
-            <h3 class="mt-2.5 text-sm font-bold !text-slate-900">{{ selectedConv.customer_name }}</h3>
-            <span class="mt-1 inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-[11px] font-semibold text-blue-700">
-              <Facebook class="h-3 w-3" />
-              <span>Khách hàng Messenger</span>
-            </span>
+            <div class="min-w-0">
+              <div class="truncate text-xs font-bold text-slate-900">{{ selectedConv.customer_name }}</div>
+              <div class="truncate text-[11px] text-slate-500">{{ selectedConv.page_name }}</div>
+            </div>
           </div>
 
-          <!-- Nguồn Fanpage -->
-          <div class="rounded-2xl border border-emerald-200/80 bg-emerald-50/40 p-3.5">
-            <p class="text-[11px] font-bold uppercase tracking-wider text-emerald-800">Nguồn Fanpage</p>
-            <div class="mt-2 flex items-center gap-2.5">
-              <img
-                v-if="pageMap[selectedConv.page_id]?.avatar_url && !brokenAvatars['p_' + selectedConv.page_id]"
-                :src="pageMap[selectedConv.page_id].avatar_url"
-                :alt="selectedConv.page_name"
-                referrerpolicy="no-referrer"
-                @error="handleAvatarError('p_' + selectedConv.page_id)"
-                class="h-8 w-8 shrink-0 rounded-full object-cover border border-emerald-200 bg-white"
+          <button
+            type="button"
+            @click="showMobileDrawer = false"
+            class="inline-flex lg:hidden h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-100 cursor-pointer"
+          >
+            <X class="h-4 w-4" />
+          </button>
+        </div>
+
+        <!-- Thanh 3 Tab chuyển nhanh: Chăm khách | Mẫu & Auto | Dạy AI -->
+        <div class="grid grid-cols-3 gap-1 border-b border-slate-200 bg-white p-2 shrink-0">
+          <button
+            type="button"
+            @click="rightPanelTab = 'crm'"
+            class="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold transition cursor-pointer"
+            :class="rightPanelTab === 'crm' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'"
+          >
+            <UserCheck class="h-3.5 w-3.5" />
+            <span>Chăm khách</span>
+          </button>
+          <button
+            type="button"
+            @click="rightPanelTab = 'templates'"
+            class="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold transition cursor-pointer"
+            :class="rightPanelTab === 'templates' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'"
+          >
+            <Zap class="h-3.5 w-3.5" />
+            <span>Mẫu ({{ pageQuickReplies.length }})</span>
+          </button>
+          <button
+            type="button"
+            @click="rightPanelTab = 'ai'"
+            class="inline-flex items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold transition cursor-pointer"
+            :class="rightPanelTab === 'ai' ? 'bg-emerald-600 text-white shadow-2xs' : 'text-slate-600 hover:bg-slate-100'"
+          >
+            <Bot class="h-3.5 w-3.5" />
+            <span>Dạy AI</span>
+          </button>
+        </div>
+
+        <!-- Nội dung từng Tab -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+          <!-- TAB 1: CHĂM KHÁCH & CRM -->
+          <div v-if="rightPanelTab === 'crm'" class="space-y-4">
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-2.5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-bold text-slate-900">Phân loại trạng thái</span>
+                <span
+                  class="rounded-md border px-2 py-0.5 text-[10px] font-bold"
+                  :class="leadStatusMeta[crmForm.lead_status]?.badge"
+                >
+                  {{ leadStatusMeta[crmForm.lead_status]?.label }}
+                </span>
+              </div>
+
+              <div class="grid grid-cols-2 gap-1.5">
+                <button
+                  v-for="(meta, key) in leadStatusMeta"
+                  :key="key"
+                  type="button"
+                  @click="saveConversationCRM(key as any)"
+                  class="rounded-xl border px-2.5 py-2 text-xs font-bold transition cursor-pointer"
+                  :class="crmForm.lead_status === key ? meta.activeBtn : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'"
+                >
+                  {{ meta.label }}
+                </button>
+              </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/60 p-3.5 space-y-2.5">
+              <span class="block text-xs font-bold text-slate-900">Thông tin & Lịch hẹn chăm khách</span>
+
+              <input
+                v-model="crmForm.customer_phone"
+                type="text"
+                placeholder="Số điện thoại khách hàng..."
+                class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-800 outline-none focus:border-emerald-600"
               />
-              <div
-                v-else
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold text-white"
-              >
-                P
+
+              <input
+                v-model="crmForm.customer_address"
+                type="text"
+                placeholder="Địa chỉ giao hàng..."
+                class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 outline-none focus:border-emerald-600"
+              />
+
+              <textarea
+                v-model="crmForm.care_note"
+                rows="3"
+                placeholder="Ghi chú chăm khách (VD: Phân vân giá, hẹn cuối tuần nhắn lại)..."
+                class="w-full resize-none rounded-xl border border-slate-200 bg-white p-2.5 text-xs text-slate-800 outline-none focus:border-emerald-600"
+              />
+
+              <div class="rounded-xl border border-slate-200 bg-white p-2.5 space-y-2">
+                <div class="flex items-center justify-between text-[11px]">
+                  <span class="font-bold text-slate-700">Hẹn nhắn lại</span>
+                  <span class="font-medium text-emerald-700">
+                    Tin cuối: {{ formatFullDateTime(selectedConv.last_message_time) }}
+                  </span>
+                </div>
+
+                <div class="grid grid-cols-3 gap-1.5">
+                  <button
+                    v-for="h in [3, 4, 5]"
+                    :key="h"
+                    type="button"
+                    @click="applyQuickFollowUp(h, 'msg')"
+                    class="rounded-lg border border-emerald-200 bg-emerald-50/70 py-1.5 text-xs font-bold text-emerald-800 transition hover:bg-emerald-600 hover:text-white cursor-pointer"
+                  >
+                    +{{ h }} tiếng
+                  </button>
+                </div>
+
+                <div class="flex items-center justify-between gap-1 text-[11px] text-slate-500">
+                  <span>Tính từ hiện tại:</span>
+                  <div class="flex items-center gap-1">
+                    <button
+                      v-for="h in [3, 4, 5]"
+                      :key="'now_' + h"
+                      type="button"
+                      @click="applyQuickFollowUp(h, 'now')"
+                      class="rounded border border-slate-200 bg-slate-50 px-2 py-0.5 font-semibold text-slate-700 hover:border-blue-400 hover:bg-blue-50 hover:text-blue-700 cursor-pointer"
+                    >
+                      +{{ h }}h
+                    </button>
+                  </div>
+                </div>
+
+                <input
+                  v-model="crmForm.next_follow_up_at"
+                  type="datetime-local"
+                  class="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-600 focus:bg-white"
+                />
               </div>
-              <div class="min-w-0">
-                <p class="truncate text-xs font-bold !text-slate-900">{{ selectedConv.page_name }}</p>
-                <p class="text-[11px] text-slate-500">ID: {{ selectedConv.page_id }}</p>
-              </div>
-            </div>
-          </div>
 
-          <!-- Nhãn nhận diện sản phẩm của Page -->
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-2.5">
-            <div class="flex items-center justify-between">
-              <span class="inline-flex items-center gap-1.5 text-xs font-bold !text-slate-900">
-                <Tag class="h-3.5 w-3.5 text-emerald-600" />
-                <span>Nhãn nhận diện sản phẩm</span>
-              </span>
-              <Loader2 v-if="loadingAISetting" class="h-3.5 w-3.5 animate-spin text-emerald-600" />
-            </div>
-
-            <input
-              v-model="pageProductTag"
-              type="text"
-              placeholder="VD: Micro Hamax, Hạt Điều, Phân Bón..."
-              class="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 outline-none focus:border-emerald-600"
-            />
-
-            <div class="flex flex-wrap gap-1.5">
               <button
-                v-for="color in tagColorOptions"
-                :key="color.id"
                 type="button"
-                @click="pageTagColor = color.id"
-                class="inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-semibold transition cursor-pointer"
-                :class="[
-                  color.badge,
-                  pageTagColor === color.id ? 'ring-2 ring-offset-1 ring-slate-400' : 'opacity-75 hover:opacity-100'
-                ]"
+                @click="saveConversationCRM()"
+                :disabled="savingCRM"
+                class="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
               >
-                <span class="h-2 w-2 rounded-full" :class="color.dot" />
-                <span>{{ color.label }}</span>
+                <Loader2 v-if="savingCRM" class="h-3.5 w-3.5 animate-spin" />
+                <Save v-else class="h-3.5 w-3.5" />
+                <span>{{ savingCRM ? 'Đang lưu...' : 'Lưu thông tin chăm khách' }}</span>
               </button>
             </div>
+
+            <!-- Thông tin PSID / Thread ID -->
+            <div class="rounded-xl border border-slate-200 p-3 space-y-2 text-[11px]">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-slate-600 flex items-center gap-1">
+                  <Hash class="h-3 w-3 text-slate-400" /> PSID: <span class="font-mono">{{ selectedConv.customer_psid }}</span>
+                </span>
+                <button @click="copyText(selectedConv.customer_psid, 'psid_side')" class="font-bold text-emerald-700 cursor-pointer">
+                  {{ copiedField === 'psid_side' ? 'Đã chép' : 'Chép' }}
+                </button>
+              </div>
+            </div>
           </div>
 
-          <!-- Tin nhắn mẫu & Tự động trả lời bằng mẫu của Page (Kèm nhiều ảnh + Auto-Save) -->
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-2.5">
-            <div class="flex items-center justify-between gap-2">
-              <span class="inline-flex items-center gap-1.5 text-xs font-bold !text-slate-900">
-                <Zap class="h-3.5 w-3.5 text-amber-500" />
-                <span>Mẫu & Auto-Rep ({{ pageQuickReplies.length }})</span>
-              </span>
-
-              <span
-                v-if="autoSaveStatus === 'saving'"
-                class="text-[10px] font-semibold text-amber-600"
-              >
-                Đang lưu...
-              </span>
-              <span
-                v-else-if="autoSaveStatus === 'saved'"
-                class="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700"
-              >
-                <Check class="h-3 w-3" />
-                <span>Đã tự lưu</span>
-              </span>
-              <span v-else class="text-[10px] font-semibold text-slate-400">
-                &#123;customer_name&#125;, &#123;page_name&#125;
+          <!-- TAB 2: TIN NHẮN MẪU & AUTO-REP -->
+          <div v-else-if="rightPanelTab === 'templates'" class="space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-slate-900">Danh sách mẫu ({{ pageQuickReplies.length }})</span>
+              <span v-if="autoSaveStatus === 'saving'" class="text-[11px] font-semibold text-amber-600">Đang lưu...</span>
+              <span v-else-if="autoSaveStatus === 'saved'" class="inline-flex items-center gap-0.5 text-[11px] font-bold text-emerald-700">
+                <Check class="h-3 w-3" /> Đã lưu
               </span>
             </div>
 
-            <div v-if="pageQuickReplies.length > 0" class="space-y-2 max-h-60 overflow-y-auto pr-0.5">
+            <div v-if="pageQuickReplies.length > 0" class="space-y-2">
               <div
                 v-for="(qr, idx) in pageQuickReplies"
                 :key="qr.id"
-                class="rounded-xl border border-slate-200 bg-white p-2.5 text-xs space-y-1.5 shadow-2xs"
+                class="rounded-xl border border-slate-200 bg-slate-50/50 p-3 text-xs space-y-1.5"
               >
                 <div class="flex items-start justify-between gap-2">
                   <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-1.5">
-                      <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-600">
+                      <span class="rounded bg-white border border-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
                         {{ qr.category }}
                       </span>
-                      <p class="font-bold !text-slate-900 truncate">{{ qr.title }}</p>
+                      <p class="font-bold text-slate-900 truncate">{{ qr.title }}</p>
                     </div>
-                    <p v-if="qr.keywords" class="mt-0.5 text-[10px] text-emerald-700 font-medium truncate">
+                    <p v-if="qr.keywords" class="mt-0.5 text-[11px] text-emerald-700 font-medium truncate">
                       Từ khóa: {{ qr.keywords }}
                     </p>
                   </div>
 
-                  <div class="flex items-center gap-1.5 shrink-0">
+                  <div class="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
                       @click="editingReplyId = editingReplyId === qr.id ? null : qr.id"
-                      class="text-[10px] font-semibold text-slate-500 hover:text-emerald-700 cursor-pointer"
+                      class="text-[11px] font-semibold text-slate-600 hover:text-emerald-700 cursor-pointer"
                     >
                       {{ editingReplyId === qr.id ? 'Xong' : 'Sửa' }}
                     </button>
@@ -1950,7 +2315,6 @@ onUnmounted(() => {
                       type="button"
                       @click="removeQuickReply(idx)"
                       class="text-slate-400 hover:text-red-600 cursor-pointer"
-                      title="Xóa mẫu này"
                     >
                       <Trash2 class="h-3.5 w-3.5" />
                     </button>
@@ -1962,61 +2326,38 @@ onUnmounted(() => {
                     v-model="qr.title"
                     @input="scheduleSilentSave"
                     type="text"
-                    class="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold outline-none focus:border-emerald-600"
+                    class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold outline-none focus:border-emerald-600"
                   />
                   <input
                     v-model="qr.keywords"
                     @input="scheduleSilentSave"
                     type="text"
-                    placeholder="Từ khóa (VD: giá, bao nhiêu)..."
-                    class="w-full rounded-lg border border-slate-200 px-2 py-1 text-[11px] outline-none focus:border-emerald-600"
+                    placeholder="Từ khóa..."
+                    class="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-emerald-600"
                   />
                   <textarea
                     v-model="qr.content"
                     @input="scheduleSilentSave"
                     @paste="handleEditTemplatePaste($event, qr)"
                     rows="2"
-                    placeholder="Nội dung mẫu (Ctrl+V để dán thêm ảnh)..."
-                    class="w-full resize-none rounded-lg border border-slate-200 p-1.5 text-[11px] outline-none focus:border-emerald-600"
+                    class="w-full resize-none rounded-lg border border-slate-200 bg-white p-2 text-xs outline-none focus:border-emerald-600"
                   />
-
-                  <div class="flex items-center gap-1.5 flex-wrap">
-                    <div
-                      v-for="(imgUrl, imgIdx) in qr.images || []"
-                      :key="imgUrl + imgIdx"
-                      class="relative h-10 w-10"
-                    >
-                      <img :src="resolveMediaUrl(imgUrl)" class="h-10 w-10 rounded-md object-cover border border-slate-200" />
-                      <button
-                        type="button"
-                        @click="qr.images?.splice(imgIdx, 1); scheduleSilentSave()"
-                        class="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold text-white cursor-pointer"
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <label class="inline-flex h-10 w-10 items-center justify-center rounded-md border border-dashed border-slate-300 text-slate-500 hover:border-emerald-500 hover:text-emerald-700 cursor-pointer" title="Thêm ảnh vào mẫu">
-                      <ImagePlus class="h-4 w-4" />
-                      <input type="file" accept="image/*" multiple class="hidden" @change="handleEditTemplateFilesSelected($event, qr)" />
-                    </label>
-                  </div>
                 </div>
 
                 <template v-else>
                   <p v-if="qr.content" class="text-[11px] text-slate-600 line-clamp-2 whitespace-pre-wrap">{{ qr.content }}</p>
-                  <div v-if="qr.images && qr.images.length > 0" class="flex items-center gap-1.5 overflow-x-auto pt-0.5">
+                  <div v-if="qr.images && qr.images.length > 0" class="flex items-center gap-1.5 overflow-x-auto pt-1">
                     <img
                       v-for="(imgUrl, imgIdx) in qr.images"
                       :key="imgUrl + imgIdx"
                       :src="resolveMediaUrl(imgUrl)"
-                      alt="Ảnh mẫu"
                       class="h-10 w-10 shrink-0 rounded-md object-cover border border-slate-200"
                     />
                   </div>
                 </template>
 
-                <label class="flex items-center justify-between border-t border-slate-100 pt-1.5 cursor-pointer">
-                  <span class="text-[10px] font-semibold text-slate-700">Tự động rep khi khớp từ khóa</span>
+                <label class="flex items-center justify-between border-t border-slate-200/70 pt-1.5 cursor-pointer">
+                  <span class="text-[11px] font-semibold text-slate-700">Tự động rep khi khớp từ khóa</span>
                   <input
                     v-model="qr.autoTrigger"
                     @change="toggleQuickReplyAutoTrigger"
@@ -2032,33 +2373,34 @@ onUnmounted(() => {
                 type="button"
                 @click="applyTemplatesToOtherPages(true)"
                 :disabled="applyingToAllPages || !pageProductTag.trim()"
-                title="Chép bộ mẫu này sang các Page có cùng Nhãn nhận diện sản phẩm"
-                class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 disabled:opacity-40 cursor-pointer"
+                class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-emerald-50 disabled:opacity-40 cursor-pointer"
               >
-                {{ applyingToAllPages ? 'Đang chép...' : 'Chép sang Page cùng SP' }}
+                Chép Page cùng SP
               </button>
               <button
                 type="button"
                 @click="applyTemplatesToOtherPages(false)"
                 :disabled="applyingToAllPages"
-                title="Áp dụng bộ mẫu này cho toàn bộ Fanpage đang kết nối"
-                class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 disabled:opacity-40 cursor-pointer"
+                class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-[11px] font-bold text-slate-700 hover:bg-emerald-50 disabled:opacity-40 cursor-pointer"
               >
-                {{ applyingToAllPages ? 'Đang chép...' : `Áp dụng cả ${pages.length} Page` }}
+                Chép cả {{ pages.length }} Page
               </button>
             </div>
 
-            <div class="space-y-1.5 pt-1.5 border-t border-slate-200/80">
+            <!-- Form thêm mẫu mới -->
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/70 p-3 space-y-2">
+              <span class="block text-xs font-bold text-slate-900">Thêm tin nhắn mẫu mới</span>
+
               <div class="grid grid-cols-2 gap-1.5">
                 <input
                   v-model="newReplyTitle"
                   type="text"
-                  placeholder="Tên mẫu (VD: Báo giá)"
-                  class="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-600"
+                  placeholder="Tên mẫu..."
+                  class="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-emerald-600"
                 />
                 <select
                   v-model="newReplyCategory"
-                  class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold text-slate-800 outline-none focus:border-emerald-600"
+                  class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-xs font-semibold outline-none focus:border-emerald-600"
                 >
                   <option value="Báo giá">Báo giá</option>
                   <option value="Chốt đơn">Chốt đơn</option>
@@ -2070,70 +2412,59 @@ onUnmounted(() => {
               <input
                 v-model="newReplyKeywords"
                 type="text"
-                placeholder="Từ khóa tự động rep (VD: giá, bao nhiêu, ship)..."
-                class="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-600"
+                placeholder="Từ khóa tự động rep (VD: giá, bao nhiêu)..."
+                class="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-emerald-600"
               />
 
               <textarea
                 v-model="newReplyContent"
                 @paste="handleTemplatePaste"
-                rows="2"
-                placeholder="Nội dung mẫu hoặc dán ảnh (Ctrl + V)..."
-                class="w-full resize-none rounded-xl border border-slate-200 bg-white p-2 text-xs text-slate-800 outline-none focus:border-emerald-600"
+                rows="3"
+                placeholder="Nội dung mẫu ({customer_name}, {page_name})..."
+                class="w-full resize-none rounded-xl border border-slate-200 bg-white p-2.5 text-xs outline-none focus:border-emerald-600"
               />
 
-              <!-- Chọn nhiều ảnh hoặc xem trước ảnh đính kèm của mẫu -->
-              <div class="space-y-1.5">
-                <input
-                  ref="templateFileInputRef"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  class="hidden"
-                  @change="handleTemplateFilesSelected"
-                />
-                <button
-                  type="button"
-                  @click="templateFileInputRef?.click()"
-                  class="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 transition hover:border-emerald-400 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
-                >
-                  <Loader2 v-if="uploadingTemplateImages" class="h-3.5 w-3.5 animate-spin text-emerald-600" />
-                  <ImagePlus v-else class="h-3.5 w-3.5 text-emerald-600" />
-                  <span>{{ uploadingTemplateImages ? 'Đang tải ảnh mẫu...' : 'Chọn nhiều ảnh cho mẫu (hoặc Ctrl+V)' }}</span>
-                </button>
+              <input
+                ref="templateFileInputRef"
+                type="file"
+                accept="image/*"
+                multiple
+                class="hidden"
+                @change="handleTemplateFilesSelected"
+              />
+              <button
+                type="button"
+                @click="templateFileInputRef?.click()"
+                class="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:border-emerald-400 hover:bg-emerald-50 cursor-pointer"
+              >
+                <Loader2 v-if="uploadingTemplateImages" class="h-3.5 w-3.5 animate-spin text-emerald-600" />
+                <ImagePlus v-else class="h-3.5 w-3.5 text-emerald-600" />
+                <span>Chọn ảnh đính kèm mẫu</span>
+              </button>
 
-                <div v-if="newReplyImages.length > 0" class="flex items-center gap-1.5 overflow-x-auto pt-0.5">
-                  <div
-                    v-for="(imgUrl, i) in newReplyImages"
-                    :key="imgUrl + i"
-                    class="relative h-12 w-12 shrink-0"
+              <div v-if="newReplyImages.length > 0" class="flex items-center gap-1.5 overflow-x-auto">
+                <div v-for="(imgUrl, i) in newReplyImages" :key="imgUrl + i" class="relative h-12 w-12 shrink-0">
+                  <img :src="resolveMediaUrl(imgUrl)" class="h-12 w-12 rounded-lg object-cover border border-slate-200" />
+                  <button
+                    type="button"
+                    @click="newReplyImages.splice(i, 1)"
+                    class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white cursor-pointer"
                   >
-                    <img :src="resolveMediaUrl(imgUrl)" class="h-12 w-12 rounded-lg object-cover border border-slate-200 bg-white" />
-                    <button
-                      type="button"
-                      @click="newReplyImages.splice(i, 1)"
-                      class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white shadow cursor-pointer"
-                    >
-                      ×
-                    </button>
-                  </div>
+                    ×
+                  </button>
                 </div>
               </div>
 
               <label class="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 cursor-pointer">
-                <span class="text-[11px] font-semibold text-slate-700">Bật tự động gửi mẫu khi khớp từ khóa</span>
-                <input
-                  v-model="newReplyAutoTrigger"
-                  type="checkbox"
-                  class="h-3.5 w-3.5 accent-emerald-600 cursor-pointer"
-                />
+                <span class="text-[11px] font-semibold text-slate-700">Bật tự động gửi khi khớp từ khóa</span>
+                <input v-model="newReplyAutoTrigger" type="checkbox" class="h-3.5 w-3.5 accent-emerald-600" />
               </label>
 
               <button
                 type="button"
                 @click="addQuickReply"
                 :disabled="!newReplyTitle.trim() || (!newReplyContent.trim() && newReplyImages.length === 0)"
-                class="inline-flex w-full items-center justify-center gap-1 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
+                class="inline-flex w-full items-center justify-center gap-1 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
               >
                 <Plus class="h-3.5 w-3.5" />
                 <span>Thêm & Lưu mẫu ngay</span>
@@ -2141,114 +2472,127 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Huấn luyện AI riêng cho Fanpage này -->
-          <div class="rounded-2xl border border-slate-200 bg-slate-50/50 p-3.5 space-y-3">
-            <div class="flex items-center justify-between gap-2">
-              <span class="inline-flex items-center gap-1.5 text-xs font-bold !text-slate-900">
-                <Bot class="h-4 w-4 text-emerald-600" />
-                <span>Kịch bản AI của Page</span>
-              </span>
+          <!-- TAB 3: DẠY KỊCH BẢN AI & NHÃN SẢN PHẨM -->
+          <div v-else-if="rightPanelTab === 'ai'" class="space-y-3.5">
+            <!-- Nhãn nhận diện sản phẩm -->
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/60 p-3 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="inline-flex items-center gap-1.5 text-xs font-bold text-slate-900">
+                  <Tag class="h-3.5 w-3.5 text-emerald-600" />
+                  <span>Sản phẩm chính của Page</span>
+                </span>
+                <Loader2 v-if="loadingAISetting" class="h-3.5 w-3.5 animate-spin text-emerald-600" />
+              </div>
+
+              <input
+                v-model="pageProductTag"
+                type="text"
+                placeholder="VD: Micro Hamax, Tai nghe phiên dịch..."
+                class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none focus:border-emerald-600"
+              />
+
+              <div class="flex flex-wrap gap-1.5">
+                <button
+                  v-for="color in tagColorOptions"
+                  :key="color.id"
+                  type="button"
+                  @click="pageTagColor = color.id"
+                  class="inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10px] font-semibold cursor-pointer"
+                  :class="[
+                    color.badge,
+                    pageTagColor === color.id ? 'ring-2 ring-offset-1 ring-slate-400' : 'opacity-75'
+                  ]"
+                >
+                  <span class="h-2 w-2 rounded-full" :class="color.dot" />
+                  <span>{{ color.label }}</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Kịch bản huấn luyện AI -->
+            <div class="rounded-2xl border border-slate-200 bg-slate-50/60 p-3 space-y-2.5">
+              <div class="flex items-center justify-between gap-1.5">
+                <span class="text-xs font-bold text-slate-900">Kịch bản dạy AI</span>
+                <div class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    @click="insertAITrainingTemplate"
+                    class="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  >
+                    Khung mẫu
+                  </button>
+                  <button
+                    type="button"
+                    @click="handleGenerateSalesScript"
+                    :disabled="generatingScript || !pageProductTag.trim()"
+                    class="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Loader2 v-if="generatingScript" class="h-3 w-3 animate-spin text-emerald-600" />
+                    <Sparkles v-else class="h-3 w-3 text-emerald-600" />
+                    <span>{{ generatingScript ? 'Đang viết...' : 'AI Tự viết' }}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600 mb-1">Giọng điệu xưng hô</label>
+                <input
+                  v-model="aiTone"
+                  type="text"
+                  placeholder="VD: Xưng em - anh/chị, thân thiện..."
+                  class="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600 mb-1">Bảng giá, sản phẩm & quy tắc chốt đơn</label>
+                <textarea
+                  v-model="aiPrompt"
+                  rows="8"
+                  placeholder="Nhập bảng giá, ưu đãi, quy trình tư vấn để dạy AI..."
+                  class="w-full resize-y rounded-xl border border-slate-200 bg-white p-2.5 text-xs leading-relaxed text-slate-800 outline-none focus:border-emerald-600"
+                />
+              </div>
+
+              <label class="flex items-center justify-between rounded-xl border border-emerald-200 bg-white px-3 py-2 cursor-pointer">
+                <div>
+                  <span class="block text-xs font-bold text-slate-900">AI Tự động sau 2 phút</span>
+                  <span class="block text-[10px] text-slate-500">Tự rep nếu nhân viên không nhắn</span>
+                </div>
+                <input v-model="aiAutoReply" @change="persistPageConfigSilently()" type="checkbox" class="h-4 w-4 accent-emerald-600" />
+              </label>
 
               <button
                 type="button"
-                @click="handleGenerateSalesScript"
-                :disabled="generatingScript || !pageProductTag.trim()"
-                title="Nhập tên sản phẩm ở mục Nhãn nhận diện sản phẩm phía trên rồi bấm nút này"
-                class="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+                @click="savePageAISetting"
+                :disabled="savingAISetting"
+                class="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
               >
-                <Loader2 v-if="generatingScript" class="h-3 w-3 animate-spin text-emerald-600" />
-                <Sparkles v-else class="h-3 w-3 text-emerald-600" />
-                <span>{{ generatingScript ? 'Đang viết...' : 'AI Gợi ý kịch bản' }}</span>
+                <Loader2 v-if="savingAISetting" class="h-3.5 w-3.5 animate-spin" />
+                <Save v-else class="h-3.5 w-3.5" />
+                <span>{{ savingAISetting ? 'Đang lưu...' : 'Lưu kịch bản AI cho Page này' }}</span>
               </button>
-            </div>
 
-            <div>
-              <label class="block text-[11px] font-semibold text-slate-600 mb-1">
-                Giọng điệu xưng hô
-              </label>
-              <input
-                v-model="aiTone"
-                type="text"
-                placeholder="VD: Xưng em - anh/chị, thân thiện..."
-                class="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 outline-none focus:border-emerald-600"
-              />
-            </div>
-
-            <div>
-              <label class="block text-[11px] font-semibold text-slate-600 mb-1">
-                Bảng giá, sản phẩm & chính sách
-              </label>
-              <textarea
-                v-model="aiPrompt"
-                rows="4"
-                placeholder="Nhập giá bán, khuyến mãi, phí ship của riêng Fanpage này để AI tư vấn chính xác..."
-                class="w-full resize-none rounded-xl border border-slate-200 bg-white p-2.5 text-xs leading-relaxed text-slate-800 outline-none focus:border-emerald-600"
-              />
-            </div>
-
-            <label class="flex items-center justify-between rounded-xl border border-emerald-200 bg-white px-3 py-2 cursor-pointer">
-              <div>
-                <span class="block text-xs font-bold !text-slate-900">AI Tự động sau 2 phút</span>
-                <span class="block text-[10px] text-slate-500">Tự động rep nếu nhân viên không nhắn</span>
-              </div>
-              <input
-                v-model="aiAutoReply"
-                @change="persistPageConfigSilently()"
-                type="checkbox"
-                class="h-4 w-4 accent-emerald-600 cursor-pointer"
-              />
-            </label>
-
-            <button
-              type="button"
-              @click="savePageAISetting"
-              :disabled="savingAISetting"
-              class="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
-            >
-              <Loader2 v-if="savingAISetting" class="h-3.5 w-3.5 animate-spin" />
-              <Save v-else class="h-3.5 w-3.5" />
-              <span>{{ savingAISetting ? 'Đang lưu...' : 'Lưu toàn bộ cấu hình Page' }}</span>
-            </button>
-          </div>
-
-          <!-- Thông tin kỹ thuật -->
-          <div class="space-y-2.5">
-            <div class="rounded-xl border border-slate-200 p-3">
-              <div class="flex items-center justify-between">
-                <span class="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-                  <Hash class="h-3 w-3 text-slate-400" />
-                  <span>PSID Khách hàng</span>
-                </span>
+              <div v-if="pages.length > 1" class="grid grid-cols-2 gap-1.5">
                 <button
-                  @click="copyText(selectedConv.customer_psid, 'psid_side')"
-                  class="text-[11px] font-semibold text-emerald-700 hover:underline cursor-pointer"
+                  type="button"
+                  @click="applyAIConfigToOtherPages(true)"
+                  :disabled="applyingToAllPages || !pageProductTag.trim()"
+                  class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-emerald-50 disabled:opacity-40 cursor-pointer"
                 >
-                  {{ copiedField === 'psid_side' ? 'Đã chép' : 'Sao chép' }}
+                  Chép AI Page cùng SP
+                </button>
+                <button
+                  type="button"
+                  @click="applyAIConfigToOtherPages(false)"
+                  :disabled="applyingToAllPages"
+                  class="rounded-xl border border-slate-200 bg-white px-2 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-emerald-50 disabled:opacity-40 cursor-pointer"
+                >
+                  Áp dụng cả {{ pages.length }} Page
                 </button>
               </div>
-              <p class="mt-1 break-all font-mono text-[11px] text-slate-700">{{ selectedConv.customer_psid }}</p>
-            </div>
-
-            <div class="rounded-xl border border-slate-200 p-3">
-              <div class="flex items-center justify-between">
-                <span class="flex items-center gap-1 text-[11px] font-semibold text-slate-600">
-                  <Hash class="h-3 w-3 text-slate-400" />
-                  <span>Mã hội thoại (Thread ID)</span>
-                </span>
-                <button
-                  @click="copyText(selectedConv.thread_id, 'thread_side')"
-                  class="text-[11px] font-semibold text-emerald-700 hover:underline cursor-pointer"
-                >
-                  {{ copiedField === 'thread_side' ? 'Đã chép' : 'Sao chép' }}
-                </button>
-              </div>
-              <p class="mt-1 break-all font-mono text-[11px] text-slate-700">{{ selectedConv.thread_id }}</p>
             </div>
           </div>
-        </div>
-
-        <div v-else class="flex h-full items-center justify-center text-center text-xs text-slate-400">
-          Chọn một hội thoại để xem chi tiết hồ sơ khách hàng và cài đặt kịch bản AI cho Fanpage.
         </div>
       </aside>
     </div>
@@ -2262,24 +2606,24 @@ onUnmounted(() => {
           if (target) selectConversation(target)
           newMsgAlert = null
         }"
-        class="fixed bottom-5 right-5 z-50 flex max-w-sm items-start gap-3 rounded-2xl border border-emerald-300 bg-white p-4 shadow-xl ring-4 ring-emerald-500/10 transition hover:border-emerald-500 cursor-pointer"
+        class="fixed bottom-4 right-4 z-50 flex max-w-xs sm:max-w-sm items-start gap-3 rounded-2xl border border-emerald-300 bg-white p-3.5 shadow-xl ring-4 ring-emerald-500/10 cursor-pointer"
       >
-        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
+        <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
           <MessageSquare class="h-4 w-4" />
         </div>
         <div class="min-w-0 flex-1">
           <div class="flex items-center justify-between gap-2">
-            <p class="truncate text-xs font-extrabold !text-slate-900">
-              Tin nhắn mới • {{ newMsgAlert.customerName }}
+            <p class="truncate text-xs font-extrabold text-slate-900">
+              {{ newMsgAlert.customerName }}
             </p>
             <span class="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
-              Rep ngay
+              Tin mới
             </span>
           </div>
           <p class="mt-0.5 truncate text-[11px] font-semibold text-emerald-700">
-            Page: {{ newMsgAlert.pageName }}
+            {{ newMsgAlert.pageName }}
           </p>
-          <p class="mt-1 line-clamp-2 text-xs text-slate-600">
+          <p class="mt-0.5 line-clamp-2 text-xs text-slate-600">
             {{ newMsgAlert.message }}
           </p>
         </div>
@@ -2287,11 +2631,13 @@ onUnmounted(() => {
           type="button"
           @click.stop="newMsgAlert = null"
           class="text-xs font-bold text-slate-400 hover:text-slate-700 cursor-pointer"
-          title="Đóng thông báo"
         >
           ✕
         </button>
       </div>
     </transition>
+
+    <!-- Modal Cài đặt API Key AI -->
+    <AIConfigModal v-if="showAIConfig" @close="showAIConfig = false" />
   </div>
 </template>
