@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -29,12 +30,27 @@ type CompetitorHandler struct {
 	HTTPClient *http.Client
 }
 
+func buildCompetitorHTTPClient() *http.Client {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+	}
+	if proxyRaw := strings.TrimSpace(os.Getenv("OUTBOUND_PROXY_URL")); proxyRaw != "" {
+		if proxyURL, err := url.Parse(proxyRaw); err == nil {
+			transport.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+	return &http.Client{
+		Transport: transport,
+		Timeout:   90 * time.Second,
+	}
+}
+
 func NewCompetitorHandler(db *gorm.DB, cfg *config.Config) *CompetitorHandler {
 	_ = db.AutoMigrate(&models.CompetitorPage{}, &models.CompetitorPost{})
 	return &CompetitorHandler{
 		DB:         db,
 		Cfg:        cfg,
-		HTTPClient: &http.Client{Timeout: 45 * time.Second},
+		HTTPClient: buildCompetitorHTTPClient(),
 	}
 }
 
@@ -191,7 +207,7 @@ func (h *CompetitorHandler) ListCompetitors(c *gin.Context) {
 	_ = h.DB.Order("created_at DESC").Find(&competitors).Error
 
 	var posts []models.CompetitorPost
-	query := h.DB.Order("published_at DESC, id DESC").Limit(120)
+	query := h.DB.Order("published_at DESC, id DESC").Limit(300)
 	if compID := strings.TrimSpace(c.Query("competitor_page_id")); compID != "" && compID != "all" {
 		query = query.Where("competitor_page_id = ?", compID)
 	}
@@ -315,7 +331,7 @@ func (h *CompetitorHandler) AddCompetitor(c *gin.Context) {
 	})
 }
 
-// SyncCompetitorPosts quét nội dung mới nhất theo từng nền tảng (YouTube RSS / TikTok Public / Facebook Graph)
+// SyncCompetitorPosts quét nội dung mới nhất theo từng nền tảng (YouTube RSS / TikTok Cursor API / Facebook Graph)
 func (h *CompetitorHandler) SyncCompetitorPosts(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
@@ -450,89 +466,226 @@ func (h *CompetitorHandler) syncYouTubeFeed(c *gin.Context, comp *models.Competi
 	})
 }
 
-// syncTikTokProfile quét video công khai từ kênh TikTok qua nhiều nguồn dự phòng (HTML SSR + oEmbed)
-func (h *CompetitorHandler) syncTikTokProfile(c *gin.Context, comp *models.CompetitorPage, username string) {
-	profileURL := fmt.Sprintf("https://www.tiktok.com/@%s", url.PathEscape(username))
-	req, err := http.NewRequest(http.MethodGet, profileURL, nil)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Link TikTok không hợp lệ"})
-		return
+// fetchTikTokChannelVideosPaginated gọi API phân trang cursor để quét toàn bộ video trong kênh TikTok
+func (h *CompetitorHandler) fetchTikTokChannelVideosPaginated(comp *models.CompetitorPage, username string) int {
+	apiBase := strings.TrimSpace(os.Getenv("TIKTOK_SCRAPER_API_URL"))
+	if apiBase == "" {
+		apiBase = "https://www.tikwm.com/api/user/posts"
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7")
-	req.Header.Set("Referer", "https://www.tiktok.com/")
 
+	maxPages := 10
+	if envPages := strings.TrimSpace(os.Getenv("TIKTOK_MAX_PAGES")); envPages != "" {
+		if n, err := strconv.Atoi(envPages); err == nil {
+			maxPages = n
+		}
+	}
+
+	cursor := "0"
+	pageCount := 0
 	savedCount := 0
-	if resp, err := h.HTTPClient.Do(req); err == nil {
-		defer resp.Body.Close()
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2500000))
-		pageHTML := string(bodyBytes)
+	seenIDs := make(map[string]bool)
 
-		reScript := regexp.MustCompile(`<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>`)
-		if matches := reScript.FindStringSubmatch(pageHTML); len(matches) > 1 {
-			var root map[string]interface{}
-			if json.Unmarshal([]byte(matches[1]), &root) == nil {
-				if defaultScope, ok := root["__DEFAULT_SCOPE__"].(map[string]interface{}); ok {
-					if userDetail, ok := defaultScope["webapp.user-detail"].(map[string]interface{}); ok {
-						if userInfo, ok := userDetail["userInfo"].(map[string]interface{}); ok {
-							if userObj, ok := userInfo["user"].(map[string]interface{}); ok {
-								if nick, ok := userObj["nickname"].(string); ok && nick != "" {
-									comp.Name = nick
-								}
-								if ava, ok := userObj["avatarLarger"].(string); ok && ava != "" {
-									comp.AvatarURL = ava
+	type tikwmVideo struct {
+		VideoID      string `json:"video_id"`
+		Title        string `json:"title"`
+		Cover        string `json:"cover"`
+		PlayCount    int    `json:"play_count"`
+		DiggCount    int    `json:"digg_count"`
+		CommentCount int    `json:"comment_count"`
+		ShareCount   int    `json:"share_count"`
+		CreateTime   int64  `json:"create_time"`
+		Author       struct {
+			Nickname string `json:"nickname"`
+			Avatar   string `json:"avatar"`
+		} `json:"author"`
+	}
+
+	type tikwmResp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			Videos  []tikwmVideo `json:"videos"`
+			Cursor  string       `json:"cursor"`
+			HasMore bool         `json:"hasMore"`
+		} `json:"data"`
+	}
+
+	for {
+		pageCount++
+		if maxPages > 0 && pageCount > maxPages {
+			break
+		}
+
+		reqURL := fmt.Sprintf(
+			"%s?unique_id=%s&count=30&cursor=%s",
+			apiBase,
+			url.QueryEscape(username),
+			url.QueryEscape(cursor),
+		)
+
+		req, err := http.NewRequest(http.MethodGet, reqURL, nil)
+		if err != nil {
+			break
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := h.HTTPClient.Do(req)
+		if err != nil {
+			break
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		var parsed tikwmResp
+		if err := json.Unmarshal(body, &parsed); err != nil || parsed.Code != 0 {
+			break
+		}
+
+		for _, v := range parsed.Data.Videos {
+			if v.VideoID == "" || seenIDs[v.VideoID] {
+				continue
+			}
+			seenIDs[v.VideoID] = true
+
+			if v.Author.Nickname != "" && (comp.Name == "" || comp.Name == "@"+username || comp.Name == username) {
+				comp.Name = v.Author.Nickname
+			}
+			if v.Author.Avatar != "" && comp.AvatarURL == "" {
+				comp.AvatarURL = v.Author.Avatar
+			}
+
+			pubTime := time.Now()
+			if v.CreateTime > 0 {
+				pubTime = time.Unix(v.CreateTime, 0)
+			}
+
+			content := strings.TrimSpace(v.Title)
+			if content == "" {
+				content = fmt.Sprintf("Video TikTok #%s", v.VideoID)
+			}
+
+			post := models.CompetitorPost{
+				Platform:         "tiktok",
+				CompetitorPageID: comp.PageID,
+				CompetitorName:   comp.Name,
+				FBPostID:         "tt_" + v.VideoID,
+				Content:          content,
+				PermalinkURL:     fmt.Sprintf("https://www.tiktok.com/@%s/video/%s", username, v.VideoID),
+				FullPicture:      v.Cover,
+				ViewsCount:       v.PlayCount,
+				LikesCount:       v.DiggCount,
+				CommentsCount:    v.CommentCount,
+				SharesCount:      v.ShareCount,
+				PublishedAt:      pubTime,
+			}
+
+			if err := h.DB.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "fb_post_id"}},
+				DoUpdates: clause.AssignmentColumns([]string{"competitor_name", "content", "full_picture", "views_count", "likes_count", "comments_count", "shares_count", "updated_at"}),
+			}).Create(&post).Error; err == nil {
+				savedCount++
+			}
+		}
+
+		if !parsed.Data.HasMore || parsed.Data.Cursor == "" || parsed.Data.Cursor == cursor {
+			break
+		}
+
+		cursor = parsed.Data.Cursor
+		time.Sleep(1100 * time.Millisecond)
+	}
+
+	return savedCount
+}
+
+// syncTikTokProfile quét toàn bộ video công khai từ kênh TikTok (ưu tiên API phân trang cursor + fallback HTML SSR/oEmbed)
+func (h *CompetitorHandler) syncTikTokProfile(c *gin.Context, comp *models.CompetitorPage, username string) {
+	savedCount := h.fetchTikTokChannelVideosPaginated(comp, username)
+
+	// Fallback về quét HTML SSR + oEmbed nếu API phân trang chưa lấy được video nào
+	if savedCount == 0 {
+		profileURL := fmt.Sprintf("https://www.tiktok.com/@%s", url.PathEscape(username))
+		req, err := http.NewRequest(http.MethodGet, profileURL, nil)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Link TikTok không hợp lệ"})
+			return
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+		req.Header.Set("Accept-Language", "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7")
+		req.Header.Set("Referer", "https://www.tiktok.com/")
+
+		if resp, err := h.HTTPClient.Do(req); err == nil {
+			defer resp.Body.Close()
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2500000))
+			pageHTML := string(bodyBytes)
+
+			reScript := regexp.MustCompile(`<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>`)
+			if matches := reScript.FindStringSubmatch(pageHTML); len(matches) > 1 {
+				var root map[string]interface{}
+				if json.Unmarshal([]byte(matches[1]), &root) == nil {
+					if defaultScope, ok := root["__DEFAULT_SCOPE__"].(map[string]interface{}); ok {
+						if userDetail, ok := defaultScope["webapp.user-detail"].(map[string]interface{}); ok {
+							if userInfo, ok := userDetail["userInfo"].(map[string]interface{}); ok {
+								if userObj, ok := userInfo["user"].(map[string]interface{}); ok {
+									if nick, ok := userObj["nickname"].(string); ok && nick != "" {
+										comp.Name = nick
+									}
+									if ava, ok := userObj["avatarLarger"].(string); ok && ava != "" {
+										comp.AvatarURL = ava
+									}
 								}
 							}
-						}
-						if items, ok := userDetail["itemList"].([]interface{}); ok {
-							savedCount += h.saveTikTokItems(comp, username, items)
+							if items, ok := userDetail["itemList"].([]interface{}); ok {
+								savedCount += h.saveTikTokItems(comp, username, items)
+							}
 						}
 					}
 				}
 			}
-		}
 
-		if savedCount == 0 {
-			reVideoLink := regexp.MustCompile(fmt.Sprintf(`https?://(?:www\.|vm\.)?tiktok\.com/@%s/video/(\d+)`, regexp.QuoteMeta(username)))
-			vidMatches := reVideoLink.FindAllStringSubmatch(pageHTML, 15)
-			seen := map[string]bool{}
-			for _, m := range vidMatches {
-				if len(m) < 2 || seen[m[1]] {
-					continue
-				}
-				seen[m[1]] = true
-				vidID := m[1]
-				vidURL := fmt.Sprintf("https://www.tiktok.com/@%s/video/%s", username, vidID)
-
-				oembedURL := "https://www.tiktok.com/oembed?url=" + url.QueryEscape(vidURL)
-				if oResp, oErr := h.HTTPClient.Get(oembedURL); oErr == nil {
-					oBody, _ := io.ReadAll(oResp.Body)
-					oResp.Body.Close()
-					var oData struct {
-						Title        string `json:"title"`
-						AuthorName   string `json:"author_name"`
-						ThumbnailURL string `json:"thumbnail_url"`
+			if savedCount == 0 {
+				reVideoLink := regexp.MustCompile(fmt.Sprintf(`https?://(?:www\.|vm\.)?tiktok\.com/@%s/video/(\d+)`, regexp.QuoteMeta(username)))
+				vidMatches := reVideoLink.FindAllStringSubmatch(pageHTML, 15)
+				seen := map[string]bool{}
+				for _, m := range vidMatches {
+					if len(m) < 2 || seen[m[1]] {
+						continue
 					}
-					if json.Unmarshal(oBody, &oData) == nil && strings.TrimSpace(oData.Title) != "" {
-						if oData.AuthorName != "" {
-							comp.Name = oData.AuthorName
+					seen[m[1]] = true
+					vidID := m[1]
+					vidURL := fmt.Sprintf("https://www.tiktok.com/@%s/video/%s", username, vidID)
+
+					oembedURL := "https://www.tiktok.com/oembed?url=" + url.QueryEscape(vidURL)
+					if oResp, oErr := h.HTTPClient.Get(oembedURL); oErr == nil {
+						oBody, _ := io.ReadAll(oResp.Body)
+						oResp.Body.Close()
+						var oData struct {
+							Title        string `json:"title"`
+							AuthorName   string `json:"author_name"`
+							ThumbnailURL string `json:"thumbnail_url"`
 						}
-						post := models.CompetitorPost{
-							Platform:         "tiktok",
-							CompetitorPageID: comp.PageID,
-							CompetitorName:   comp.Name,
-							FBPostID:         "tt_" + vidID,
-							Content:          strings.TrimSpace(oData.Title),
-							PermalinkURL:     vidURL,
-							FullPicture:      oData.ThumbnailURL,
-							PublishedAt:      time.Now(),
-						}
-						if err := h.DB.Clauses(clause.OnConflict{
-							Columns:   []clause.Column{{Name: "fb_post_id"}},
-							DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "updated_at"}),
-						}).Create(&post).Error; err == nil {
-							savedCount++
+						if json.Unmarshal(oBody, &oData) == nil && strings.TrimSpace(oData.Title) != "" {
+							if oData.AuthorName != "" {
+								comp.Name = oData.AuthorName
+							}
+							post := models.CompetitorPost{
+								Platform:         "tiktok",
+								CompetitorPageID: comp.PageID,
+								CompetitorName:   comp.Name,
+								FBPostID:         "tt_" + vidID,
+								Content:          strings.TrimSpace(oData.Title),
+								PermalinkURL:     vidURL,
+								FullPicture:      oData.ThumbnailURL,
+								PublishedAt:      time.Now(),
+							}
+							if err := h.DB.Clauses(clause.OnConflict{
+								Columns:   []clause.Column{{Name: "fb_post_id"}},
+								DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "updated_at"}),
+							}).Create(&post).Error; err == nil {
+								savedCount++
+							}
 						}
 					}
 				}
@@ -545,13 +698,13 @@ func (h *CompetitorHandler) syncTikTokProfile(c *gin.Context, comp *models.Compe
 
 	if savedCount == 0 {
 		c.JSON(http.StatusOK, gin.H{
-			"message": fmt.Sprintf("Kênh %s đang ẩn danh sách video với bot TikTok. Hãy bấm '+ Dán bài / link mẫu' và dán từng link video TikTok để tự kéo caption về ngay!", comp.Name),
+			"message": fmt.Sprintf("Kênh %s đang ẩn danh sách video hoặc bị giới hạn IP. Hãy cấu hình OUTBOUND_PROXY_URL trong .env hoặc bấm '+ Dán bài / link mẫu' để kéo caption từng video về ngay!", comp.Name),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": fmt.Sprintf("Đã quét %d video TikTok mới nhất từ kênh %s!", savedCount, comp.Name),
+		"message": fmt.Sprintf("Đã quét & cập nhật %d video TikTok từ kênh %s!", savedCount, comp.Name),
 	})
 }
 
@@ -914,7 +1067,6 @@ Hãy trả về kết quả JSON chính xác với 2 trường:
 	})
 }
 
-// SearchByKeyword tìm kiếm video/nội dung công khai theo từ khóa (hỗ trợ YouTube & TikTok)
 // SearchByKeyword tìm kiếm video/nội dung theo từ khóa trên YouTube, TikTok (TikWM + HTML/oEmbed) và Facebook (DB/Page đã lưu)
 func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 	keyword := strings.TrimSpace(c.Query("q"))
@@ -1222,7 +1374,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 	if savedCount == 0 && fbMatchedCount == 0 {
 		msg := fmt.Sprintf("Không tìm thấy video/bài mới cho từ khóa '%s'.", keyword)
 		if platform == "facebook" {
-			msg = fmt.Sprintf("Facebook Graph API không hỗ trợ tìm kiếm công khai theo từ khóa cho mọi Page (cần Page Public Content Access). Hãy chọn tab TikTok hoặc YouTube để tìm tự động, hoặc bấm '+ Dán bài / link mẫu'.", keyword)
+			msg = "Facebook Graph API không hỗ trợ tìm kiếm công khai theo từ khóa cho mọi Page (cần Page Public Content Access). Hãy chọn tab TikTok hoặc YouTube để tìm tự động, hoặc bấm '+ Dán bài / link mẫu'."
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"message": msg,

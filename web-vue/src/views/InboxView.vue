@@ -6,7 +6,6 @@ import {
   Bot,
   Check,
   CheckCircle2,
-  Copy,
   CornerUpLeft,
   Facebook,
   Hash,
@@ -503,21 +502,6 @@ async function handleEditTemplatePaste(e: ClipboardEvent, qr: QuickReplyItem) {
     scheduleSilentSave()
   } catch {
     errorMsg.value = 'Không thể dán thêm ảnh vào mẫu.'
-  }
-}
-
-async function handleEditTemplateFilesSelected(e: Event, qr: QuickReplyItem) {
-  const input = e.target as HTMLInputElement
-  if (!input.files?.length) return
-  try {
-    const urls = await uploadFilesToServer(Array.from(input.files))
-    if (!qr.images) qr.images = []
-    qr.images.push(...urls)
-    scheduleSilentSave()
-  } catch {
-    errorMsg.value = 'Không thể thêm ảnh vào mẫu.'
-  } finally {
-    input.value = ''
   }
 }
 
@@ -2340,8 +2324,22 @@ onUnmounted(() => {
                     @input="scheduleSilentSave"
                     @paste="handleEditTemplatePaste($event, qr)"
                     rows="2"
+                    placeholder="Nội dung mẫu (Ctrl+V để dán thêm ảnh)..."
                     class="w-full resize-none rounded-lg border border-slate-200 bg-white p-2 text-xs outline-none focus:border-emerald-600"
                   />
+
+                  <div v-if="qr.images && qr.images.length > 0" class="flex items-center gap-1.5 flex-wrap">
+                    <div v-for="(imgUrl, imgIdx) in qr.images" :key="imgUrl + imgIdx" class="relative h-10 w-10">
+                      <img :src="resolveMediaUrl(imgUrl)" class="h-10 w-10 rounded-md object-cover border border-slate-200" />
+                      <button
+                        type="button"
+                        @click="qr.images?.splice(imgIdx, 1); scheduleSilentSave()"
+                        class="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold text-white cursor-pointer"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  </div>
                 </div>
 
                 <template v-else>

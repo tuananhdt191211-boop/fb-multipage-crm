@@ -26,6 +26,7 @@ import {
   TrendingUp
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import CompetitorMaketResearch from './CompetitorMaketResearch.vue'
 
 interface CompetitorPageItem {
   id: number
@@ -58,6 +59,8 @@ interface CompetitorPostItem {
 }
 
 const router = useRouter()
+
+const activeCompetitorTab = ref<'tracking' | 'market'>('tracking')
 
 const competitors = ref<CompetitorPageItem[]>([])
 const posts = ref<CompetitorPostItem[]>([])
@@ -390,7 +393,7 @@ onMounted(loadData)
 
       <div class="flex items-center gap-2 shrink-0">
         <button
-          v-if="competitors.length > 0"
+          v-if="activeCompetitorTab === 'tracking' && competitors.length > 0"
           type="button"
           @click="handleSyncAllChannels"
           :disabled="syncingAll"
@@ -410,6 +413,39 @@ onMounted(loadData)
       </div>
     </header>
 
+    <!-- Thanh chuyển 2 Tab chức năng -->
+    <div class="border-b border-slate-200 bg-white px-5 pt-1">
+      <div class="mx-auto flex max-w-[1400px] items-center gap-3 overflow-x-auto">
+        <button
+          type="button"
+          @click="activeCompetitorTab = 'tracking'"
+          class="inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-bold transition cursor-pointer"
+          :class="
+            activeCompetitorTab === 'tracking'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          "
+        >
+          <Eye class="h-3.5 w-3.5" />
+          <span>Theo dõi kênh đối thủ</span>
+        </button>
+
+        <button
+          type="button"
+          @click="activeCompetitorTab = 'market'"
+          class="inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-bold transition cursor-pointer"
+          :class="
+            activeCompetitorTab === 'market'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          "
+        >
+          <TrendingUp class="h-3.5 w-3.5" />
+          <span>Nghiên cứu thị trường & Sinh kịch bản</span>
+        </button>
+      </div>
+    </div>
+
     <!-- Toast Thông báo -->
     <div
       v-if="noticeMsg"
@@ -425,7 +461,8 @@ onMounted(loadData)
       {{ errorMsg }}
     </div>
 
-    <main class="mx-auto max-w-[1400px] space-y-5 p-5">
+    <!-- TAB 1: Theo dõi kênh & nội dung đối thủ -->
+    <main v-if="activeCompetitorTab === 'tracking'" class="mx-auto max-w-[1400px] space-y-5 p-5">
       <!-- Thanh Thống kê nhanh (KPI Bar) -->
       <div class="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
         <div class="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-2xs">
@@ -1004,5 +1041,10 @@ onMounted(loadData)
         </section>
       </div>
     </main>
+
+    <!-- TAB 2: Nghiên cứu thị trường theo nhóm sản phẩm & Sinh kịch bản nhanh -->
+    <div v-else class="mx-auto max-w-[1400px]">
+      <CompetitorMaketResearch />
+    </div>
   </div>
 </template>
