@@ -38,3 +38,5 @@ backend-go/uploads/
 .DS_Store
 Thumbs.db
 *.log
+web-vue/package-lock.json
+package-lock.json
