@@ -74,7 +74,7 @@ func (h *InboxHandler) startAutoSyncWorker() {
 			continue
 		}
 		for _, page := range pages {
-			_, _ = h.syncSinglePageConversations(page, 5)
+			_, _ = h.syncSinglePageConversations(page, 25)
 		}
 	}
 }
@@ -344,12 +344,23 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 		customerID := ""
 		customerName := "Khách hàng Facebook"
 		for _, p := range thread.Participants.Data {
-			if p.ID != page.PageID {
-				customerID = p.ID
-				if p.Name != "" {
-					customerName = p.Name
+			if p.ID != page.PageID && strings.TrimSpace(p.ID) != "" {
+				customerID = strings.TrimSpace(p.ID)
+				if strings.TrimSpace(p.Name) != "" {
+					customerName = strings.TrimSpace(p.Name)
 				}
 				break
+			}
+		}
+		if customerID == "" {
+			for _, m := range thread.Messages.Data {
+				if m.From.ID != "" && m.From.ID != page.PageID {
+					customerID = strings.TrimSpace(m.From.ID)
+					if strings.TrimSpace(m.From.Name) != "" {
+						customerName = strings.TrimSpace(m.From.Name)
+					}
+					break
+				}
 			}
 		}
 		if customerID == "" {
@@ -370,9 +381,10 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 		}
 
 		var conv models.Conversation
-		convRes := h.DB.Where("thread_id = ?", thread.ID).Limit(1).Find(&conv)
+		convRes := h.DB.Where("thread_id = ? OR (page_id = ? AND customer_psid = ?)", thread.ID, page.PageID, customerID).Limit(1).Find(&conv)
 		if convRes.RowsAffected > 0 {
 			conv.PageName = page.Name
+			conv.CustomerPSID = customerID
 			conv.CustomerName = customerName
 			conv.CustomerAvatar = sanitizeAvatarURL(conv.CustomerAvatar)
 			conv.LastMessage = lastMsgText
@@ -496,7 +508,7 @@ func (h *InboxHandler) SyncMessages(c *gin.Context) {
 	var syncErrors []string
 
 	for _, page := range pages {
-		count, errStr := h.syncSinglePageConversations(page, 10)
+		count, errStr := h.syncSinglePageConversations(page, 100)
 		if errStr != "" {
 			syncErrors = append(syncErrors, errStr)
 		}

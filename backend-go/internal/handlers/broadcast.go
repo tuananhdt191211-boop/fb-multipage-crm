@@ -80,7 +80,6 @@ func NewBroadcastHandler(db *gorm.DB, cfg *config.Config) *BroadcastHandler {
 		  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
 	`).Error
 
-	// Đồng bộ dữ liệu từ cột psid hoặc sender_id cũ sang customer_psid nếu bảng conversations cũ bị thiếu
 	_ = db.Exec(`
 		DO $$
 		BEGIN
@@ -128,7 +127,7 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 		maxCount = 2000
 	}
 	nextURL := fmt.Sprintf(
-		"https://graph.facebook.com/v21.0/%s/conversations?fields=id,updated_time,participants&limit=100&access_token=%s",
+		"https://graph.facebook.com/v21.0/%s/conversations?fields=id,updated_time,participants,messages.limit(5){from}&limit=100&access_token=%s",
 		page.PageID, pageToken,
 	)
 
@@ -151,6 +150,14 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 						Name string `json:"name"`
 					} `json:"data"`
 				} `json:"participants"`
+				Messages struct {
+					Data []struct {
+						From struct {
+							ID   string `json:"id"`
+							Name string `json:"name"`
+						} `json:"from"`
+					} `json:"data"`
+				} `json:"messages"`
 			} `json:"data"`
 			Paging struct {
 				Next string `json:"next"`
@@ -177,6 +184,17 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 						customerName = strings.TrimSpace(p.Name)
 					}
 					break
+				}
+			}
+			if customerPSID == "" {
+				for _, m := range thread.Messages.Data {
+					if m.From.ID != page.PageID && strings.TrimSpace(m.From.ID) != "" {
+						customerPSID = strings.TrimSpace(m.From.ID)
+						if strings.TrimSpace(m.From.Name) != "" {
+							customerName = strings.TrimSpace(m.From.Name)
+						}
+						break
+					}
 				}
 			}
 			if customerPSID == "" {
@@ -499,13 +517,19 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 
 	// Bước 1: Quét toàn bộ khách hàng có trong hộp thư Meta Business của Page về CRM
+	var metaSyncErr string
 	var page models.FacebookPage
 	if err := h.DB.Where("page_id = ?", req.PageID).First(&page).Error; err == nil {
 		if pageToken, decErr := security.DecryptSecret(page.EncryptedPageToken, h.getEncryptionKey()); decErr == nil && pageToken != "" {
 			if syncErr := h.pullAllConversationsFromMeta(page, pageToken, req.MaxRecipients); syncErr != nil {
+				metaSyncErr = syncErr.Error()
 				log.Printf("[Broadcast] Cảnh báo quét từ Meta Business: %v", syncErr)
 			}
+		} else {
+			metaSyncErr = "Không giải mã được Page Token"
 		}
+	} else {
+		metaSyncErr = "Không tìm thấy Page trong DB"
 	}
 
 	// Bước 2: Lấy TẤT CẢ khách hàng thuộc Page đó có CustomerPSID hợp lệ
@@ -535,9 +559,11 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 
 	if len(validConvs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Không tìm thấy khách hàng có PSID hợp lệ trong Page này. Hãy mở mục Hộp thư bấm 'Đồng bộ tin nhắn' rồi thử lại!",
-		})
+		msgErr := "Không tìm thấy khách hàng có PSID hợp lệ trong Page này. Hãy mở mục Hộp thư bấm 'Đồng bộ tin nhắn' rồi thử lại!"
+		if metaSyncErr != "" {
+			msgErr += " (Chi tiết: " + metaSyncErr + ")"
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": msgErr})
 		return
 	}
 
