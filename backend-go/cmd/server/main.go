@@ -102,6 +102,10 @@ func main() {
 		storefrontGroup.POST("/sites/:id/publish", storefrontHandler.PublishSite)
 		storefrontGroup.POST("/sites/:id/unpublish", storefrontHandler.UnpublishSite)
 		storefrontGroup.DELETE("/sites/:id", storefrontHandler.DeleteSite)
+		storefrontGroup.GET("/sites/:id/products", storefrontHandler.ListProducts)
+		storefrontGroup.POST("/sites/:id/products", storefrontHandler.CreateProduct)
+		storefrontGroup.PUT("/sites/:id/products/:pid", storefrontHandler.UpdateProduct)
+		storefrontGroup.DELETE("/sites/:id/products/:pid", storefrontHandler.DeleteProduct)
 	}
 
 	// Route trả ảnh đại diện khách hàng từ Graph API

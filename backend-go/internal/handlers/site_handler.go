@@ -370,6 +370,7 @@ func (h *StorefrontHandler) DeleteSite(c *gin.Context) {
 	if !ok {
 		return
 	}
+	h.DB.Where("storefront_id = ?", sf.ID).Delete(&models.Product{})
 	if err := h.DB.Delete(sf).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Xóa website thất bại."})
 		return

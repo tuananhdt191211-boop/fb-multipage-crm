@@ -21,7 +21,7 @@ type StorefrontHandler struct {
 }
 
 func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
-	_ = db.AutoMigrate(&models.Storefront{})
+	_ = db.AutoMigrate(&models.Storefront{}, &models.Product{})
 	return &StorefrontHandler{
 		DB:  db,
 		Cfg: cfg,
@@ -90,6 +90,7 @@ func defaultBlocksJSON() string {
 			Enabled: true,
 			Data: map[string]interface{}{
 				"heading": "Sản phẩm nổi bật",
+				"source":  "catalog",
 				"items": []map[string]interface{}{
 					{
 						"id":        "p1",
@@ -329,6 +330,23 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 		return
 	}
 
+	// Danh sách sản phẩm đang bán (không lộ số lượng tồn kho, chỉ còn/hết hàng)
+	var prods []models.Product
+	h.DB.Where("storefront_id = ? AND is_active = ?", sf.ID, true).
+		Order("sort_order ASC, id ASC").Find(&prods)
+	pub := make([]gin.H, 0, len(prods))
+	for _, p := range prods {
+		pub = append(pub, gin.H{
+			"id":            p.ID,
+			"name":          p.Name,
+			"description":   p.Description,
+			"price":         p.Price,
+			"compare_price": p.ComparePrice,
+			"image_url":     p.ImageURL,
+			"in_stock":      p.Stock != 0,
+		})
+	}
+
 	c.Header("Cache-Control", "public, max-age=30")
 	c.JSON(http.StatusOK, gin.H{
 		"id":            sf.ID,
@@ -337,6 +355,7 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 		"logo_url":      sf.LogoURL,
 		"primary_color": sf.PrimaryColor,
 		"blocks_json":   sf.PublishedBlocksJSON,
+		"products":      pub,
 		"updated_at":    sf.UpdatedAt,
 	})
 }
