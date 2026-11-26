@@ -857,13 +857,38 @@ func (h *InboxHandler) GetCustomerAvatar(c *gin.Context) {
 		return
 	}
 
-	picURL := fmt.Sprintf(
-		"https://graph.facebook.com/v21.0/%s/picture?type=normal&access_token=%s",
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	// Cách 1: User Profile API (dành cho PSID Messenger) -> lấy link profile_pic
+	imgURL := ""
+	profURL := fmt.Sprintf(
+		"https://graph.facebook.com/v21.0/%s?fields=profile_pic&access_token=%s",
 		url.PathEscape(psid),
 		url.QueryEscape(pageToken),
 	)
+	if r, reqErr := client.Get(profURL); reqErr == nil {
+		var body struct {
+			ProfilePic string `json:"profile_pic"`
+		}
+		if r.StatusCode == http.StatusOK {
+			_ = json.NewDecoder(r.Body).Decode(&body)
+		}
+		r.Body.Close()
+		if strings.HasPrefix(body.ProfilePic, "https://") {
+			imgURL = body.ProfilePic
+		}
+	}
 
-	resp, err := http.Get(picURL)
+	// Cách 2: dự phòng bằng /picture
+	if imgURL == "" {
+		imgURL = fmt.Sprintf(
+			"https://graph.facebook.com/v21.0/%s/picture?type=normal&access_token=%s",
+			url.PathEscape(psid),
+			url.QueryEscape(pageToken),
+		)
+	}
+
+	resp, err := client.Get(imgURL)
 	if err != nil {
 		c.Status(http.StatusNotFound)
 		return

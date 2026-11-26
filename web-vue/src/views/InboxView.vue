@@ -678,7 +678,11 @@ function handleAvatarError(key: string) {
 }
 
 function getCustomerAvatarUrl(conv: ConversationItem) {
-  return conv.customer_avatar || ''
+  if (conv.customer_avatar) return conv.customer_avatar
+  if (!conv.page_id || !conv.customer_psid) return ''
+  // Ảnh lấy qua backend (dùng Page Token), tránh link Facebook hết hạn
+  const base = (api.defaults.baseURL || '').replace(/\/+$/, '')
+  return `${base}/inbox/avatar/${encodeURIComponent(conv.page_id)}/${encodeURIComponent(conv.customer_psid)}`
 }
 
 function getInitials(name: string) {
@@ -1515,7 +1519,7 @@ onUnmounted(() => {
             <!-- Avatar Khách + Badge Avatar Page góc dưới -->
             <div class="relative h-11 w-11 shrink-0">
               <img
-                v-if="conv.customer_avatar && !brokenAvatars['c_' + conv.id]"
+                v-if="getCustomerAvatarUrl(conv) && !brokenAvatars['c_' + conv.id]"
                 :src="getCustomerAvatarUrl(conv)"
                 :alt="conv.customer_name"
                 loading="lazy"
@@ -1646,7 +1650,7 @@ onUnmounted(() => {
               </button>
 
               <img
-                v-if="selectedConv.customer_avatar && !brokenAvatars['c_' + selectedConv.id]"
+                v-if="getCustomerAvatarUrl(selectedConv) && !brokenAvatars['c_' + selectedConv.id]"
                 :src="getCustomerAvatarUrl(selectedConv)"
                 :alt="selectedConv.customer_name"
                 @error="handleAvatarError('c_' + selectedConv.id)"
