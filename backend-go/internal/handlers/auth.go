@@ -263,7 +263,6 @@ func (h *AuthHandler) FacebookLogin(c *gin.Context) {
 	}
 	state := utils.RandomState()
 	h.setOAuthStateCookie(c, state, 300)
-	// auth_type=rerequest buộc Facebook hiển thị lại màn hình chọn tất cả Fanpage nếu trước đó bị bỏ sót
 	authURL := h.FBOAuth.AuthCodeURL(state, oauth2.SetAuthURLParam("auth_type", "rerequest"))
 	c.Redirect(http.StatusTemporaryRedirect, authURL)
 }
@@ -332,7 +331,6 @@ func (h *AuthHandler) FacebookCallback(c *gin.Context) {
 		return
 	}
 
-	// Tự động đổi sang Long-Lived User Token và quét toàn bộ Fanpage qua paging.next
 	go h.syncAllPagesFromOAuthToken(tok.AccessToken)
 
 	email := profile.Email
@@ -443,21 +441,34 @@ func (h *AuthHandler) syncAllPagesFromOAuthToken(shortToken string) {
 
 func (h *AuthHandler) finishSocialLogin(c *gin.Context, provider, providerID, email, name, avatar string) {
 	email = strings.ToLower(strings.TrimSpace(email))
+	providerID = strings.TrimSpace(providerID)
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = strings.Split(email, "@")[0]
 	}
 
 	var user models.User
-	err := h.DB.Where("email = ?", email).First(&user).Error
-	if err != nil {
+	found := false
+
+	if providerID != "" {
+		if res := h.DB.Where("auth_provider = ? AND provider_id = ?", provider, providerID).Limit(1).Find(&user); res.RowsAffected > 0 {
+			found = true
+		}
+	}
+	if !found && email != "" {
+		if res := h.DB.Where("LOWER(email) = ?", email).Limit(1).Find(&user); res.RowsAffected > 0 {
+			found = true
+		}
+	}
+
+	if !found {
 		user = models.User{
 			FullName:     name,
 			Email:        email,
 			AvatarURL:    avatar,
 			AuthProvider: provider,
 			ProviderID:   providerID,
-			SystemRole:   h.resolveInitialRole(),
+			SystemRole:   "user",
 			IsActive:     true,
 		}
 		if createErr := h.DB.Create(&user).Error; createErr != nil {
@@ -470,6 +481,9 @@ func (h *AuthHandler) finishSocialLogin(c *gin.Context, provider, providerID, em
 			return
 		}
 		updates := map[string]any{}
+		if user.AuthProvider == "" && provider != "" {
+			updates["auth_provider"] = provider
+		}
 		if user.AvatarURL == "" && avatar != "" {
 			updates["avatar_url"] = avatar
 		}
@@ -477,7 +491,7 @@ func (h *AuthHandler) finishSocialLogin(c *gin.Context, provider, providerID, em
 			updates["provider_id"] = providerID
 		}
 		if len(updates) > 0 {
-			h.DB.Model(&user).Updates(updates)
+			_ = h.DB.Model(&user).Updates(updates).Error
 		}
 	}
 

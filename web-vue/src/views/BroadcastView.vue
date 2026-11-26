@@ -1,6 +1,24 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
-import { Pause, Play, Plus, RefreshCw, Send, ShieldCheck, Trash2 } from 'lucide-vue-next'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import {
+  ArrowLeft,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  LayoutDashboard,
+  MessageSquare,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
+  Trash2,
+  Users
+} from 'lucide-vue-next'
 import { api } from '../lib/api'
 
 interface PageItem {
@@ -25,10 +43,14 @@ interface Campaign {
   created_at: string
 }
 
+const router = useRouter()
+
 const pages = ref<PageItem[]>([])
 const campaigns = ref<Campaign[]>([])
 const loading = ref(false)
 const submitting = ref(false)
+const syncingInbox = ref(false)
+const showAdvanced = ref(false)
 const message = ref('')
 const error = ref('')
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -40,15 +62,17 @@ const form = ref({
     'Chào {{full_name}}, shop cập nhật thông tin chăm sóc khách hàng cho bạn. Nếu bạn cần hỗ trợ thêm hoặc nhận thông tin mới, nhắn lại cho shop nhé!',
     'Hello {{full_name}}, bên mình gửi thông tin hỗ trợ dành cho khách hàng của shop. Bạn cần tư vấn thêm cứ phản hồi tin nhắn này nha!'
   ],
-  target_mode: 'all', // 'all' | 'within_24h' | 'over_24h'
-  out_of_window_tag: 'POST_PURCHASE_UPDATE',
-  cooldown_days: 7,
-  max_recipients: 100,
+  target_mode: 'all',
+  out_of_window_tag: 'HUMAN_AGENT',
+  cooldown_days: 0,
+  max_recipients: 200,
   min_delay_sec: 4,
   max_delay_sec: 9,
   batch_size: 20,
   batch_pause_sec: 60
 })
+
+const runningCount = computed(() => campaigns.value.filter((c) => c.status === 'running').length)
 
 function addTemplate() {
   if (form.value.templates.length < 5) {
@@ -62,6 +86,12 @@ function removeTemplate(idx: number) {
   }
 }
 
+function appendVariableToLastTemplate() {
+  const idx = form.value.templates.length - 1
+  const current = form.value.templates[idx] || ''
+  form.value.templates[idx] = current + (current.endsWith(' ') || current === '' ? '' : ' ') + '{{full_name}}'
+}
+
 function getPageDisplayName(p: PageItem): string {
   const title = (p.name || p.page_name || '').trim()
   return title ? `${title} (${p.page_id})` : p.page_id
@@ -73,9 +103,15 @@ function getPageNameById(pageId: string): string {
 }
 
 function formatTargetMode(mode?: string): string {
-  if (mode === 'within_24h') return 'Chỉ khách trong 24h'
-  if (mode === 'over_24h') return 'Chỉ khách quá 24h'
-  return 'Tất cả khách cũ (trong & quá 24h)'
+  if (mode === 'within_24h') return 'Khách trong 24h'
+  if (mode === 'over_24h') return 'Khách quá 24h'
+  return 'Tất cả khách (trong & quá 24h)'
+}
+
+function getProgressPercent(c: Campaign): number {
+  if (!c.total_recipients || c.total_recipients <= 0) return 0
+  const done = (c.sent_count || 0) + (c.failed_count || 0)
+  return Math.min(100, Math.round((done / c.total_recipients) * 100))
 }
 
 async function fetchData(silent = false) {
@@ -105,6 +141,21 @@ async function fetchData(silent = false) {
   }
 }
 
+async function syncCustomerData() {
+  syncingInbox.value = true
+  error.value = ''
+  message.value = ''
+  try {
+    const query = form.value.page_id ? `?page_id=${form.value.page_id}` : ''
+    const { data } = await api.post(`/inbox/sync${query}`)
+    message.value = data?.message || 'Đã đồng bộ dữ liệu khách hàng từ Meta Business!'
+  } catch (e: any) {
+    error.value = e?.response?.data?.error || 'Không đồng bộ được dữ liệu khách hàng'
+  } finally {
+    syncingInbox.value = false
+  }
+}
+
 async function createCampaign() {
   error.value = ''
   message.value = ''
@@ -112,7 +163,7 @@ async function createCampaign() {
   try {
     const res = await api.post('/broadcasts', form.value)
     const total = res.data?.total_recipients ?? 0
-    message.value = `Đã tạo chiến dịch cho ${total} khách hàng (đang gửi giãn cách an toàn).`
+    message.value = `Đã khởi chạy chiến dịch cho ${total} khách hàng!`
     form.value.name = ''
     await fetchData()
   } catch (e: any) {
@@ -148,231 +199,394 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="mx-auto max-w-5xl space-y-6 p-6 text-slate-900">
-    <div class="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h1 class="text-xl font-bold text-slate-900">Chăm sóc khách cũ tự động</h1>
-        <p class="text-xs text-slate-500">
-          Hỗ trợ gửi cả khách trong 24h lẫn khách cũ quá 24h, giãn cách ngẫu nhiên, xoay vòng mẫu câu và tự ngắt khi có cảnh báo từ Meta
-        </p>
-      </div>
-      <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-        <ShieldCheck class="h-4 w-4" />
-        Anti-Spam Active (08:30 – 21:00)
-      </span>
-    </div>
-
-    <div v-if="error" class="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
-      {{ error }}
-    </div>
-    <div v-if="message" class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-700">
-      {{ message }}
-    </div>
-
-    <!-- Form tạo chiến dịch -->
-    <form @submit.prevent="createCampaign" class="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xs">
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <label class="mb-1 block text-xs font-semibold text-slate-700">Fanpage gửi tin</label>
-          <select
-            v-model="form.page_id"
-            required
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none"
-          >
-            <option value="" disabled class="bg-white text-slate-400">
-              -- Chọn Fanpage gửi tin --
-            </option>
-            <option
-              v-for="p in pages"
-              :key="p.page_id"
-              :value="p.page_id"
-              class="bg-white text-slate-900"
-            >
-              {{ getPageDisplayName(p) }}
-            </option>
-          </select>
-        </div>
-
-        <div>
-          <label class="mb-1 block text-xs font-semibold text-slate-700">Tên chiến dịch</label>
-          <input
-            v-model="form.name"
-            required
-            placeholder="Ví dụ: Hỏi thăm khách cũ cuối tuần"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none"
-          />
-        </div>
-      </div>
-
-      <!-- Đối tượng khách & Tag ngoài 24h -->
-      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <div>
-          <label class="mb-1 block text-xs font-semibold text-slate-700">Đối tượng khách nhận tin</label>
-          <select
-            v-model="form.target_mode"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none"
-          >
-            <option value="all" class="bg-white text-slate-900">Tất cả khách cũ (cả trong & quá 24h)</option>
-            <option value="over_24h" class="bg-white text-slate-900">Chỉ khách cũ đã quá 24h</option>
-            <option value="within_24h" class="bg-white text-slate-900">Chỉ khách tương tác trong 24h</option>
-          </select>
-        </div>
-
-        <div>
-          <label class="mb-1 block text-xs font-semibold text-slate-700">Loại Tag cho khách quá 24h</label>
-          <select
-            v-model="form.out_of_window_tag"
-            :disabled="form.target_mode === 'within_24h'"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400 focus:border-emerald-500 focus:outline-none"
-          >
-            <option value="POST_PURCHASE_UPDATE" class="bg-white text-slate-900">POST_PURCHASE_UPDATE (Chăm sóc sau mua)</option>
-            <option value="ACCOUNT_UPDATE" class="bg-white text-slate-900">ACCOUNT_UPDATE (Cập nhật tài khoản)</option>
-            <option value="CONFIRMED_EVENT_UPDATE" class="bg-white text-slate-900">CONFIRMED_EVENT_UPDATE (Nhắc lịch hẹn/sự kiện)</option>
-          </select>
-        </div>
-
-        <div>
-          <label class="mb-1 block text-xs font-semibold text-slate-700">Số khách tối đa mỗi đợt</label>
-          <input
-            v-model.number="form.max_recipients"
-            type="number"
-            min="1"
-            max="500"
-            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 focus:border-emerald-500 focus:outline-none"
-          />
-        </div>
-      </div>
-
-      <!-- Các biến thể mẫu câu -->
-      <div class="space-y-2">
-        <div class="flex items-center justify-between">
-          <label class="text-xs font-semibold text-slate-700">
-            Biến thể nội dung (dùng <code v-pre class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-800">{{full_name}}</code> để chèn tên khách)
-          </label>
+  <div class="min-h-screen bg-[#f4f7f6] text-slate-900 antialiased">
+    <!-- Top Header Navigation -->
+    <header class="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-md">
+      <div class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+        <div class="flex items-center gap-3">
           <button
             type="button"
-            @click="addTemplate"
-            class="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
+            @click="router.push('/')"
+            class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
           >
-            <Plus class="h-3.5 w-3.5" /> Thêm biến thể
+            <ArrowLeft class="h-3.5 w-3.5" />
+            <span>Trang chủ</span>
           </button>
-        </div>
 
-        <div v-for="(_, idx) in form.templates" :key="idx" class="flex gap-2">
-          <textarea
-            v-model="form.templates[idx]"
-            rows="2"
-            required
-            class="w-full rounded-xl border border-slate-200 bg-white p-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none"
-            :placeholder="`Mẫu câu #${idx + 1}...`"
-          />
-          <button
-            v-if="form.templates.length > 1"
-            type="button"
-            @click="removeTemplate(idx)"
-            class="rounded-xl border border-slate-200 bg-white px-2.5 text-slate-400 hover:text-red-600 cursor-pointer"
-          >
-            <Trash2 class="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
-      <!-- Cấu hình giãn cách chống spam -->
-      <div class="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4 sm:grid-cols-5">
-        <div>
-          <label class="block text-[11px] font-medium text-slate-600">Trễ tối thiểu (giây)</label>
-          <input v-model.number="form.min_delay_sec" type="number" min="3" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900" />
-        </div>
-        <div>
-          <label class="block text-[11px] font-medium text-slate-600">Trễ tối đa (giây)</label>
-          <input v-model.number="form.max_delay_sec" type="number" min="4" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900" />
-        </div>
-        <div>
-          <label class="block text-[11px] font-medium text-slate-600">Nghỉ sau mỗi (tin)</label>
-          <input v-model.number="form.batch_size" type="number" min="5" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900" />
-        </div>
-        <div>
-          <label class="block text-[11px] font-medium text-slate-600">Thời gian nghỉ lô (giây)</label>
-          <input v-model.number="form.batch_pause_sec" type="number" min="30" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900" />
-        </div>
-        <div>
-          <label class="block text-[11px] font-medium text-slate-600">Cách ly gửi lại (ngày)</label>
-          <input v-model.number="form.cooldown_days" type="number" min="1" class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm text-slate-900" />
-        </div>
-      </div>
-
-      <div class="flex flex-wrap items-center justify-between gap-4">
-        <p class="text-xs text-slate-500">
-          Tự động bỏ qua khách đã bấm <b>Ngừng nhận tin</b> và khách vừa nhận tin tự động trong <b>{{ form.cooldown_days }} ngày</b> gần nhất.
-        </p>
-
-        <button
-          type="submit"
-          :disabled="submitting || pages.length === 0"
-          class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
-        >
-          <Send class="h-4 w-4" />
-          <span>{{ submitting ? 'Đang tạo hàng đợi...' : 'Bắt đầu gửi an toàn' }}</span>
-        </button>
-      </div>
-    </form>
-
-    <!-- Danh sách chiến dịch -->
-    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-      <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3.5">
-        <span class="text-sm font-semibold text-slate-800">Tiến độ các chiến dịch</span>
-        <button
-          type="button"
-          @click="fetchData()"
-          class="inline-flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-slate-800 cursor-pointer"
-        >
-          <RefreshCw class="h-3.5 w-3.5" /> Làm mới
-        </button>
-      </div>
-
-      <div v-if="loading" class="p-6 text-center text-xs text-slate-500">Đang tải...</div>
-      <div v-else-if="campaigns.length === 0" class="p-6 text-center text-xs text-slate-500">
-        Chưa có chiến dịch nào.
-      </div>
-      <div v-else class="divide-y divide-slate-100">
-        <div v-for="c in campaigns" :key="c.id" class="flex items-center justify-between gap-4 px-5 py-4">
-          <div class="space-y-1">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-sm font-semibold text-slate-900">{{ c.name }}</span>
-              <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                {{ getPageNameById(c.page_id) }}
-              </span>
-              <span
-                class="rounded-full px-2 py-0.5 text-[11px] font-medium"
-                :class="{
-                  'bg-emerald-50 text-emerald-700': c.status === 'running',
-                  'bg-amber-50 text-amber-700': c.status === 'paused',
-                  'bg-slate-100 text-slate-700': c.status === 'completed'
-                }"
-              >
-                {{ c.status }}
-              </span>
+          <div class="hidden sm:flex items-center gap-2 border-l border-slate-200 pl-3">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-600 text-white">
+              <Send class="h-4 w-4" />
             </div>
-            <p class="text-xs text-slate-500">
-              {{ formatTargetMode(c.target_mode) }} • Đã gửi: <b>{{ c.sent_count }}/{{ c.total_recipients }}</b> • Lỗi: <b>{{ c.failed_count }}</b>
-            </p>
-            <p v-if="c.pause_reason" class="text-xs font-medium text-amber-700">
-              {{ c.pause_reason }}
+            <div class="text-left leading-tight">
+              <span class="block text-sm font-extrabold !text-slate-900">Chăm sóc khách cũ tự động</span>
+              <span class="block text-[11px] text-slate-400">PagePilot Conversion Broadcast</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            @click="router.push('/inbox')"
+            class="hidden md:inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 cursor-pointer"
+          >
+            <MessageSquare class="h-3.5 w-3.5 text-emerald-600" />
+            <span>Hộp thư</span>
+          </button>
+
+          <button
+            type="button"
+            @click="syncCustomerData"
+            :disabled="syncingInbox"
+            class="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60 cursor-pointer"
+          >
+            <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': syncingInbox }" />
+            <span>{{ syncingInbox ? 'Đang đồng bộ...' : 'Đồng bộ khách Meta' }}</span>
+          </button>
+
+          <span class="hidden lg:inline-flex items-center gap-1.5 rounded-full bg-emerald-600/10 px-3 py-1.5 text-[11px] font-bold text-emerald-800">
+            <ShieldCheck class="h-3.5 w-3.5 text-emerald-600" />
+            <span>08:30 – 21:00</span>
+          </span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="mx-auto max-w-7xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
+      <!-- Intro Banner gọn gàng -->
+      <section class="rounded-2xl border border-emerald-200/70 bg-gradient-to-r from-emerald-800 via-emerald-700 to-teal-700 p-5 sm:p-6 text-white shadow-xs">
+        <div class="flex flex-col justify-between gap-4 md:flex-row md:items-center">
+          <div class="space-y-1 text-left">
+            <div class="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-100">
+              <Sparkles class="h-3 w-3" />
+              <span>Tự động hóa CSKH Meta Business</span>
+            </div>
+            <h1 class="text-xl sm:text-2xl font-extrabold tracking-tight !text-white">
+              Nhắn tin chăm sóc lại toàn bộ khách hàng trong Page
+            </h1>
+            <p class="text-xs sm:text-[13px] text-emerald-50/90">
+              Tự động quét danh sách khách đã nhắn tin trên Meta Business, xoay vòng mẫu câu cá nhân hóa tên khách và giãn cách nhịp gửi an toàn.
             </p>
           </div>
+        </div>
+      </section>
 
-          <button
-            v-if="c.status === 'running' || c.status === 'paused'"
-            type="button"
-            @click="toggleStatus(c)"
-            class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-          >
-            <Pause v-if="c.status === 'running'" class="h-3.5 w-3.5" />
-            <Play v-else class="h-3.5 w-3.5" />
-            <span>{{ c.status === 'running' ? 'Tạm dừng' : 'Tiếp tục' }}</span>
-          </button>
+      <!-- Thông báo Lỗi / Thành công -->
+      <div
+        v-if="error"
+        class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-left text-xs font-medium text-rose-800"
+      >
+        <span>{{ error }}</span>
+        <button
+          type="button"
+          @click="syncCustomerData"
+          :disabled="syncingInbox"
+          class="shrink-0 rounded-lg bg-rose-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-rose-700 cursor-pointer"
+        >
+          {{ syncingInbox ? 'Đang đồng bộ...' : 'Đồng bộ ngay' }}
+        </button>
+      </div>
+
+      <div
+        v-if="message"
+        class="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left text-xs font-semibold text-emerald-800"
+      >
+        <CheckCircle2 class="h-4 w-4 shrink-0 text-emerald-600" />
+        <span>{{ message }}</span>
+      </div>
+
+      <!-- Layout 2 cột: Form tạo chiến dịch (7 cột) + Tiến độ gửi (5 cột) -->
+      <div class="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
+        <!-- Cột trái: Form cấu hình -->
+        <form
+          @submit.prevent="createCampaign"
+          class="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-6 text-left shadow-2xs lg:col-span-7"
+        >
+          <div class="border-b border-slate-100 pb-3.5">
+            <h2 class="text-base font-extrabold !text-slate-900">Tạo chiến dịch gửi tin mới</h2>
+            <p class="mt-0.5 text-xs text-slate-500">Chọn Fanpage nhận khách và soạn các biến thể nội dung chăm sóc</p>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label class="mb-1.5 block text-xs font-bold !text-slate-700">Fanpage gửi tin</label>
+              <select
+                v-model="form.page_id"
+                required
+                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm font-medium !text-slate-900 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
+              >
+                <option value="" disabled>-- Chọn Fanpage gửi tin --</option>
+                <option v-for="p in pages" :key="p.page_id" :value="p.page_id">
+                  {{ getPageDisplayName(p) }}
+                </option>
+              </select>
+            </div>
+
+            <div>
+              <label class="mb-1.5 block text-xs font-bold !text-slate-700">Tên chiến dịch</label>
+              <input
+                v-model="form.name"
+                required
+                placeholder="VD: Chăm sóc khách cũ tuần này"
+                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm !text-slate-900 placeholder:text-slate-400 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+              <label class="mb-1.5 block text-xs font-bold !text-slate-700">Đối tượng nhận tin</label>
+              <select
+                v-model="form.target_mode"
+                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2.5 text-xs font-semibold !text-slate-800 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
+              >
+                <option value="all">Tất cả khách (trong & quá 24h)</option>
+                <option value="over_24h">Chỉ khách cũ quá 24h</option>
+                <option value="within_24h">Chỉ khách tương tác trong 24h</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="mb-1.5 block text-xs font-bold !text-slate-700">Tag ưu tiên quá 24h</label>
+              <select
+                v-model="form.out_of_window_tag"
+                :disabled="form.target_mode === 'within_24h'"
+                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2.5 text-xs font-semibold !text-slate-800 disabled:bg-slate-100 disabled:text-slate-400 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
+              >
+                <option value="HUMAN_AGENT">HUMAN_AGENT (Hỗ trợ CSKH)</option>
+                <option value="POST_PURCHASE_UPDATE">POST_PURCHASE_UPDATE (Sau mua)</option>
+                <option value="CONFIRMED_EVENT_UPDATE">CONFIRMED_EVENT_UPDATE (Nhắc lịch)</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="mb-1.5 block text-xs font-bold !text-slate-700">Số khách tối đa</label>
+              <input
+                v-model.number="form.max_recipients"
+                type="number"
+                min="1"
+                max="2000"
+                class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm font-semibold !text-slate-900 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <!-- Biến thể mẫu câu -->
+          <div class="space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex items-center gap-2">
+                <label class="text-xs font-bold !text-slate-700">Mẫu nội dung xoay vòng</label>
+                <button
+                  type="button"
+                  @click="appendVariableToLastTemplate"
+                  class="rounded-md bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700 ring-1 ring-emerald-200/80 hover:bg-emerald-100 cursor-pointer"
+                >
+                  + Chèn tên khách
+                </button>
+              </div>
+
+              <button
+                type="button"
+                @click="addTemplate"
+                class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+              >
+                <Plus class="h-3.5 w-3.5" />
+                <span>Thêm mẫu câu</span>
+              </button>
+            </div>
+
+            <div class="space-y-2.5">
+              <div v-for="(_, idx) in form.templates" :key="idx" class="relative flex gap-2">
+                <div class="flex-1">
+                  <textarea
+                    v-model="form.templates[idx]"
+                    rows="2"
+                    required
+                    class="w-full rounded-xl border border-slate-200 bg-slate-50/40 p-3 text-sm leading-relaxed !text-slate-900 placeholder:text-slate-400 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
+                    :placeholder="`Nhập nội dung mẫu #${idx + 1} (dùng {{full_name}} để chèn tên khách)...`"
+                  />
+                </div>
+                <button
+                  v-if="form.templates.length > 1"
+                  type="button"
+                  @click="removeTemplate(idx)"
+                  title="Xóa mẫu này"
+                  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-400 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
+                >
+                  <Trash2 class="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cấu hình nâng cao (Thu gọn mặc định cho thoáng) -->
+          <div class="rounded-xl border border-slate-200/80 bg-slate-50/70">
+            <button
+              type="button"
+              @click="showAdvanced = !showAdvanced"
+              class="flex w-full items-center justify-between px-4 py-2.5 text-xs font-bold text-slate-700 cursor-pointer"
+            >
+              <span class="inline-flex items-center gap-2">
+                <SlidersHorizontal class="h-3.5 w-3.5 text-emerald-600" />
+                <span>Cấu hình giãn cách chống spam ({{ form.min_delay_sec }}–{{ form.max_delay_sec }}s / tin)</span>
+              </span>
+              <ChevronUp v-if="showAdvanced" class="h-4 w-4 text-slate-400" />
+              <ChevronDown v-else class="h-4 w-4 text-slate-400" />
+            </button>
+
+            <div v-if="showAdvanced" class="grid grid-cols-2 gap-3 border-t border-slate-200/70 p-4 sm:grid-cols-4">
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Trễ tối thiểu (s)</label>
+                <input
+                  v-model.number="form.min_delay_sec"
+                  type="number"
+                  min="3"
+                  class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900"
+                />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Trễ tối đa (s)</label>
+                <input
+                  v-model.number="form.max_delay_sec"
+                  type="number"
+                  min="4"
+                  class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900"
+                />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Nghỉ sau mỗi (tin)</label>
+                <input
+                  v-model.number="form.batch_size"
+                  type="number"
+                  min="5"
+                  class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900"
+                />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Nghỉ lô (giây)</label>
+                <input
+                  v-model.number="form.batch_pause_sec"
+                  type="number"
+                  min="30"
+                  class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <span class="text-[11px] text-slate-400">
+              Hệ thống tự xoay vòng mẫu câu & tự ngắt nếu chạm giới hạn Meta.
+            </span>
+
+            <button
+              type="submit"
+              :disabled="submitting || pages.length === 0"
+              class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-xs transition hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
+            >
+              <Send class="h-4 w-4" />
+              <span>{{ submitting ? 'Đang quét khách & tạo...' : 'Bắt đầu gửi tự động' }}</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- Cột phải: Tiến độ chiến dịch -->
+        <div class="overflow-hidden rounded-2xl border border-slate-200/80 bg-white text-left shadow-2xs lg:col-span-5">
+          <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-sm font-extrabold !text-slate-900">Tiến độ các chiến dịch</h2>
+                <span
+                  v-if="runningCount > 0"
+                  class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800"
+                >
+                  {{ runningCount }} đang chạy
+                </span>
+              </div>
+              <p class="text-[11px] text-slate-400">Tự động cập nhật mỗi 5 giây</p>
+            </div>
+
+            <button
+              type="button"
+              @click="fetchData()"
+              class="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 cursor-pointer"
+            >
+              <RefreshCw class="h-3.5 w-3.5" />
+              <span>Làm mới</span>
+            </button>
+          </div>
+
+          <div v-if="loading" class="p-8 text-center text-xs text-slate-400">
+            Đang tải danh sách chiến dịch...
+          </div>
+
+          <div v-else-if="campaigns.length === 0" class="p-8 text-center space-y-2">
+            <div class="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+              <Users class="h-5 w-5" />
+            </div>
+            <p class="text-xs font-semibold text-slate-600">Chưa có chiến dịch nào</p>
+            <p class="text-[11px] text-slate-400">Tạo chiến dịch bên trái để bắt đầu nhắn tin tự động.</p>
+          </div>
+
+          <div v-else class="divide-y divide-slate-100 max-h-[640px] overflow-y-auto">
+            <div v-for="c in campaigns" :key="c.id" class="p-4 sm:p-5 space-y-3">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 space-y-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="truncate text-sm font-bold !text-slate-900">{{ c.name }}</span>
+                    <span
+                      class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+                      :class="{
+                        'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200': c.status === 'running',
+                        'bg-amber-50 text-amber-700 ring-1 ring-amber-200': c.status === 'paused',
+                        'bg-slate-100 text-slate-600': c.status === 'completed'
+                      }"
+                    >
+                      {{ c.status === 'running' ? 'Đang gửi' : c.status === 'paused' ? 'Tạm dừng' : 'Hoàn tất' }}
+                    </span>
+                  </div>
+                  <p class="truncate text-xs font-medium text-emerald-700">
+                    {{ getPageNameById(c.page_id) }}
+                  </p>
+                </div>
+
+                <button
+                  v-if="c.status === 'running' || c.status === 'paused'"
+                  type="button"
+                  @click="toggleStatus(c)"
+                  class="inline-flex shrink-0 items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 cursor-pointer"
+                >
+                  <Pause v-if="c.status === 'running'" class="h-3.5 w-3.5 text-amber-600" />
+                  <Play v-else class="h-3.5 w-3.5 text-emerald-600" />
+                  <span>{{ c.status === 'running' ? 'Dừng' : 'Chạy tiếp' }}</span>
+                </button>
+              </div>
+
+              <!-- Thanh tiến độ trực quan -->
+              <div class="space-y-1.5">
+                <div class="flex items-center justify-between text-[11px] text-slate-500">
+                  <span>{{ formatTargetMode(c.target_mode) }}</span>
+                  <span>
+                    Đã gửi: <b class="text-emerald-700">{{ c.sent_count }}</b>/{{ c.total_recipients }}
+                    <template v-if="c.failed_count > 0"> • Lỗi: <b class="text-rose-600">{{ c.failed_count }}</b></template>
+                  </span>
+                </div>
+                <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    class="h-full rounded-full bg-emerald-600 transition-all duration-300"
+                    :style="{ width: getProgressPercent(c) + '%' }"
+                  ></div>
+                </div>
+              </div>
+
+              <p v-if="c.pause_reason" class="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-800">
+                {{ c.pause_reason }}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   </div>
 </template>

@@ -2,20 +2,23 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  ArrowRight,
+  ArrowUpRight,
   Bell,
   CalendarClock,
   CheckCircle2,
   Facebook,
   Layers,
+  LayoutDashboard,
   LogOut,
+  Menu,
   MessageSquare,
   RefreshCw,
   Send,
   ShieldCheck,
   Sparkles,
   TrendingUp,
-  Users
+  Users,
+  X
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
 import { useAuthStore } from './../stores/auth.stores'
@@ -39,6 +42,7 @@ const conversations = ref<ConversationSummary[]>([])
 const loadingStats = ref(false)
 const syncingAll = ref(false)
 const toastMessage = ref('')
+const mobileMenuOpen = ref(false)
 
 const currentUser = computed(() => (authStore.user || {}) as Record<string, any>)
 const userName = computed(() => currentUser.value.full_name || currentUser.value.name || 'Quản trị viên')
@@ -55,85 +59,82 @@ const totalUnreadCount = computed(() =>
   conversations.value.reduce((sum, item) => sum + (item.unread_count || 0), 0)
 )
 const recentUnreadConversations = computed(() =>
-  conversations.value.filter((c) => c.unread_count > 0).slice(0, 4)
+  conversations.value.filter((c) => c.unread_count > 0).slice(0, 5)
 )
+
+const navItems = computed(() => {
+  const list = [
+    { label: 'Tổng quan', path: '/', icon: LayoutDashboard, active: true, badge: 0 },
+    { label: 'Hộp thư đa Page', path: '/inbox', icon: MessageSquare, active: false, badge: totalUnreadCount.value },
+    { label: 'CSKH tự động', path: '/broadcasts', icon: Send, active: false, badge: 0 },
+    { label: 'Phân tích đối thủ', path: '/competitors', icon: TrendingUp, active: false, badge: 0 },
+    { label: 'Lên lịch đăng bài', path: '/posts', icon: CalendarClock, active: false, badge: 0 },
+    { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0 }
+  ]
+  if (canManageRoles.value) {
+    list.push({ label: 'Phân cấp & Phân quyền', path: '/roles', icon: Users, active: false, badge: 0 })
+  }
+  return list
+})
 
 const featureModules = computed(() => {
   const items = [
     {
       title: 'Hộp thư chat gộp đa Page',
-      shortLabel: 'Hộp thư đa Page',
+      tag: 'Messenger Live',
       path: '/inbox',
-      badge: totalUnreadCount.value > 0 ? `${totalUnreadCount.value} mới` : 'Trực tiếp',
-      badgeClass: 'bg-emerald-100 text-emerald-800',
+      stat: totalUnreadCount.value > 0 ? `${totalUnreadCount.value} tin chưa đọc` : 'Đã phản hồi hết',
       icon: MessageSquare,
-      iconWrap: 'bg-emerald-600 text-white',
-      description:
-        'Xem và trả lời tin nhắn Messenger từ tất cả Fanpage trên một màn hình duy nhất, hỗ trợ gửi ảnh và phân loại khách hàng.',
-      cta: 'Vào khung chat'
+      iconBg: 'bg-emerald-600 text-white',
+      description: 'Tập trung toàn bộ tin nhắn Messenger từ nhiều Fanpage về một màn hình, hỗ trợ gửi ảnh và phân loại đơn.'
     },
     {
       title: 'Chăm sóc khách cũ tự động',
-      shortLabel: 'CSKH tự động',
+      tag: 'Conversion',
       path: '/broadcasts',
-      badge: 'Conversion',
-      badgeClass: 'bg-amber-100 text-amber-800',
+      stat: `${conversations.value.length} khách tiềm năng`,
       icon: Send,
-      iconWrap: 'bg-amber-500 text-white',
-      description:
-        'Quét toàn bộ khách đã nhắn tin trên Meta Business và tự động gửi tin nhắn chăm sóc lại theo nhịp giãn cách an toàn.',
-      cta: 'Tạo chiến dịch gửi'
+      iconBg: 'bg-teal-600 text-white',
+      description: 'Quét toàn bộ khách đã nhắn tin trên Meta Business và tự động nhắn lại theo kịch bản xoay vòng an toàn.'
     },
     {
       title: 'Phân tích đối thủ cạnh tranh',
-      shortLabel: 'Đối thủ',
+      tag: 'Competitor',
       path: '/competitors',
-      badge: 'Competitor',
-      badgeClass: 'bg-indigo-100 text-indigo-800',
+      stat: 'Theo dõi nội dung',
       icon: TrendingUp,
-      iconWrap: 'bg-indigo-600 text-white',
-      description:
-        'Theo dõi bài đăng, tần suất hoạt động và nội dung nổi bật của các Fanpage đối thủ để tối ưu chiến lược nội dung.',
-      cta: 'Xem phân tích đối thủ'
+      iconBg: 'bg-emerald-700 text-white',
+      description: 'Giám sát tần suất đăng bài, nội dung tương tác cao và chiến lược truyền thông của các Fanpage đối thủ.'
     },
     {
-      title: 'Lên lịch & Quản lý bài đăng',
-      shortLabel: 'Đăng bài tự động',
+      title: 'Lên lịch & Đăng bài đa Page',
+      tag: 'Auto Post',
       path: '/posts',
-      badge: 'Auto Post',
-      badgeClass: 'bg-sky-100 text-sky-800',
+      stat: 'Tự động hóa nội dung',
       icon: CalendarClock,
-      iconWrap: 'bg-sky-600 text-white',
-      description:
-        'Soạn nội dung, đính kèm hình ảnh và hẹn giờ đăng bài tự động lên nhiều Fanpage cùng lúc.',
-      cta: 'Quản lý lịch đăng'
+      iconBg: 'bg-teal-700 text-white',
+      description: 'Soạn thảo bài viết, đính kèm hình ảnh và hẹn giờ xuất bản đồng loạt lên nhiều Fanpage cùng lúc.'
     },
     {
-      title: 'Quản lý & Gộp Fanpage',
-      shortLabel: 'Gộp Fanpage',
+      title: 'Quản lý & Kết nối Fanpage',
+      tag: 'Pages Sync',
       path: '/pages',
-      badge: `${activePagesCount.value}/${pages.value.length} bật`,
-      badgeClass: 'bg-teal-100 text-teal-800',
+      stat: `${activePagesCount.value}/${pages.value.length} Page bật`,
       icon: Layers,
-      iconWrap: 'bg-teal-600 text-white',
-      description:
-        'Đồng bộ tự động danh sách Fanpage từ Facebook, bật/tắt trạng thái hoạt động từng Page và làm mới Page Access Token.',
-      cta: 'Quản lý danh sách Page'
+      iconBg: 'bg-emerald-600 text-white',
+      description: 'Đồng bộ danh sách Fanpage từ Facebook, bật/tắt trạng thái kết nối và làm mới Page Access Token.'
     }
   ]
 
   if (canManageRoles.value) {
     items.push({
       title: 'Phân cấp & Phân quyền nhân sự',
-      shortLabel: 'Phân quyền',
+      tag: 'Team & Roles',
       path: '/roles',
-      badge: 'Admin / Manager',
-      badgeClass: 'bg-slate-200 text-slate-800',
+      stat: 'Quản lý truy cập',
       icon: Users,
-      iconWrap: 'bg-slate-800 text-white',
-      description:
-        'Chia vai trò Quản lý và Nhân viên trực Page, giới hạn quyền truy cập dữ liệu theo từng Fanpage được giao.',
-      cta: 'Thiết lập đội ngũ'
+      iconBg: 'bg-slate-800 text-white',
+      description: 'Phân chia vai trò Quản lý và Nhân viên trực Page, kiểm soát quyền thao tác theo từng Fanpage.'
     })
   }
 
@@ -145,6 +146,11 @@ function getInitials(name: string) {
   const parts = name.trim().split(/\s+/)
   if (parts.length === 1) return parts[0].charAt(0).toUpperCase()
   return (parts[0].charAt(0) + parts[parts.length - 1].charAt(0)).toUpperCase()
+}
+
+function goTo(path: string) {
+  mobileMenuOpen.value = false
+  router.push(path)
 }
 
 async function fetchOverviewData() {
@@ -195,378 +201,384 @@ onMounted(fetchOverviewData)
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#f6f9f8] text-slate-900">
-    <!-- Top Navigation Bar: Đầy đủ tất cả chức năng -->
-    <header class="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-xs">
-      <div class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
-        <!-- Brand Logo -->
-        <button
-          @click="router.push('/')"
-          class="flex items-center gap-2.5 shrink-0 text-left cursor-pointer"
-        >
-          <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-sm">
-            <MessageSquare class="h-5 w-5" />
-          </div>
-          <div class="leading-tight">
-            <span class="block text-base font-extrabold tracking-tight !text-slate-900">
-              PagePilot CRM
-            </span>
-            <span class="block text-[11px] font-medium text-emerald-700">
-              Quản lý & CSKH đa Fanpage
-            </span>
-          </div>
-        </button>
-
-        <!-- Center Navigation Pills (Đủ tất cả 6 chức năng) -->
-        <nav class="hidden lg:flex items-center gap-1.5 overflow-x-auto py-1">
-          <button
-            @click="router.push('/inbox')"
-            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition hover:bg-emerald-700 cursor-pointer"
-          >
-            <MessageSquare class="h-3.5 w-3.5" />
-            <span>Hộp thư</span>
-            <span
-              v-if="totalUnreadCount > 0"
-              class="rounded-full bg-white px-1.5 py-0.2 text-[10px] font-bold text-emerald-700"
-            >
-              {{ totalUnreadCount }}
-            </span>
-          </button>
-
-          <button
-            @click="router.push('/broadcasts')"
-            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs font-semibold text-amber-900 transition hover:border-amber-300 hover:bg-amber-100 cursor-pointer"
-          >
-            <Send class="h-3.5 w-3.5 text-amber-600" />
-            <span>CSKH tự động</span>
-          </button>
-
-          <button
-            @click="router.push('/competitors')"
-            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-800 cursor-pointer"
-          >
-            <TrendingUp class="h-3.5 w-3.5 text-indigo-600" />
-            <span>Đối thủ</span>
-          </button>
-
-          <button
-            @click="router.push('/posts')"
-            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 cursor-pointer"
-          >
-            <CalendarClock class="h-3.5 w-3.5 text-sky-600" />
-            <span>Đăng bài</span>
-          </button>
-
-          <button
-            @click="router.push('/pages')"
-            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
-          >
-            <Layers class="h-3.5 w-3.5 text-emerald-600" />
-            <span>Gộp Page</span>
-          </button>
-
-          <button
-            v-if="canManageRoles"
-            @click="router.push('/roles')"
-            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
-          >
-            <Users class="h-3.5 w-3.5 text-slate-600" />
-            <span>Phân quyền</span>
-          </button>
-        </nav>
-
-        <!-- Right User Profile & Logout -->
-        <div class="flex items-center gap-2.5 shrink-0">
-          <div class="hidden sm:flex items-center gap-2 rounded-2xl border border-slate-100 bg-slate-50/80 px-2.5 py-1.5">
-            <div class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-800">
-              {{ getInitials(userName) }}
-            </div>
-            <div class="text-left leading-tight">
-              <div class="flex items-center gap-1.5">
-                <span class="text-xs font-bold !text-slate-900">{{ userName }}</span>
-                <span class="inline-flex items-center gap-0.5 rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                  <ShieldCheck class="h-3 w-3" />
-                  {{ userRole }}
-                </span>
-              </div>
-              <p v-if="userEmail" class="text-[10px] text-slate-500 max-w-[140px] truncate">{{ userEmail }}</p>
-            </div>
-          </div>
-
-          <button
-            @click="handleLogout"
-            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 cursor-pointer"
-          >
-            <LogOut class="h-3.5 w-3.5" />
-            <span class="hidden sm:inline">Đăng xuất</span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Mobile/Tablet Sub-Nav Bar (Hiển thị đủ nút trên màn hình nhỏ) -->
-      <div class="flex lg:hidden items-center gap-2 overflow-x-auto border-t border-slate-100 bg-slate-50/70 px-4 py-2">
-        <button
-          v-for="mod in featureModules"
-          :key="mod.path"
-          @click="router.push(mod.path)"
-          class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs"
-        >
-          <component :is="mod.icon" class="h-3.5 w-3.5 text-emerald-600" />
-          <span>{{ mod.shortLabel }}</span>
-        </button>
-      </div>
-    </header>
-
-    <!-- Toast Thông báo đồng bộ -->
+  <div class="min-h-screen bg-[#f4f7f6] text-slate-900 antialiased flex">
+    <!-- Backdrop mobile -->
     <div
-      v-if="toastMessage"
-      class="border-b border-emerald-200 bg-emerald-50 px-4 py-2.5 text-center text-xs font-semibold text-emerald-800"
-    >
-      {{ toastMessage }}
-    </div>
+      v-if="mobileMenuOpen"
+      @click="mobileMenuOpen = false"
+      class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs lg:hidden"
+    ></div>
 
-    <!-- Main Content -->
-    <main class="mx-auto max-w-7xl space-y-6 px-4 py-7 sm:px-6 lg:px-8">
-      <!-- Hero Welcome Banner -->
-      <section class="relative overflow-hidden rounded-3xl border border-emerald-200/70 bg-gradient-to-r from-emerald-700 via-emerald-600 to-teal-600 p-6 sm:p-8 text-white shadow-sm">
-        <div class="relative z-10 flex flex-col justify-between gap-6 lg:flex-row lg:items-center">
-          <div class="max-w-2xl space-y-2">
-            <div class="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-emerald-50 backdrop-blur-xs">
-              <Sparkles class="h-3.5 w-3.5" />
-              <span>Không gian làm việc đã sẵn sàng</span>
+    <!-- Left Sidebar Navigation (Cố định bên trái, rõ ràng, không bao giờ cắt chữ) -->
+    <aside
+      class="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-slate-200/80 bg-white transition-transform duration-200 lg:static lg:translate-x-0"
+      :class="mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'"
+    >
+      <!-- Brand Header -->
+      <div class="flex h-16 items-center justify-between border-b border-slate-100 px-5">
+        <button @click="goTo('/')" class="flex items-center gap-3 text-left cursor-pointer">
+          <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-xs">
+            <MessageSquare class="h-4.5 w-4.5" />
+          </div>
+          <div class="leading-none">
+            <span class="block text-[15px] font-extrabold tracking-tight !text-slate-900">
+              PagePilot
+            </span>
+            <span class="mt-1 block text-[10px] font-bold uppercase tracking-wider text-emerald-600">
+              Multi-Page CRM
+            </span>
+          </div>
+        </button>
+
+        <button
+          @click="mobileMenuOpen = false"
+          class="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 lg:hidden"
+        >
+          <X class="h-5 w-5" />
+        </button>
+      </div>
+
+      <!-- Navigation List -->
+      <div class="flex-1 overflow-y-auto px-3.5 py-5 space-y-1">
+        <p class="px-3 pb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+          Điều hướng chức năng
+        </p>
+
+        <button
+          v-for="item in navItems"
+          :key="item.path"
+          @click="goTo(item.path)"
+          class="flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-[13px] font-semibold transition-all cursor-pointer"
+          :class="
+            item.active
+              ? 'bg-emerald-50 text-emerald-800 ring-1 ring-emerald-200/80'
+              : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+          "
+        >
+          <span class="flex items-center gap-3">
+            <component
+              :is="item.icon"
+              class="h-4 w-4 shrink-0"
+              :class="item.active ? 'text-emerald-600' : 'text-slate-400'"
+            />
+            <span>{{ item.label }}</span>
+          </span>
+
+          <span
+            v-if="item.badge > 0"
+            class="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white"
+          >
+            {{ item.badge }}
+          </span>
+        </button>
+      </div>
+
+      <!-- Bottom User Card + Logout -->
+      <div class="border-t border-slate-100 p-3.5 space-y-2.5">
+        <div class="flex items-center gap-2.5 rounded-xl bg-slate-50 p-2.5 ring-1 ring-slate-200/60">
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-600 text-xs font-bold text-white">
+            {{ getInitials(userName) }}
+          </div>
+          <div class="min-w-0 flex-1 leading-tight">
+            <div class="flex items-center gap-1.5">
+              <span class="truncate text-xs font-bold !text-slate-900">{{ userName }}</span>
+              <span class="shrink-0 rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-extrabold text-emerald-800">
+                {{ userRole }}
+              </span>
             </div>
-            <h1 class="text-2xl sm:text-3xl font-extrabold tracking-tight !text-white">
-              Xin chào, {{ userName }}!
-            </h1>
-            <p class="text-sm text-emerald-50/90 leading-relaxed">
-              Trung tâm điều hành đa Fanpage: trực tin nhắn gộp, gửi chăm sóc khách cũ tự động, theo dõi đối thủ và lên lịch đăng bài trên một giao diện duy nhất.
+            <p v-if="userEmail" class="mt-0.5 truncate text-[11px] text-slate-400">{{ userEmail }}</p>
+          </div>
+        </div>
+
+        <button
+          @click="handleLogout"
+          class="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 cursor-pointer"
+        >
+          <LogOut class="h-3.5 w-3.5" />
+          <span>Đăng xuất tài khoản</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Right Workspace Area -->
+    <div class="flex min-w-0 flex-1 flex-col">
+      <!-- Clean Topbar -->
+      <header class="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-slate-200/70 bg-white/90 px-4 backdrop-blur-md sm:px-8">
+        <div class="flex items-center gap-3">
+          <button
+            @click="mobileMenuOpen = true"
+            class="rounded-xl border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden"
+          >
+            <Menu class="h-5 w-5" />
+          </button>
+          <div>
+            <h2 class="text-sm font-bold !text-slate-900">Tổng quan hệ thống</h2>
+            <p class="hidden sm:block text-[11px] text-slate-400">
+              Theo dõi hiệu suất Fanpage, hội thoại & chiến dịch chăm sóc khách hàng
             </p>
           </div>
-
-          <div class="flex flex-wrap items-center gap-3 shrink-0">
-            <button
-              @click="router.push('/inbox')"
-              class="inline-flex items-center gap-2 whitespace-nowrap rounded-2xl bg-white px-4 py-3 text-sm font-bold text-emerald-800 shadow-sm transition hover:bg-emerald-50 cursor-pointer"
-            >
-              <MessageSquare class="h-4 w-4 text-emerald-600" />
-              <span>Mở Hộp thư</span>
-            </button>
-
-            <button
-              @click="router.push('/broadcasts')"
-              class="inline-flex items-center gap-2 whitespace-nowrap rounded-2xl bg-amber-400 px-4 py-3 text-sm font-bold text-slate-950 shadow-sm transition hover:bg-amber-300 cursor-pointer"
-            >
-              <Send class="h-4 w-4" />
-              <span>Nhắn tin tự động</span>
-            </button>
-
-            <button
-              @click="handleQuickSync"
-              :disabled="syncingAll"
-              class="inline-flex items-center gap-2 whitespace-nowrap rounded-2xl border border-white/30 bg-white/10 px-4 py-3 text-sm font-semibold text-white backdrop-blur-xs transition hover:bg-white/20 disabled:opacity-60 cursor-pointer"
-            >
-              <RefreshCw class="h-4 w-4" :class="{ 'animate-spin': syncingAll }" />
-              <span>{{ syncingAll ? 'Đang kéo tin...' : 'Kéo tin mới' }}</span>
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <!-- 4 Thẻ thống kê tổng quan -->
-      <section class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-2xs">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-slate-500">Tổng Fanpage đã gộp</span>
-            <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-              <Layers class="h-4 w-4" />
-            </div>
-          </div>
-          <p class="mt-3 text-2xl font-extrabold !text-slate-900">
-            {{ loadingStats ? '...' : pages.length }}
-          </p>
-          <p class="mt-1 text-xs text-slate-500">Kết nối đồng bộ qua Graph API</p>
         </div>
 
-        <div class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-2xs">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-slate-500">Page đang hoạt động</span>
-            <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-teal-50 text-teal-600">
-              <CheckCircle2 class="h-4 w-4" />
-            </div>
-          </div>
-          <p class="mt-3 text-2xl font-extrabold !text-emerald-700">
-            {{ loadingStats ? '...' : activePagesCount }}
-          </p>
-          <p class="mt-1 text-xs text-slate-500">Sẵn sàng nhận & gửi tin nhắn</p>
-        </div>
+        <div class="flex items-center gap-2.5">
+          <span class="hidden md:inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200/70">
+            <ShieldCheck class="h-3.5 w-3.5" />
+            <span>Hệ thống ổn định</span>
+          </span>
 
-        <div class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-2xs">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-slate-500">Tổng hội thoại gộp</span>
-            <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-              <MessageSquare class="h-4 w-4" />
-            </div>
-          </div>
-          <p class="mt-3 text-2xl font-extrabold !text-slate-900">
-            {{ loadingStats ? '...' : conversations.length }}
-          </p>
-          <p class="mt-1 text-xs text-slate-500">Khách hàng trên toàn hệ thống</p>
-        </div>
-
-        <div class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-2xs">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-semibold text-slate-500">Tin nhắn chưa đọc</span>
-            <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
-              <Bell class="h-4 w-4" />
-            </div>
-          </div>
-          <p class="mt-3 text-2xl font-extrabold" :class="totalUnreadCount > 0 ? '!text-amber-600' : '!text-slate-900'">
-            {{ loadingStats ? '...' : totalUnreadCount }}
-          </p>
-          <p class="mt-1 text-xs text-slate-500">Cần nhân viên phản hồi sớm</p>
-        </div>
-      </section>
-
-      <!-- Lưới điều hướng tất cả chức năng hệ thống -->
-      <section class="space-y-3">
-        <div class="flex items-center justify-between">
-          <div>
-            <h2 class="text-base font-extrabold !text-slate-900">Tất cả chức năng hệ thống</h2>
-            <p class="text-xs text-slate-500">Chọn nhanh công cụ bạn muốn làm việc</p>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <button
-            v-for="mod in featureModules"
-            :key="mod.path"
-            @click="router.push(mod.path)"
-            class="group flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md cursor-pointer"
+            @click="handleQuickSync"
+            :disabled="syncingAll"
+            class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 disabled:opacity-60 cursor-pointer"
           >
-            <div>
-              <div class="flex items-center justify-between gap-2">
-                <div
-                  class="flex h-11 w-11 items-center justify-center rounded-2xl shadow-2xs"
-                  :class="mod.iconWrap"
-                >
-                  <component :is="mod.icon" class="h-5 w-5" />
-                </div>
-                <span
-                  class="rounded-full px-2.5 py-0.5 text-[11px] font-bold"
-                  :class="mod.badgeClass"
-                >
-                  {{ mod.badge }}
-                </span>
-              </div>
+            <RefreshCw class="h-3.5 w-3.5 text-emerald-600" :class="{ 'animate-spin': syncingAll }" />
+            <span>{{ syncingAll ? 'Đang đồng bộ...' : 'Đồng bộ tin mới' }}</span>
+          </button>
+        </div>
+      </header>
 
-              <h3 class="mt-4 text-base font-bold !text-slate-900 group-hover:text-emerald-700">
-                {{ mod.title }}
-              </h3>
-              <p class="mt-1.5 text-xs leading-relaxed text-slate-500">
-                {{ mod.description }}
+      <!-- Toast thông báo -->
+      <div
+        v-if="toastMessage"
+        class="border-b border-emerald-200 bg-emerald-50 px-4 py-2 text-center text-xs font-semibold text-emerald-800"
+      >
+        {{ toastMessage }}
+      </div>
+
+      <!-- Main Dashboard Content -->
+      <main class="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 sm:px-8">
+        <!-- Compact & Balanced Hero Banner -->
+        <section class="relative overflow-hidden rounded-2xl bg-gradient-to-r from-emerald-800 via-emerald-700 to-teal-700 p-6 sm:p-7 text-white shadow-sm">
+          <div class="pointer-events-none absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10 blur-2xl"></div>
+
+          <div class="relative z-10 flex flex-col justify-between gap-5 lg:flex-row lg:items-center">
+            <div class="space-y-1.5 text-left">
+              <div class="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-100">
+                <Sparkles class="h-3 w-3" />
+                <span>Không gian làm việc đã sẵn sàng</span>
+              </div>
+              <h1 class="text-xl sm:text-2xl font-extrabold tracking-tight !text-white">
+                Xin chào, {{ userName }}!
+              </h1>
+              <p class="max-w-xl text-xs sm:text-[13px] text-emerald-50/90 leading-relaxed">
+                Điều hành tập trung tin nhắn đa Fanpage, nhắn tin chăm sóc khách cũ tự động, theo dõi đối thủ và lên lịch đăng bài tại một nơi duy nhất.
               </p>
             </div>
 
-            <div class="mt-5 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
-              <span>{{ mod.cta }}</span>
-              <ArrowRight class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
-            </div>
-          </button>
-        </div>
-      </section>
-
-      <!-- Danh sách Fanpage đang kết nối & Tin nhắn chưa đọc mới nhất -->
-      <section class="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <!-- Cột trái: Fanpage đang kết nối -->
-        <div class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-2xs lg:col-span-7">
-          <div class="flex items-center justify-between border-b border-slate-100 pb-3.5">
-            <div>
-              <h3 class="text-sm font-bold !text-slate-900">Fanpage đang kết nối</h3>
-              <p class="text-xs text-slate-500">Danh sách các trang đang đồng bộ vào PagePilot CRM</p>
-            </div>
-            <button
-              @click="router.push('/pages')"
-              class="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
-            >
-              Xem tất cả →
-            </button>
-          </div>
-
-          <div v-if="pages.length === 0" class="py-10 text-center text-xs text-slate-500">
-            Chưa có Fanpage nào được gộp. Bấm <strong>Gộp Fanpage</strong> để bắt đầu.
-          </div>
-
-          <div v-else class="mt-3 divide-y divide-slate-100">
-            <div
-              v-for="page in pages.slice(0, 5)"
-              :key="page.id"
-              class="flex items-center justify-between gap-3 py-3"
-            >
-              <div class="flex min-w-0 items-center gap-3">
-                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-                  <Facebook class="h-4 w-4" />
-                </div>
-                <div class="min-w-0">
-                  <p class="truncate text-xs font-bold !text-slate-900">{{ page.name }}</p>
-                  <p class="text-[11px] text-slate-400">ID: {{ page.page_id }}</p>
-                </div>
-              </div>
-
-              <span
-                class="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold"
-                :class="
-                  page.is_connected
-                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                    : 'bg-slate-100 text-slate-500'
-                "
+            <div class="flex flex-wrap items-center gap-2.5 shrink-0">
+              <button
+                @click="goTo('/inbox')"
+                class="inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-white px-4 py-2.5 text-xs font-bold text-emerald-800 shadow-xs transition hover:bg-emerald-50 cursor-pointer"
               >
-                {{ page.is_connected ? 'Đang hoạt động' : 'Tạm ngưng' }}
-              </span>
+                <MessageSquare class="h-4 w-4 text-emerald-600" />
+                <span>Mở Hộp thư</span>
+              </button>
+
+              <button
+                @click="goTo('/broadcasts')"
+                class="inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-emerald-950/35 px-4 py-2.5 text-xs font-semibold text-white ring-1 ring-white/25 transition hover:bg-emerald-950/50 cursor-pointer"
+              >
+                <Send class="h-4 w-4 text-emerald-200" />
+                <span>CSKH tự động</span>
+              </button>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- Cột phải: Tin nhắn chưa đọc mới nhất -->
-        <div class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-2xs lg:col-span-5">
-          <div class="flex items-center justify-between border-b border-slate-100 pb-3.5">
-            <div>
-              <h3 class="text-sm font-bold !text-slate-900">Khách hàng chờ phản hồi</h3>
-              <p class="text-xs text-slate-500">Các hội thoại có tin nhắn chưa đọc</p>
+        <!-- 4 KPI Cards (Căn trái chuẩn xác, sắc nét) -->
+        <section class="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <div class="rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-500">Tổng Fanpage</span>
+              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                <Layers class="h-4 w-4" />
+              </div>
             </div>
-            <button
-              @click="router.push('/inbox')"
-              class="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
-            >
-              Mở hộp thư →
-            </button>
+            <p class="mt-3 text-2xl font-extrabold tracking-tight !text-slate-900">
+              {{ loadingStats ? '...' : pages.length }}
+            </p>
+            <p class="mt-1 text-[11px] text-slate-400">Đã kết nối qua Graph API</p>
           </div>
 
-          <div v-if="recentUnreadConversations.length === 0" class="py-10 text-center text-xs text-slate-500">
-            Tuyệt vời! Hiện không có tin nhắn nào bị bỏ sót.
+          <div class="rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-500">Page hoạt động</span>
+              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-50 text-teal-600">
+                <CheckCircle2 class="h-4 w-4" />
+              </div>
+            </div>
+            <p class="mt-3 text-2xl font-extrabold tracking-tight !text-emerald-700">
+              {{ loadingStats ? '...' : activePagesCount }}
+            </p>
+            <p class="mt-1 text-[11px] text-slate-400">Sẵn sàng nhận & gửi tin</p>
           </div>
 
-          <div v-else class="mt-3 divide-y divide-slate-100">
+          <div class="rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-500">Tổng hội thoại</span>
+              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                <MessageSquare class="h-4 w-4" />
+              </div>
+            </div>
+            <p class="mt-3 text-2xl font-extrabold tracking-tight !text-slate-900">
+              {{ loadingStats ? '...' : conversations.length }}
+            </p>
+            <p class="mt-1 text-[11px] text-slate-400">Khách hàng trên hệ thống</p>
+          </div>
+
+          <div class="rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-slate-500">Tin chưa đọc</span>
+              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                <Bell class="h-4 w-4" />
+              </div>
+            </div>
+            <p class="mt-3 text-2xl font-extrabold tracking-tight" :class="totalUnreadCount > 0 ? '!text-amber-600' : '!text-slate-900'">
+              {{ loadingStats ? '...' : totalUnreadCount }}
+            </p>
+            <p class="mt-1 text-[11px] text-slate-400">Cần nhân viên phản hồi</p>
+          </div>
+        </section>
+
+        <!-- 6 Thẻ truy cập nhanh chức năng -->
+        <section class="space-y-3">
+          <div class="text-left">
+            <h2 class="text-sm font-extrabold uppercase tracking-wider !text-slate-700">
+              Truy cập nhanh chức năng
+            </h2>
+          </div>
+
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <button
-              v-for="conv in recentUnreadConversations"
-              :key="conv.id"
-              @click="router.push('/inbox')"
-              class="flex w-full items-center justify-between gap-3 py-3 text-left transition hover:bg-emerald-50/50 rounded-xl px-2 cursor-pointer"
+              v-for="mod in featureModules"
+              :key="mod.path"
+              @click="goTo(mod.path)"
+              class="group flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md cursor-pointer"
             >
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2">
-                  <p class="truncate text-xs font-bold !text-slate-900">{{ conv.customer_name }}</p>
-                  <span class="rounded-full bg-emerald-600 px-1.5 py-0.2 text-[10px] font-bold text-white">
-                    {{ conv.unread_count }}
+              <div>
+                <div class="flex items-center justify-between gap-2">
+                  <div
+                    class="flex h-10 w-10 items-center justify-center rounded-xl shadow-2xs"
+                    :class="mod.iconBg"
+                  >
+                    <component :is="mod.icon" class="h-5 w-5" />
+                  </div>
+                  <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                    {{ mod.tag }}
                   </span>
                 </div>
-                <p class="mt-0.5 truncate text-xs text-slate-600">{{ conv.last_message }}</p>
-                <p class="mt-0.5 truncate text-[10px] font-medium text-emerald-700">{{ conv.page_name }}</p>
+
+                <h3 class="mt-4 text-[15px] font-bold !text-slate-900 group-hover:text-emerald-700 transition-colors">
+                  {{ mod.title }}
+                </h3>
+                <p class="mt-1.5 text-xs leading-relaxed text-slate-500">
+                  {{ mod.description }}
+                </p>
               </div>
-              <ArrowRight class="h-4 w-4 shrink-0 text-slate-400" />
+
+              <div class="mt-5 flex items-center justify-between border-t border-slate-100 pt-3">
+                <span class="text-[11px] font-semibold text-slate-400">{{ mod.stat }}</span>
+                <span class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700">
+                  <span>Mở tính năng</span>
+                  <ArrowUpRight class="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                </span>
+              </div>
             </button>
           </div>
-        </div>
-      </section>
-    </main>
+        </section>
+
+        <!-- 2 Cột dữ liệu thực tế bên dưới -->
+        <section class="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          <!-- Danh sách Fanpage -->
+          <div class="rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs lg:col-span-7">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3.5">
+              <div>
+                <h3 class="text-sm font-bold !text-slate-900">Fanpage đang kết nối</h3>
+                <p class="text-xs text-slate-500">Các trang đang đồng bộ vào PagePilot CRM</p>
+              </div>
+              <button
+                @click="goTo('/pages')"
+                class="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
+              >
+                Tất cả Page →
+              </button>
+            </div>
+
+            <div v-if="pages.length === 0" class="py-10 text-center text-xs text-slate-500">
+              Chưa có Fanpage nào được gộp. Bấm <strong>Gộp Fanpage</strong> để bắt đầu.
+            </div>
+
+            <div v-else class="mt-2 divide-y divide-slate-100">
+              <div
+                v-for="page in pages.slice(0, 5)"
+                :key="page.id"
+                class="flex items-center justify-between gap-3 py-3"
+              >
+                <div class="flex min-w-0 items-center gap-3">
+                  <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+                    <Facebook class="h-4 w-4" />
+                  </div>
+                  <div class="min-w-0">
+                    <p class="truncate text-xs font-bold !text-slate-900">{{ page.name }}</p>
+                    <p class="text-[11px] text-slate-400">ID: {{ page.page_id }}</p>
+                  </div>
+                </div>
+
+                <span
+                  class="shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-semibold"
+                  :class="
+                    page.is_connected
+                      ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200'
+                      : 'bg-slate-100 text-slate-500'
+                  "
+                >
+                  {{ page.is_connected ? 'Hoạt động' : 'Tạm ngưng' }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tin nhắn chưa đọc -->
+          <div class="rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs lg:col-span-5">
+            <div class="flex items-center justify-between border-b border-slate-100 pb-3.5">
+              <div>
+                <h3 class="text-sm font-bold !text-slate-900">Khách hàng chờ phản hồi</h3>
+                <p class="text-xs text-slate-500">Hội thoại có tin nhắn chưa đọc</p>
+              </div>
+              <button
+                @click="goTo('/inbox')"
+                class="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
+              >
+                Mở hộp thư →
+              </button>
+            </div>
+
+            <div v-if="recentUnreadConversations.length === 0" class="py-10 text-center text-xs text-slate-500">
+              Tuyệt vời! Hiện không có tin nhắn nào bị bỏ sót.
+            </div>
+
+            <div v-else class="mt-2 divide-y divide-slate-100">
+              <button
+                v-for="conv in recentUnreadConversations"
+                :key="conv.id"
+                @click="goTo('/inbox')"
+                class="flex w-full items-center justify-between gap-3 rounded-xl px-2 py-3 text-left transition hover:bg-emerald-50/60 cursor-pointer"
+              >
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2">
+                    <p class="truncate text-xs font-bold !text-slate-900">{{ conv.customer_name }}</p>
+                    <span class="rounded-full bg-emerald-600 px-1.5 py-0.2 text-[10px] font-bold text-white">
+                      {{ conv.unread_count }}
+                    </span>
+                  </div>
+                  <p class="mt-0.5 truncate text-xs text-slate-600">{{ conv.last_message }}</p>
+                  <p class="mt-0.5 truncate text-[10px] font-medium text-emerald-700">{{ conv.page_name }}</p>
+                </div>
+                <ArrowUpRight class="h-4 w-4 shrink-0 text-slate-400" />
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   </div>
 </template>
