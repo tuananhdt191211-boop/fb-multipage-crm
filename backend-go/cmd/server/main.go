@@ -42,6 +42,8 @@ func main() {
 	postAIHandler := handlers.NewPostAIHandler(db, cfg, aiHandler)
 	videoDownloader := handlers.NewVideoDownloaderHandler()
 
+	storefrontHandler := handlers.NewStorefrontHandler(db, cfg)
+
 	inboxHandler := handlers.NewInboxHandler(db, cfg)
 	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
 	roleHandler := handlers.NewRoleHandler(db)
@@ -84,6 +86,15 @@ func main() {
 	})
 
 	r.Static("/uploads", "./uploads")
+
+	r.GET("/api/v1/storefront/public", storefrontHandler.GetPublicStorefront)
+
+	storefrontGroup := r.Group("/api/v1/storefront", middleware.JWTAuth(cfg.JWTSecret))
+	{
+		storefrontGroup.GET("", storefrontHandler.GetMyStorefront)
+		storefrontGroup.PUT("/draft", storefrontHandler.SaveDraft)
+		storefrontGroup.POST("/publish", storefrontHandler.Publish)
+	}
 
 	// Route trả ảnh đại diện khách hàng từ Graph API
 	r.GET("/api/v1/inbox/avatar/:page_id/:psid", inboxHandler.GetCustomerAvatar)
