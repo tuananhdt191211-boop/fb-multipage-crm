@@ -94,6 +94,14 @@ func main() {
 		storefrontGroup.GET("", storefrontHandler.GetMyStorefront)
 		storefrontGroup.PUT("/draft", storefrontHandler.SaveDraft)
 		storefrontGroup.POST("/publish", storefrontHandler.Publish)
+		// Multi-site: mỗi tài khoản nhiều website
+		storefrontGroup.GET("/sites", storefrontHandler.ListSites)
+		storefrontGroup.POST("/sites", storefrontHandler.CreateSite)
+		storefrontGroup.GET("/sites/:id", storefrontHandler.GetSite)
+		storefrontGroup.PUT("/sites/:id/draft", storefrontHandler.SaveSiteDraft)
+		storefrontGroup.POST("/sites/:id/publish", storefrontHandler.PublishSite)
+		storefrontGroup.POST("/sites/:id/unpublish", storefrontHandler.UnpublishSite)
+		storefrontGroup.DELETE("/sites/:id", storefrontHandler.DeleteSite)
 	}
 
 	// Route trả ảnh đại diện khách hàng từ Graph API

@@ -140,7 +140,7 @@ func defaultBlocksJSON() string {
 
 func (h *StorefrontHandler) getOrCreateForUser(userID uint, requestHost string) (*models.Storefront, error) {
 	var sf models.Storefront
-	err := h.DB.Where("user_id = ?", userID).First(&sf).Error
+	err := h.DB.Where("user_id = ?", userID).Order("id ASC").First(&sf).Error
 	if err == nil {
 		return &sf, nil
 	}
@@ -246,12 +246,12 @@ func (h *StorefrontHandler) SaveDraft(c *gin.Context) {
 		sf.PrimaryColor = strings.TrimSpace(req.PrimaryColor)
 	}
 	if strings.TrimSpace(req.BlocksJSON) != "" {
-		var check []StorefrontBlock
-		if jsonErr := json.Unmarshal([]byte(req.BlocksJSON), &check); jsonErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Cấu trúc danh sách block JSON không hợp lệ."})
+		clean, sanErr := sanitizeBlocksJSON(req.BlocksJSON)
+		if sanErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": sanErr.Error()})
 			return
 		}
-		sf.DraftBlocksJSON = req.BlocksJSON
+		sf.DraftBlocksJSON = clean
 	}
 
 	if err := h.DB.Save(sf).Error; err != nil {
@@ -282,7 +282,12 @@ func (h *StorefrontHandler) Publish(c *gin.Context) {
 	if strings.TrimSpace(sf.DraftBlocksJSON) == "" {
 		sf.DraftBlocksJSON = defaultBlocksJSON()
 	}
-	sf.PublishedBlocksJSON = sf.DraftBlocksJSON
+	cleanPub, sanErr := sanitizeBlocksJSON(sf.DraftBlocksJSON)
+	if sanErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": sanErr.Error()})
+		return
+	}
+	sf.PublishedBlocksJSON = cleanPub
 	sf.IsPublished = true
 
 	if err := h.DB.Save(sf).Error; err != nil {
@@ -296,30 +301,26 @@ func (h *StorefrontHandler) Publish(c *gin.Context) {
 	})
 }
 
-// GetPublicStorefront GET /api/v1/storefront/public?domain=... hoặc ?slug=... hoặc tự đọc Host
+// GetPublicStorefront GET /api/v1/storefront/public?slug=... hoặc ?domain=... (hoặc tự đọc Host)
+// Multi-tenant: nếu có slug mà không thấy thì trả 404, KHÔNG fallback sang site của người khác.
 func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
+	qSlug := strings.ToLower(strings.TrimSpace(c.Query("slug")))
 	qDomain := normalizeHost(c.Query("domain"))
 	if qDomain == "" {
 		qDomain = normalizeHost(c.Request.Host)
 	}
-	qSlug := strings.TrimSpace(c.Query("slug"))
 
 	var sf models.Storefront
 	found := false
 
 	if qSlug != "" {
-		if err := h.DB.Where("slug = ? AND is_published = ?", qSlug, true).First(&sf).Error; err == nil {
-			found = true
-		}
-	}
-	if !found && qDomain != "" {
-		if err := h.DB.Where("LOWER(domain) = ? AND is_published = ?", qDomain, true).First(&sf).Error; err == nil {
-			found = true
-		}
-	}
-	if !found {
-		if err := h.DB.Where("is_published = ?", true).Order("id ASC").First(&sf).Error; err == nil {
-			found = true
+		found = h.DB.Where("slug = ? AND is_published = ?", qSlug, true).First(&sf).Error == nil
+	} else if qDomain != "" {
+		found = h.DB.Where("LOWER(domain) = ? AND is_published = ?", qDomain, true).
+			Order("id ASC").First(&sf).Error == nil
+		// Tương thích cũ: trang /store trên chính domain của hệ thống hiển thị site published đầu tiên.
+		if !found && qDomain == defaultDomainFromConfig(h.Cfg, "") {
+			found = h.DB.Where("is_published = ?", true).Order("id ASC").First(&sf).Error == nil
 		}
 	}
 
@@ -328,8 +329,9 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 		return
 	}
 
+	c.Header("Cache-Control", "public, max-age=30")
 	c.JSON(http.StatusOK, gin.H{
-		"domain":        sf.Domain,
+		"id":            sf.ID,
 		"slug":          sf.Slug,
 		"site_title":    sf.SiteTitle,
 		"logo_url":      sf.LogoURL,
