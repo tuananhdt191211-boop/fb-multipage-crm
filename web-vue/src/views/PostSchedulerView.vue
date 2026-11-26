@@ -10,6 +10,7 @@ import {
   ClipboardPaste,
   Clock,
   Copy,
+  Download,
   Facebook,
   FileText,
   Image as ImageIcon,
@@ -74,6 +75,7 @@ const scheduledDateTime = ref('')
 const isDraggingMedia = ref(false)
 const uploadingMedia = ref(false)
 const uploadingVideo = ref(false)
+const fetchingSocialVideo = ref(false)
 const videoUploadProgress = ref(0)
 const copiedIndex = ref<number | null>(null)
 const copiedSuggestionIndex = ref<number | null>(null)
@@ -118,12 +120,19 @@ const goldenHours = [
   { label: '21:00 Tối', hour: 21, minute: 0 }
 ]
 
+const isSocialVideoLink = (text: string) =>
+  /^https?:\/\/(www\.|vt\.|vm\.|m\.)?(tiktok\.com|youtube\.com|youtu\.be|facebook\.com|fb\.watch|fb\.com|instagram\.com)\/.+/i.test(
+    text.trim()
+  )
+
+const isDirectVideoLink = (text: string) =>
+  /^https?:\/\/.+\.(mp4|mov|webm|m4v|avi|mkv)(\?.*)?$/i.test(text.trim())
+
 const isVideoLinkPattern = (text: string) =>
-  /^https?:\/\/.+\.(mp4|mov|webm|m4v|avi|mkv)(\?.*)?$/i.test(text) ||
-  /^https?:\/\/(www\.)?(youtube\.com|youtu\.be|facebook\.com\/.*\/videos|fb\.watch|tiktok\.com|vimeo\.com)\/.+/i.test(text)
+  isSocialVideoLink(text) || isDirectVideoLink(text)
 
 const isImageLinkPattern = (text: string) =>
-  /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(text)
+  /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(text.trim())
 
 const filteredPages = computed(() => {
   const q = pageSearch.value.trim().toLowerCase()
@@ -158,6 +167,17 @@ function formatFileSize(bytes: number): string {
   if (!bytes || bytes <= 0) return ''
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function resolveMediaDownloadURL(rawURL: string): string {
+  const clean = rawURL.trim()
+  if (!clean) return ''
+  if (clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('blob:')) {
+    return clean
+  }
+  const base = (api.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '')
+  const path = clean.startsWith('/') ? clean : `/${clean}`
+  return base ? `${base}${path}` : path
 }
 
 function toggleAllPages() {
@@ -216,13 +236,54 @@ function applyImageLink(urlValue: string) {
   }
 }
 
-function applyVideoLink(urlValue: string) {
+async function applyVideoLink(urlValue: string) {
   const clean = urlValue.trim()
   if (!clean) return
   if (!/^https?:\/\/.+/i.test(clean)) {
     errorMsg.value = 'Đường dẫn video phải bắt đầu bằng http:// hoặc https://'
     return
   }
+
+  // Nếu là link TikTok / YouTube / Facebook / Instagram -> gọi backend lấy file MP4 không watermark
+  if (isSocialVideoLink(clean)) {
+    errorMsg.value = ''
+    fetchingSocialVideo.value = true
+    mediaType.value = 'video'
+    mediaGallery.value = []
+    mediaPreviewURL.value = ''
+
+    try {
+      const { data } = await api.post<{
+        message?: string
+        platform?: string
+        url?: string
+        file_name?: string
+        size_bytes?: number
+      }>('/posts/fetch-social-video', { url: clean })
+
+      if (data?.url) {
+        mediaURL.value = data.url
+        videoPreviewURL.value = data.url
+        videoFileName.value = data.file_name || `${data.platform || 'Social'}_video.mp4`
+        videoFileSizeLabel.value = data.size_bytes
+          ? `${formatFileSize(data.size_bytes)} • Không watermark`
+          : 'MP4 • Không watermark'
+        noticeMsg.value = data.message || 'Đã tải video không watermark thành công!'
+        setTimeout(() => {
+          if (noticeMsg.value.includes('không watermark')) noticeMsg.value = ''
+        }, 3000)
+      }
+    } catch (err: any) {
+      errorMsg.value =
+        err?.response?.data?.error ||
+        'Không tải được video từ link mạng xã hội này (hãy kiểm tra link công khai hoặc cấu hình yt-dlp trên server).'
+    } finally {
+      fetchingSocialVideo.value = false
+    }
+    return
+  }
+
+  // Nếu là link file video trực tiếp (.mp4 / .mov / .webm...)
   errorMsg.value = ''
   mediaType.value = 'video'
   mediaGallery.value = []
@@ -442,7 +503,7 @@ async function handleDropFiles(e: DragEvent) {
   ).trim()
   if (/^https?:\/\/.+/i.test(draggedUri)) {
     if (isVideoLinkPattern(draggedUri) || mediaType.value === 'video') {
-      applyVideoLink(draggedUri)
+      await applyVideoLink(draggedUri)
     } else {
       applyImageLink(draggedUri)
     }
@@ -485,7 +546,7 @@ async function handlePasteOnComposer(e: ClipboardEvent) {
   const text = e.clipboardData?.getData('text/plain')?.trim() || ''
   if (isVideoLinkPattern(text)) {
     e.preventDefault()
-    applyVideoLink(text)
+    await applyVideoLink(text)
     return
   }
   if (isImageLinkPattern(text)) {
@@ -529,7 +590,7 @@ async function handleQuickClipboardAction() {
     if (txt?.trim()) {
       const clean = txt.trim()
       if (isVideoLinkPattern(clean)) {
-        applyVideoLink(clean)
+        await applyVideoLink(clean)
       } else if (isImageLinkPattern(clean)) {
         applyImageLink(clean)
       } else {
@@ -716,7 +777,7 @@ async function loadData() {
 }
 
 async function handleSubmit(publishNow: boolean) {
-  if (uploadingMedia.value || uploadingVideo.value) {
+  if (uploadingMedia.value || uploadingVideo.value || fetchingSocialVideo.value) {
     errorMsg.value = 'Vui lòng chờ quá trình tải tệp hoàn tất trước khi đăng bài.'
     return
   }
@@ -948,7 +1009,7 @@ onMounted(() => {
                 "
               >
                 <Video class="h-3.5 w-3.5" />
-                <span>Video (Dán / Kéo thả / Tải / Link)</span>
+                <span>Video (Dán / Kéo thả / Tải / Link TikTok, YT, FB, IG)</span>
                 <span
                   v-if="mediaType === 'video' && (mediaURL || videoPreviewURL)"
                   class="rounded-full bg-emerald-600 px-1.5 text-[10px] font-bold text-white"
@@ -1045,7 +1106,7 @@ onMounted(() => {
               </div>
             </div>
 
-            <!-- Khu vực Video (Dán / Kéo thả / Tải từ máy / Link URL) -->
+            <!-- Khu vực Video (Dán / Kéo thả / Tải từ máy / Tải không watermark TikTok, YT, FB, IG) -->
             <div
               v-if="mediaType === 'video'"
               class="space-y-3 rounded-2xl border-2 border-dashed bg-emerald-50/30 p-4 transition"
@@ -1053,10 +1114,16 @@ onMounted(() => {
             >
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <label class="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-emerald-700 cursor-pointer">
-                  <Loader2 v-if="uploadingVideo" class="h-3.5 w-3.5 animate-spin" />
+                  <Loader2 v-if="uploadingVideo || fetchingSocialVideo" class="h-3.5 w-3.5 animate-spin" />
                   <Upload v-else class="h-3.5 w-3.5" />
                   <span>
-                    {{ uploadingVideo ? `Đang tải video (${videoUploadProgress}%)...` : 'Tải video từ máy' }}
+                    {{
+                      fetchingSocialVideo
+                        ? 'Đang tải video không watermark...'
+                        : uploadingVideo
+                          ? `Đang tải video (${videoUploadProgress}%)...`
+                          : 'Tải video từ máy'
+                    }}
                   </span>
                   <input
                     type="file"
@@ -1067,7 +1134,7 @@ onMounted(() => {
                 </label>
 
                 <span class="text-[11px] text-emerald-800">
-                  <strong>Kéo video từ máy tính</strong> vào đây, bấm <strong>Ctrl+V</strong> dán file/link video hoặc dán URL bên dưới.
+                  <strong>Kéo video từ máy tính</strong>, bấm <strong>Ctrl+V</strong> hoặc dán link <strong>TikTok / YouTube / Facebook / Instagram</strong> để tải không watermark.
                 </span>
               </div>
 
@@ -1086,25 +1153,27 @@ onMounted(() => {
                     v-model="mediaURL"
                     @keydown.enter.prevent="applyVideoLink(mediaURL)"
                     type="url"
-                    placeholder="Dán đường dẫn video công khai (https://...mp4 / mov / webm)"
+                    placeholder="Dán link TikTok, YouTube, Facebook, Instagram hoặc link .mp4..."
                     class="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs !text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600"
                   />
                 </div>
                 <button
                   type="button"
                   @click="applyVideoLink(mediaURL)"
-                  class="rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+                  :disabled="fetchingSocialVideo"
+                  class="inline-flex items-center gap-1.5 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 cursor-pointer"
                 >
-                  Áp dụng link
+                  <Loader2 v-if="fetchingSocialVideo" class="h-3.5 w-3.5 animate-spin" />
+                  <span>{{ fetchingSocialVideo ? 'Đang lấy...' : 'Lấy / Áp dụng' }}</span>
                 </button>
               </div>
 
-              <!-- Khung xem trước Video -->
+              <!-- Khung xem trước Video + Nút Tải về máy -->
               <div
                 v-if="videoPreviewURL || mediaURL"
                 class="overflow-hidden rounded-xl border border-slate-200 bg-slate-950"
               >
-                <div class="flex items-center justify-between gap-2 bg-slate-900 px-3 py-2 text-white">
+                <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-900 px-3 py-2 text-white">
                   <div class="min-w-0 flex items-center gap-2">
                     <Video class="h-3.5 w-3.5 shrink-0 text-emerald-400" />
                     <span class="truncate text-[11px] font-semibold">
@@ -1112,25 +1181,38 @@ onMounted(() => {
                     </span>
                     <span
                       v-if="videoFileSizeLabel"
-                      class="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300"
+                      class="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-emerald-300"
                     >
                       {{ videoFileSizeLabel }}
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    @click="clearVideoAttachment"
-                    title="Xóa video"
-                    class="inline-flex items-center gap-1 rounded-lg bg-rose-600/90 px-2 py-1 text-[10px] font-bold text-white hover:bg-rose-600 cursor-pointer"
-                  >
-                    <Trash2 class="h-3 w-3" />
-                    <span>Gỡ video</span>
-                  </button>
+                  <div class="flex items-center gap-1.5">
+                    <a
+                      :href="resolveMediaDownloadURL(videoPreviewURL || mediaURL)"
+                      :download="videoFileName || 'video_no_watermark.mp4'"
+                      target="_blank"
+                      rel="noopener"
+                      class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 cursor-pointer"
+                    >
+                      <Download class="h-3 w-3" />
+                      <span>Tải về máy</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      @click="clearVideoAttachment"
+                      title="Xóa video"
+                      class="inline-flex items-center gap-1 rounded-lg bg-rose-600/90 px-2 py-1 text-[10px] font-bold text-white hover:bg-rose-600 cursor-pointer"
+                    >
+                      <Trash2 class="h-3 w-3" />
+                      <span>Gỡ video</span>
+                    </button>
+                  </div>
                 </div>
 
                 <video
-                  :src="videoPreviewURL || mediaURL"
+                  :src="resolveMediaDownloadURL(videoPreviewURL || mediaURL)"
                   controls
                   playsinline
                   preload="metadata"
@@ -1214,7 +1296,7 @@ onMounted(() => {
             <button
               type="button"
               @click="handleSubmit(true)"
-              :disabled="submitting || uploadingMedia || uploadingVideo || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
+              :disabled="submitting || uploadingMedia || uploadingVideo || fetchingSocialVideo || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
               class="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
             >
               <Send class="h-3.5 w-3.5" />
@@ -1224,7 +1306,7 @@ onMounted(() => {
             <button
               type="button"
               @click="handleSubmit(false)"
-              :disabled="submitting || uploadingMedia || uploadingVideo || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
+              :disabled="submitting || uploadingMedia || uploadingVideo || fetchingSocialVideo || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
               class="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-2xs transition hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
             >
               <Loader2 v-if="submitting" class="h-3.5 w-3.5 animate-spin" />

@@ -40,6 +40,7 @@ func main() {
 	pageHandler := handlers.NewFacebookPageHandler(db, cfg)
 	aiHandler := handlers.NewAIHandler(db, cfg)
 	postAIHandler := handlers.NewPostAIHandler(db, cfg, aiHandler)
+	videoDownloader := handlers.NewVideoDownloaderHandler()
 
 	inboxHandler := handlers.NewInboxHandler(db, cfg)
 	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
@@ -163,9 +164,10 @@ func main() {
 		postsGroup.GET("", postHandler.ListScheduledPosts)
 		postsGroup.POST("", postHandler.CreateScheduledPost)
 		postsGroup.POST("/ai-rewrite", postAIHandler.RewriteContent)
-		postsGroup.POST("/:id/publish-now", postHandler.PublishNowPost)
 		postsGroup.POST("/upload-images", postAIHandler.UploadPostImages)
 		postsGroup.POST("/upload-videos", postAIHandler.UploadPostVideos)
+		postsGroup.POST("/fetch-social-video", videoDownloader.FetchSocialVideo)
+		postsGroup.POST("/:id/publish-now", postHandler.PublishNowPost)
 		postsGroup.DELETE("/:id", postHandler.DeleteScheduledPost)
 	}
 
