@@ -67,9 +67,14 @@ const mediaType = ref<'none' | 'image' | 'video'>('none')
 const mediaURL = ref('')
 const mediaPreviewURL = ref('')
 const mediaGallery = ref<string[]>([])
+const videoPreviewURL = ref('')
+const videoFileName = ref('')
+const videoFileSizeLabel = ref('')
 const scheduledDateTime = ref('')
 const isDraggingMedia = ref(false)
 const uploadingMedia = ref(false)
+const uploadingVideo = ref(false)
+const videoUploadProgress = ref(0)
 const copiedIndex = ref<number | null>(null)
 const copiedSuggestionIndex = ref<number | null>(null)
 
@@ -113,6 +118,13 @@ const goldenHours = [
   { label: '21:00 Tối', hour: 21, minute: 0 }
 ]
 
+const isVideoLinkPattern = (text: string) =>
+  /^https?:\/\/.+\.(mp4|mov|webm|m4v|avi|mkv)(\?.*)?$/i.test(text) ||
+  /^https?:\/\/(www\.)?(youtube\.com|youtu\.be|facebook\.com\/.*\/videos|fb\.watch|tiktok\.com|vimeo\.com)\/.+/i.test(text)
+
+const isImageLinkPattern = (text: string) =>
+  /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(text)
+
 const filteredPages = computed(() => {
   const q = pageSearch.value.trim().toLowerCase()
   if (!q) return pages.value
@@ -142,6 +154,12 @@ function applyGoldenHour(hour: number, minute: number) {
   scheduledDateTime.value = toLocalDateTimeInput(target)
 }
 
+function formatFileSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return ''
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
 function toggleAllPages() {
   if (isAllSelected.value) {
     selectedPageIDs.value = []
@@ -159,27 +177,63 @@ function toggleSinglePage(pageID: string) {
   }
 }
 
+function clearVideoAttachment() {
+  if (videoPreviewURL.value.startsWith('blob:')) {
+    URL.revokeObjectURL(videoPreviewURL.value)
+  }
+  mediaURL.value = ''
+  videoPreviewURL.value = ''
+  videoFileName.value = ''
+  videoFileSizeLabel.value = ''
+  videoUploadProgress.value = 0
+}
+
 function selectMediaType(nextType: 'none' | 'image' | 'video') {
   mediaType.value = nextType
   if (nextType === 'none') {
     mediaURL.value = ''
     mediaPreviewURL.value = ''
     mediaGallery.value = []
+    clearVideoAttachment()
+  } else if (nextType === 'image') {
+    clearVideoAttachment()
   } else if (nextType === 'video') {
     mediaPreviewURL.value = ''
     mediaGallery.value = []
+    mediaURL.value = ''
   }
 }
 
 function applyImageLink(urlValue: string) {
   const clean = urlValue.trim()
   if (!clean) return
+  clearVideoAttachment()
   mediaType.value = 'image'
   mediaURL.value = clean
   mediaPreviewURL.value = clean
   if (!mediaGallery.value.includes(clean)) {
     mediaGallery.value.push(clean)
   }
+}
+
+function applyVideoLink(urlValue: string) {
+  const clean = urlValue.trim()
+  if (!clean) return
+  if (!/^https?:\/\/.+/i.test(clean)) {
+    errorMsg.value = 'Đường dẫn video phải bắt đầu bằng http:// hoặc https://'
+    return
+  }
+  errorMsg.value = ''
+  mediaType.value = 'video'
+  mediaGallery.value = []
+  mediaPreviewURL.value = ''
+  if (videoPreviewURL.value.startsWith('blob:')) {
+    URL.revokeObjectURL(videoPreviewURL.value)
+  }
+  mediaURL.value = clean
+  videoPreviewURL.value = clean
+  videoFileName.value = clean.split('/').pop()?.split('?')[0] || 'Video từ liên kết'
+  videoFileSizeLabel.value = 'URL trực tuyến'
 }
 
 function removeGalleryImage(idx: number) {
@@ -245,6 +299,7 @@ async function processImageFiles(files: File[]) {
   const imgs = files.filter((f) => f.type.startsWith('image/'))
   if (imgs.length === 0) return
 
+  clearVideoAttachment()
   uploadingMedia.value = true
   errorMsg.value = ''
   mediaType.value = 'image'
@@ -288,6 +343,67 @@ async function processImageFiles(files: File[]) {
   }
 }
 
+async function processVideoFiles(files: File[]) {
+  const videoFile = files.find(
+    (f) => f.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(f.name)
+  )
+  if (!videoFile) return
+
+  const maxBytes = 150 * 1024 * 1024 // 150MB
+  if (videoFile.size > maxBytes) {
+    errorMsg.value = `Video "${videoFile.name}" (${formatFileSize(videoFile.size)}) vượt quá giới hạn 150MB.`
+    return
+  }
+
+  errorMsg.value = ''
+  mediaType.value = 'video'
+  mediaGallery.value = []
+  mediaPreviewURL.value = ''
+
+  if (videoPreviewURL.value.startsWith('blob:')) {
+    URL.revokeObjectURL(videoPreviewURL.value)
+  }
+  videoPreviewURL.value = URL.createObjectURL(videoFile)
+  videoFileName.value = videoFile.name
+  videoFileSizeLabel.value = formatFileSize(videoFile.size)
+
+  uploadingVideo.value = true
+  videoUploadProgress.value = 0
+
+  try {
+    const fd = new FormData()
+    fd.append('videos', videoFile)
+
+    const { data } = await api.post<{ url?: string; urls?: string[] }>('/posts/upload-videos', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (evt) => {
+        if (evt.total) {
+          videoUploadProgress.value = Math.min(99, Math.round((evt.loaded * 100) / evt.total))
+        }
+      }
+    })
+
+    const uploadedUrl = data?.url || data?.urls?.[0] || ''
+    if (uploadedUrl) {
+      mediaURL.value = uploadedUrl
+      videoUploadProgress.value = 100
+      noticeMsg.value = `Đã tải lên video "${videoFile.name}" thành công!`
+      setTimeout(() => {
+        if (noticeMsg.value.startsWith('Đã tải lên video')) noticeMsg.value = ''
+      }, 2500)
+      return
+    }
+    throw new Error('Server không trả về đường dẫn video')
+  } catch (err: any) {
+    errorMsg.value =
+      err?.response?.data?.error ||
+      'Không tải được video lên server. Hãy kiểm tra route /api/v1/posts/upload-videos hoặc dán link video MP4 công khai vào ô bên dưới.'
+    mediaURL.value = ''
+  } finally {
+    uploadingVideo.value = false
+  }
+}
+
 async function handleFileUpload(e: Event) {
   const input = e.target as HTMLInputElement
   if (input.files && input.files.length > 0) {
@@ -296,42 +412,83 @@ async function handleFileUpload(e: Event) {
   }
 }
 
+async function handleVideoFileUpload(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files && input.files.length > 0) {
+    await processVideoFiles(Array.from(input.files))
+    input.value = ''
+  }
+}
+
 async function handleDropFiles(e: DragEvent) {
   isDraggingMedia.value = false
   const dropped = Array.from(e.dataTransfer?.files || [])
   if (dropped.length > 0) {
-    await processImageFiles(dropped)
+    const hasVideo = dropped.some(
+      (f) => f.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(f.name)
+    )
+    if (hasVideo) {
+      await processVideoFiles(dropped)
+    } else {
+      await processImageFiles(dropped)
+    }
     return
   }
 
-  const draggedUri = e.dataTransfer?.getData('text/uri-list') || e.dataTransfer?.getData('text/plain') || ''
-  if (/^https?:\/\/.+/i.test(draggedUri.trim())) {
-    applyImageLink(draggedUri.trim())
+  const draggedUri = (
+    e.dataTransfer?.getData('text/uri-list') ||
+    e.dataTransfer?.getData('text/plain') ||
+    ''
+  ).trim()
+  if (/^https?:\/\/.+/i.test(draggedUri)) {
+    if (isVideoLinkPattern(draggedUri) || mediaType.value === 'video') {
+      applyVideoLink(draggedUri)
+    } else {
+      applyImageLink(draggedUri)
+    }
   }
 }
 
 async function handlePasteOnComposer(e: ClipboardEvent) {
   const items = Array.from(e.clipboardData?.items || [])
-  const pastedFiles: File[] = []
+  const pastedImages: File[] = []
+  const pastedVideos: File[] = []
 
   for (const item of items) {
-    if (item.kind === 'file' && item.type.startsWith('image/')) {
+    if (item.kind === 'file') {
       const blob = item.getAsFile()
-      if (blob) {
+      if (!blob) continue
+      if (item.type.startsWith('video/') || /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(blob.name)) {
+        const ext = item.type.split('/')[1] || 'mp4'
+        pastedVideos.push(
+          new File([blob], blob.name || `paste_${Date.now()}.${ext}`, { type: item.type || 'video/mp4' })
+        )
+      } else if (item.type.startsWith('image/')) {
         const ext = item.type.split('/')[1] || 'png'
-        pastedFiles.push(new File([blob], `paste_${Date.now()}.${ext}`, { type: item.type }))
+        pastedImages.push(new File([blob], `paste_${Date.now()}.${ext}`, { type: item.type }))
       }
     }
   }
 
-  if (pastedFiles.length > 0) {
+  if (pastedVideos.length > 0) {
     e.preventDefault()
-    await processImageFiles(pastedFiles)
+    await processVideoFiles(pastedVideos)
+    return
+  }
+
+  if (pastedImages.length > 0) {
+    e.preventDefault()
+    await processImageFiles(pastedImages)
     return
   }
 
   const text = e.clipboardData?.getData('text/plain')?.trim() || ''
-  if (/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(text)) {
+  if (isVideoLinkPattern(text)) {
+    e.preventDefault()
+    applyVideoLink(text)
+    return
+  }
+  if (isImageLinkPattern(text)) {
     e.preventDefault()
     applyImageLink(text)
   }
@@ -341,17 +498,29 @@ async function handleQuickClipboardAction() {
   try {
     if (navigator.clipboard && 'read' in navigator.clipboard) {
       const items = await navigator.clipboard.read()
-      const files: File[] = []
+      const imgFiles: File[] = []
+      const vidFiles: File[] = []
       for (const item of items) {
+        const vidMime = item.types.find((t) => t.startsWith('video/'))
+        if (vidMime) {
+          const blob = await item.getType(vidMime)
+          const ext = vidMime.split('/')[1] || 'mp4'
+          vidFiles.push(new File([blob], `clipboard_${Date.now()}.${ext}`, { type: vidMime }))
+          continue
+        }
         const imgMime = item.types.find((t) => t.startsWith('image/'))
         if (imgMime) {
           const blob = await item.getType(imgMime)
           const ext = imgMime.split('/')[1] || 'png'
-          files.push(new File([blob], `clipboard_${Date.now()}.${ext}`, { type: imgMime }))
+          imgFiles.push(new File([blob], `clipboard_${Date.now()}.${ext}`, { type: imgMime }))
         }
       }
-      if (files.length > 0) {
-        await processImageFiles(files)
+      if (vidFiles.length > 0) {
+        await processVideoFiles(vidFiles)
+        return
+      }
+      if (imgFiles.length > 0) {
+        await processImageFiles(imgFiles)
         return
       }
     }
@@ -359,14 +528,16 @@ async function handleQuickClipboardAction() {
     const txt = await navigator.clipboard?.readText()
     if (txt?.trim()) {
       const clean = txt.trim()
-      if (/^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(clean)) {
+      if (isVideoLinkPattern(clean)) {
+        applyVideoLink(clean)
+      } else if (isImageLinkPattern(clean)) {
         applyImageLink(clean)
       } else {
         content.value = content.value ? `${content.value}\n${clean}` : clean
       }
     }
   } catch {
-    errorMsg.value = 'Hãy nhấp vào khung soạn thảo và bấm Ctrl+V để dán ảnh hoặc nội dung.'
+    errorMsg.value = 'Hãy nhấp vào khung soạn thảo và bấm Ctrl+V để dán ảnh, video hoặc nội dung.'
   }
 }
 
@@ -545,7 +716,15 @@ async function loadData() {
 }
 
 async function handleSubmit(publishNow: boolean) {
-  if ((!content.value.trim() && mediaGallery.length === 0 && !mediaURL.value.trim()) || selectedPageIDs.value.length === 0 || submitting.value) {
+  if (uploadingMedia.value || uploadingVideo.value) {
+    errorMsg.value = 'Vui lòng chờ quá trình tải tệp hoàn tất trước khi đăng bài.'
+    return
+  }
+  if (
+    (!content.value.trim() && mediaGallery.value.length === 0 && !mediaURL.value.trim()) ||
+    selectedPageIDs.value.length === 0 ||
+    submitting.value
+  ) {
     return
   }
   submitting.value = true
@@ -579,6 +758,7 @@ async function handleSubmit(publishNow: boolean) {
     mediaURL.value = ''
     mediaPreviewURL.value = ''
     mediaGallery.value = []
+    clearVideoAttachment()
     mediaType.value = 'none'
     await loadData()
     setTimeout(() => {
@@ -709,7 +889,7 @@ onMounted(() => {
               class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-bold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
             >
               <ClipboardPaste class="h-3.5 w-3.5 text-emerald-600" />
-              <span>Dán ảnh / Text (Ctrl+V)</span>
+              <span>Dán ảnh / Video / Text (Ctrl+V)</span>
             </button>
           </div>
 
@@ -717,7 +897,7 @@ onMounted(() => {
             v-model="content"
             @paste="handlePasteOnComposer"
             rows="9"
-            placeholder="Nhập nội dung bài viết hoặc dán bài mẫu vào đây rồi bấm Sinh bài bên phải... Nhấn Ctrl+V để dán ảnh vừa copy hoặc kéo ảnh từ máy tính vào đây."
+            placeholder="Nhập nội dung bài viết hoặc dán bài mẫu vào đây rồi bấm Sinh bài bên phải... Nhấn Ctrl+V để dán ảnh/video vừa copy hoặc kéo tệp từ máy tính vào đây."
             class="w-full rounded-xl border border-slate-200 bg-slate-50/50 p-3.5 text-sm leading-relaxed !text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-emerald-600 focus:bg-white focus:ring-2 focus:ring-emerald-100"
           />
 
@@ -768,7 +948,13 @@ onMounted(() => {
                 "
               >
                 <Video class="h-3.5 w-3.5" />
-                <span>Đính kèm Video (URL)</span>
+                <span>Video (Dán / Kéo thả / Tải / Link)</span>
+                <span
+                  v-if="mediaType === 'video' && (mediaURL || videoPreviewURL)"
+                  class="rounded-full bg-emerald-600 px-1.5 text-[10px] font-bold text-white"
+                >
+                  1
+                </span>
               </button>
             </div>
 
@@ -859,13 +1045,99 @@ onMounted(() => {
               </div>
             </div>
 
-            <input
+            <!-- Khu vực Video (Dán / Kéo thả / Tải từ máy / Link URL) -->
+            <div
               v-if="mediaType === 'video'"
-              v-model="mediaURL"
-              type="url"
-              placeholder="Dán đường dẫn video công khai (https://...mp4)"
-              class="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs !text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600"
-            />
+              class="space-y-3 rounded-2xl border-2 border-dashed bg-emerald-50/30 p-4 transition"
+              :class="isDraggingMedia ? 'border-emerald-600 bg-emerald-50/80' : 'border-emerald-200/90'"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <label class="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-emerald-700 cursor-pointer">
+                  <Loader2 v-if="uploadingVideo" class="h-3.5 w-3.5 animate-spin" />
+                  <Upload v-else class="h-3.5 w-3.5" />
+                  <span>
+                    {{ uploadingVideo ? `Đang tải video (${videoUploadProgress}%)...` : 'Tải video từ máy' }}
+                  </span>
+                  <input
+                    type="file"
+                    accept="video/mp4,video/quicktime,video/webm,video/x-m4v,video/*"
+                    class="hidden"
+                    @change="handleVideoFileUpload"
+                  />
+                </label>
+
+                <span class="text-[11px] text-emerald-800">
+                  <strong>Kéo video từ máy tính</strong> vào đây, bấm <strong>Ctrl+V</strong> dán file/link video hoặc dán URL bên dưới.
+                </span>
+              </div>
+
+              <!-- Thanh tiến trình upload video -->
+              <div v-if="uploadingVideo" class="h-1.5 w-full overflow-hidden rounded-full bg-emerald-100">
+                <div
+                  class="h-full bg-emerald-600 transition-all duration-200"
+                  :style="{ width: `${videoUploadProgress}%` }"
+                />
+              </div>
+
+              <div class="flex gap-2">
+                <div class="relative flex-1">
+                  <Link2 class="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                  <input
+                    v-model="mediaURL"
+                    @keydown.enter.prevent="applyVideoLink(mediaURL)"
+                    type="url"
+                    placeholder="Dán đường dẫn video công khai (https://...mp4 / mov / webm)"
+                    class="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs !text-slate-900 placeholder:text-slate-400 outline-none focus:border-emerald-600"
+                  />
+                </div>
+                <button
+                  type="button"
+                  @click="applyVideoLink(mediaURL)"
+                  class="rounded-xl border border-emerald-300 bg-white px-3 py-2 text-xs font-bold text-emerald-700 hover:bg-emerald-50 cursor-pointer"
+                >
+                  Áp dụng link
+                </button>
+              </div>
+
+              <!-- Khung xem trước Video -->
+              <div
+                v-if="videoPreviewURL || mediaURL"
+                class="overflow-hidden rounded-xl border border-slate-200 bg-slate-950"
+              >
+                <div class="flex items-center justify-between gap-2 bg-slate-900 px-3 py-2 text-white">
+                  <div class="min-w-0 flex items-center gap-2">
+                    <Video class="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    <span class="truncate text-[11px] font-semibold">
+                      {{ videoFileName || mediaURL }}
+                    </span>
+                    <span
+                      v-if="videoFileSizeLabel"
+                      class="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300"
+                    >
+                      {{ videoFileSizeLabel }}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    @click="clearVideoAttachment"
+                    title="Xóa video"
+                    class="inline-flex items-center gap-1 rounded-lg bg-rose-600/90 px-2 py-1 text-[10px] font-bold text-white hover:bg-rose-600 cursor-pointer"
+                  >
+                    <Trash2 class="h-3 w-3" />
+                    <span>Gỡ video</span>
+                  </button>
+                </div>
+
+                <video
+                  :src="videoPreviewURL || mediaURL"
+                  controls
+                  playsinline
+                  preload="metadata"
+                  class="max-h-64 w-full bg-black object-contain"
+                />
+              </div>
+            </div>
           </div>
 
           <!-- Chọn thời gian & Khung giờ vàng -->
@@ -942,7 +1214,7 @@ onMounted(() => {
             <button
               type="button"
               @click="handleSubmit(true)"
-              :disabled="submitting || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
+              :disabled="submitting || uploadingMedia || uploadingVideo || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
               class="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-xs font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
             >
               <Send class="h-3.5 w-3.5" />
@@ -952,7 +1224,7 @@ onMounted(() => {
             <button
               type="button"
               @click="handleSubmit(false)"
-              :disabled="submitting || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
+              :disabled="submitting || uploadingMedia || uploadingVideo || (!content.trim() && mediaGallery.length === 0 && !mediaURL.trim()) || selectedPageIDs.length === 0"
               class="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-2.5 text-xs font-bold text-white shadow-2xs transition hover:bg-emerald-700 disabled:opacity-50 cursor-pointer"
             >
               <Loader2 v-if="submitting" class="h-3.5 w-3.5 animate-spin" />

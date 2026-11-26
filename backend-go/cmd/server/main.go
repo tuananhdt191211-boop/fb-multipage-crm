@@ -165,6 +165,7 @@ func main() {
 		postsGroup.POST("/ai-rewrite", postAIHandler.RewriteContent)
 		postsGroup.POST("/:id/publish-now", postHandler.PublishNowPost)
 		postsGroup.POST("/upload-images", postAIHandler.UploadPostImages)
+		postsGroup.POST("/upload-videos", postAIHandler.UploadPostVideos)
 		postsGroup.DELETE("/:id", postHandler.DeleteScheduledPost)
 	}
 

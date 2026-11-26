@@ -289,3 +289,66 @@ func (h *PostAIHandler) UploadPostImages(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"urls": urls})
 }
+
+// UploadPostVideos POST /api/v1/posts/upload-videos
+func (h *PostAIHandler) UploadPostVideos(c *gin.Context) {
+	// Giới hạn tối đa 150MB cho mỗi lần tải video
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 150<<20)
+
+	form, err := c.MultipartForm()
+	if err != nil || form == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File video quá lớn (tối đa 150MB) hoặc dữ liệu tải lên không hợp lệ."})
+		return
+	}
+
+	files := form.File["videos"]
+	if len(files) == 0 {
+		files = form.File["video"]
+	}
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng chọn ít nhất 1 file video."})
+		return
+	}
+
+	uploadDir := filepath.Join("uploads", "posts")
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không tạo được thư mục lưu video."})
+		return
+	}
+
+	allowed := map[string]bool{
+		".mp4":  true,
+		".mov":  true,
+		".webm": true,
+		".m4v":  true,
+		".avi":  true,
+		".mkv":  true,
+	}
+
+	var urls []string
+	for idx, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Filename))
+		if ext == "" {
+			ext = ".mp4"
+		}
+		if !allowed[ext] {
+			continue
+		}
+
+		filename := fmt.Sprintf("video_%d_%d%s", time.Now().UnixNano(), idx, ext)
+		dstPath := filepath.Join(uploadDir, filename)
+		if err := c.SaveUploadedFile(file, dstPath); err == nil {
+			urls = append(urls, "/uploads/posts/"+filename)
+		}
+	}
+
+	if len(urls) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Định dạng video không hỗ trợ (chỉ nhận MP4, MOV, WEBM, M4V, AVI, MKV)."})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"url":  urls[0],
+		"urls": urls,
+	})
+}
