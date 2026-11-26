@@ -80,6 +80,24 @@ func NewBroadcastHandler(db *gorm.DB, cfg *config.Config) *BroadcastHandler {
 		  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()
 	`).Error
 
+	// Đồng bộ dữ liệu từ cột psid hoặc sender_id cũ sang customer_psid nếu bảng conversations cũ bị thiếu
+	_ = db.Exec(`
+		DO $$
+		BEGIN
+		  IF EXISTS (
+		    SELECT 1 FROM information_schema.columns
+		    WHERE table_name = 'conversations' AND column_name = 'psid'
+		  ) THEN
+		    EXECUTE 'UPDATE conversations SET customer_psid = psid WHERE COALESCE(customer_psid, '''') = '''' AND COALESCE(psid, '''') <> ''''';
+		  ELSIF EXISTS (
+		    SELECT 1 FROM information_schema.columns
+		    WHERE table_name = 'conversations' AND column_name = 'sender_id'
+		  ) THEN
+		    EXECUTE 'UPDATE conversations SET customer_psid = sender_id WHERE COALESCE(customer_psid, '''') = '''' AND COALESCE(sender_id, '''') <> ''''';
+		  END IF;
+		END $$;
+	`).Error
+
 	_ = db.Model(&BroadcastMessage{}).Where("status = ?", "processing").Update("status", "pending").Error
 
 	loc, err := time.LoadLocation("Asia/Ho_Chi_Minh")
@@ -275,6 +293,16 @@ func (h *BroadcastHandler) startWorker() {
 			continue
 		}
 
+		psid := strings.TrimSpace(msg.RecipientPSID)
+		if psid == "" {
+			psid = strings.TrimSpace(conv.CustomerPSID)
+		}
+		if psid == "" {
+			_ = h.DB.Model(&msg).Updates(map[string]any{"status": "failed", "error_message": "Thiếu PSID khách hàng"}).Error
+			_ = h.DB.Model(&camp).UpdateColumn("failed_count", gorm.Expr("failed_count + 1")).Error
+			continue
+		}
+
 		pageToken, err := security.DecryptSecret(page.EncryptedPageToken, h.getEncryptionKey())
 		if err != nil || pageToken == "" {
 			_ = h.DB.Model(&msg).Updates(map[string]any{"status": "failed", "error_message": "Lỗi giải mã Page Access Token"}).Error
@@ -282,7 +310,7 @@ func (h *BroadcastHandler) startWorker() {
 			continue
 		}
 
-		fbMsgID, errCode, errMsg := h.sendDirectMessage(page.PageID, pageToken, msg.RecipientPSID, msg.RenderedText, camp.OutOfWindowTag)
+		fbMsgID, errCode, errMsg := h.sendDirectMessage(page.PageID, pageToken, psid, msg.RenderedText, camp.OutOfWindowTag)
 
 		if errCode == 0 && errMsg == "" {
 			now := time.Now()
@@ -307,9 +335,9 @@ func (h *BroadcastHandler) startWorker() {
 				SentAt:         now,
 			}).Error
 
-			log.Printf("[Broadcast] Đã gửi thành công tới %s (%s)", msg.RecipientName, msg.RecipientPSID)
+			log.Printf("[Broadcast] Đã gửi thành công tới %s (%s)", msg.RecipientName, psid)
 		} else {
-			log.Printf("[Broadcast] Gửi thất bại tới %s (Code %d): %s", msg.RecipientPSID, errCode, errMsg)
+			log.Printf("[Broadcast] Gửi thất bại tới %s (Code %d): %s", psid, errCode, errMsg)
 			_ = h.DB.Model(&msg).Updates(map[string]any{
 				"status":        "failed",
 				"error_code":    errCode,
@@ -480,8 +508,9 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		}
 	}
 
-	// Bước 2: Lấy TẤT CẢ khách hàng thuộc Page đó trong bảng conversations (cả cũ lẫn mới)
-	q := h.DB.Model(&models.Conversation{}).Where("page_id = ?", req.PageID)
+	// Bước 2: Lấy TẤT CẢ khách hàng thuộc Page đó có CustomerPSID hợp lệ
+	q := h.DB.Model(&models.Conversation{}).
+		Where("page_id = ? AND COALESCE(TRIM(customer_psid), '') <> ''", req.PageID)
 
 	switch req.TargetMode {
 	case "within_24h":
@@ -507,7 +536,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 
 	if len(validConvs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Không tìm thấy khách hàng nào trong hộp thư Meta Business của Page này. Hãy kiểm tra lại quyền tin nhắn của Page!",
+			"error": "Không tìm thấy khách hàng có PSID hợp lệ trong Page này. Hãy mở mục Hộp thư bấm 'Đồng bộ tin nhắn' rồi thử lại!",
 		})
 		return
 	}
@@ -534,6 +563,10 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 
 	var msgs []BroadcastMessage
 	for _, cv := range validConvs {
+		psid := strings.TrimSpace(cv.CustomerPSID)
+		if psid == "" {
+			continue
+		}
 		tpl := validTemplates[rand.Intn(len(validTemplates))]
 		name := strings.TrimSpace(cv.CustomerName)
 		if name == "" {
@@ -546,11 +579,17 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 			CampaignID:     camp.ID,
 			PageID:         req.PageID,
 			ConversationID: cv.ID,
-			RecipientPSID:  cv.CustomerPSID,
+			RecipientPSID:  psid,
 			RecipientName:  cv.CustomerName,
 			RenderedText:   rendered,
 			Status:         "pending",
 		})
+	}
+
+	if len(msgs) == 0 {
+		_ = h.DB.Delete(&camp).Error
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Các hội thoại hiện tại chưa có CustomerPSID hợp lệ."})
+		return
 	}
 
 	if err := h.DB.CreateInBatches(&msgs, 100).Error; err != nil {
