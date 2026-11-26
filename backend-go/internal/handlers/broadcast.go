@@ -24,13 +24,13 @@ type BroadcastCampaign struct {
 	PageID          string    `gorm:"index;not null" json:"page_id"`
 	Name            string    `gorm:"not null" json:"name"`
 	TemplatesJSON   string    `gorm:"type:text;not null" json:"-"`
-	TargetMode      string    `gorm:"default:'all'" json:"target_mode"` // all | within_24h | over_24h
+	TargetMode      string    `gorm:"default:'all'" json:"target_mode"`
 	OutOfWindowTag  string    `gorm:"default:'POST_PURCHASE_UPDATE'" json:"out_of_window_tag"`
 	MinDelaySec     int       `gorm:"default:4" json:"min_delay_sec"`
 	MaxDelaySec     int       `gorm:"default:9" json:"max_delay_sec"`
 	BatchSize       int       `gorm:"default:20" json:"batch_size"`
 	BatchPauseSec   int       `gorm:"default:60" json:"batch_pause_sec"`
-	Status          string    `gorm:"index;default:'running'" json:"status"` // running | paused | completed
+	Status          string    `gorm:"index;default:'running'" json:"status"`
 	PauseReason     string    `json:"pause_reason"`
 	TotalRecipients int       `json:"total_recipients"`
 	SentCount       int       `json:"sent_count"`
@@ -47,7 +47,7 @@ type BroadcastMessage struct {
 	RecipientPSID  string     `gorm:"not null" json:"recipient_psid"`
 	RecipientName  string     `json:"recipient_name"`
 	RenderedText   string     `gorm:"type:text;not null" json:"rendered_text"`
-	Status         string     `gorm:"index;default:'pending'" json:"status"` // pending | processing | sent | failed | cancelled
+	Status         string     `gorm:"index;default:'pending'" json:"status"`
 	FBMessageID    string     `json:"fb_message_id"`
 	ErrorCode      int        `json:"error_code"`
 	ErrorMessage   string     `json:"error_message"`
@@ -63,9 +63,7 @@ type BroadcastHandler struct {
 }
 
 func NewBroadcastHandler(db *gorm.DB, cfg *config.Config) *BroadcastHandler {
-	if err := db.AutoMigrate(&BroadcastCampaign{}, &BroadcastMessage{}); err != nil {
-		log.Printf("[Broadcast] Cảnh báo AutoMigrate: %v", err)
-	}
+	_ = db.AutoMigrate(&BroadcastCampaign{}, &BroadcastMessage{})
 
 	_ = db.Exec(`
 		ALTER TABLE broadcast_messages
@@ -88,8 +86,7 @@ func NewBroadcastHandler(db *gorm.DB, cfg *config.Config) *BroadcastHandler {
 		ALTER TABLE conversations
 		  ADD COLUMN IF NOT EXISTS is_unsubscribed BOOLEAN NOT NULL DEFAULT FALSE,
 		  ADD COLUMN IF NOT EXISTS unsubscribed_at TIMESTAMPTZ,
-		  ADD COLUMN IF NOT EXISTS last_auto_sent_at TIMESTAMPTZ,
-		  ADD COLUMN IF NOT EXISTS last_customer_message_at TIMESTAMPTZ
+		  ADD COLUMN IF NOT EXISTS last_auto_sent_at TIMESTAMPTZ
 	`).Error
 
 	loc, err := time.LoadLocation("Asia/Ho_Chi_Minh")
@@ -114,110 +111,9 @@ func (h *BroadcastHandler) getEncryptionKey() string {
 	return "default-dev-master-key-change-in-prod"
 }
 
-// syncPageConversationsFromMeta đồng bộ toàn bộ khách từng nhắn tin vào Fanpage từ Facebook Graph API
-func (h *BroadcastHandler) syncPageConversationsFromMeta(pageID, pageToken string, maxFetch int) int {
-	if maxFetch <= 0 {
-		maxFetch = 500
-	}
-	nextURL := fmt.Sprintf(
-		"https://graph.facebook.com/v21.0/%s/conversations?fields=id,updated_time,participants&limit=100&access_token=%s",
-		pageID, pageToken,
-	)
-
-	synced := 0
-	for nextURL != "" && synced < maxFetch {
-		resp, err := h.HTTPClient.Get(nextURL)
-		if err != nil {
-			log.Printf("[Broadcast Sync] Lỗi gọi Graph API conversations cho Page %s: %v", pageID, err)
-			break
-		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		var parsed struct {
-			Data []struct {
-				ID           string `json:"id"`
-				UpdatedTime  string `json:"updated_time"`
-				Participants struct {
-					Data []struct {
-						ID   string `json:"id"`
-						Name string `json:"name"`
-					} `json:"data"`
-				} `json:"participants"`
-			} `json:"data"`
-			Paging struct {
-				Next string `json:"next"`
-			} `json:"paging"`
-			Error *struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-
-		if err := json.Unmarshal(body, &parsed); err != nil || parsed.Error != nil {
-			if parsed.Error != nil {
-				log.Printf("[Broadcast Sync] Meta báo lỗi khi lấy danh sách khách Page %s: %s", pageID, parsed.Error.Message)
-			}
-			break
-		}
-
-		for _, item := range parsed.Data {
-			var customerPSID, customerName string
-			for _, p := range item.Participants.Data {
-				if p.ID != pageID && p.ID != "" {
-					customerPSID = p.ID
-					customerName = p.Name
-					break
-				}
-			}
-			if customerPSID == "" {
-				continue
-			}
-
-			updatedAt := time.Now()
-			if t, err := time.Parse("2006-01-02T15:04:05-0700", item.UpdatedTime); err == nil {
-				updatedAt = t
-			} else if t, err := time.Parse(time.RFC3339, item.UpdatedTime); err == nil {
-				updatedAt = t
-			}
-
-			var existing models.Conversation
-			err := h.DB.Where("page_id = ? AND customer_psid = ?", pageID, customerPSID).First(&existing).Error
-			if err != nil {
-				newConv := models.Conversation{
-					PageID:          pageID,
-					CustomerPSID:    customerPSID,
-					CustomerName:    customerName,
-					LastMessageTime: updatedAt,
-				}
-				if createErr := h.DB.Create(&newConv).Error; createErr == nil {
-					synced++
-				}
-			} else {
-				updates := map[string]any{}
-				if existing.CustomerName == "" && customerName != "" {
-					updates["customer_name"] = customerName
-				}
-				if existing.LastMessageTime.IsZero() {
-					updates["last_message_time"] = updatedAt
-				}
-				if len(updates) > 0 {
-					_ = h.DB.Model(&existing).Updates(updates).Error
-				}
-				synced++
-			}
-		}
-
-		nextURL = parsed.Paging.Next
-	}
-
-	log.Printf("[Broadcast Sync] Đã đồng bộ %d khách hàng từ Page %s", synced, pageID)
-	return synced
-}
-
 func (h *BroadcastHandler) startWorker() {
 	sentInBatch := 0
 	consecutiveTagErrors := 0
-	log.Println("[Broadcast Worker] Đã khởi động hàng đợi chăm sóc khách cũ an toàn")
 
 	for {
 		nowVN := time.Now().In(h.vnLoc)
@@ -230,12 +126,7 @@ func (h *BroadcastHandler) startWorker() {
 		var runningCampaignIDs []uint
 		if err := h.DB.Model(&BroadcastCampaign{}).
 			Where("status = ?", "running").
-			Pluck("id", &runningCampaignIDs).Error; err != nil {
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		if len(runningCampaignIDs) == 0 {
+			Pluck("id", &runningCampaignIDs).Error; err != nil || len(runningCampaignIDs) == 0 {
 			sentInBatch = 0
 			time.Sleep(5 * time.Second)
 			continue
@@ -269,7 +160,6 @@ func (h *BroadcastHandler) startWorker() {
 		}
 
 		msg := msgs[0]
-
 		if res := h.DB.Model(&BroadcastMessage{}).
 			Where("id = ? AND status = ?", msg.ID, "pending").
 			Update("status", "processing"); res.RowsAffected == 0 {
@@ -294,6 +184,7 @@ func (h *BroadcastHandler) startWorker() {
 			continue
 		}
 
+		// Kiểm tra khách nhắn trong 24h hay quá 24h
 		var lastCustomerMsg models.Message
 		hasCustMsg := h.DB.Where("conversation_id = ? AND sender_type = ?", conv.ID, "customer").
 			Order("sent_at DESC, id DESC").First(&lastCustomerMsg).Error == nil
@@ -324,9 +215,9 @@ func (h *BroadcastHandler) startWorker() {
 				SentAt:         now,
 			}).Error
 
-			log.Printf("[Broadcast Worker] Đã gửi thành công tin #%d tới %s (%s) | within24h=%v", msg.ID, msg.RecipientName, msg.RecipientPSID, within24h)
+			log.Printf("[Broadcast Worker] Đã gửi tin #%d tới %s (%s)", msg.ID, msg.RecipientName, msg.RecipientPSID)
 		} else {
-			log.Printf("[Broadcast Worker] Gửi thất bại tin #%d tới %s (Code %d): %s", msg.ID, msg.RecipientPSID, errCode, errMsg)
+			log.Printf("[Broadcast Worker] Lỗi gửi tin #%d tới %s (Code %d): %s", msg.ID, msg.RecipientPSID, errCode, errMsg)
 			_ = h.DB.Model(&msg).Updates(map[string]any{
 				"status":        "failed",
 				"error_code":    errCode,
@@ -442,7 +333,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		PageID         string   `json:"page_id" binding:"required"`
 		Name           string   `json:"name" binding:"required"`
 		Templates      []string `json:"templates" binding:"required,min=1"`
-		TargetMode     string   `json:"target_mode"` // all | within_24h | over_24h
+		TargetMode     string   `json:"target_mode"`
 		OutOfWindowTag string   `json:"out_of_window_tag"`
 		CooldownDays   int      `json:"cooldown_days"`
 		MaxRecipients  int      `json:"max_recipients"`
@@ -467,8 +358,8 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		return
 	}
 
-	if req.CooldownDays <= 0 {
-		req.CooldownDays = 7
+	if req.CooldownDays < 0 {
+		req.CooldownDays = 0
 	}
 	if req.MaxRecipients <= 0 || req.MaxRecipients > 1000 {
 		req.MaxRecipients = 500
@@ -489,18 +380,13 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		req.OutOfWindowTag = "POST_PURCHASE_UPDATE"
 	}
 
-	// 1. Đồng bộ toàn bộ khách hàng đã nhắn tin vào Page từ Facebook Graph API trước khi lọc
-	var page models.FacebookPage
-	if err := h.DB.Where("page_id = ? AND is_connected = ?", req.PageID, true).First(&page).Error; err == nil {
-		if pageToken, decErr := security.DecryptSecret(page.EncryptedPageToken, h.getEncryptionKey()); decErr == nil && pageToken != "" {
-			h.syncPageConversationsFromMeta(req.PageID, pageToken, req.MaxRecipients)
-		}
-	}
+	// Lấy toàn bộ khách hàng đã nhắn tin vào Page trong hộp thư CRM
+	q := h.DB.Model(&models.Conversation{}).
+		Where("page_id = ? AND COALESCE(is_unsubscribed, FALSE) = FALSE", req.PageID)
 
-	// 2. Lấy toàn bộ khách hàng hợp lệ của Page
-	q := h.DB.Table("conversations").
-		Where("page_id = ? AND COALESCE(is_unsubscribed, FALSE) = FALSE AND customer_psid <> ''", req.PageID).
-		Where("last_auto_sent_at IS NULL OR last_auto_sent_at <= ?", time.Now().AddDate(0, 0, -req.CooldownDays))
+	if req.CooldownDays > 0 {
+		q = q.Where("last_auto_sent_at IS NULL OR last_auto_sent_at <= ?", time.Now().AddDate(0, 0, -req.CooldownDays))
+	}
 
 	switch req.TargetMode {
 	case "within_24h":
@@ -516,8 +402,19 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if len(convs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Không có khách hàng nào đủ điều kiện gửi an toàn"})
+
+	// Lọc các hội thoại có ID khách hàng hợp lệ
+	var validConvs []models.Conversation
+	for _, cv := range convs {
+		if strings.TrimSpace(cv.CustomerPSID) != "" {
+			validConvs = append(validConvs, cv)
+		}
+	}
+
+	if len(validConvs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Tìm thấy %d hội thoại của Page nhưng không có khách nào đủ điều kiện (hãy đặt 'Cách ly gửi lại' = 0 hoặc mở mục Hộp thư đồng bộ tin nhắn Page trước)", len(convs)),
+		})
 		return
 	}
 
@@ -533,7 +430,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		BatchSize:       req.BatchSize,
 		BatchPauseSec:   req.BatchPauseSec,
 		Status:          "running",
-		TotalRecipients: len(convs),
+		TotalRecipients: len(validConvs),
 	}
 
 	if err := h.DB.Create(&camp).Error; err != nil {
@@ -542,7 +439,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 
 	var msgs []BroadcastMessage
-	for _, cv := range convs {
+	for _, cv := range validConvs {
 		tpl := validTemplates[rand.Intn(len(validTemplates))]
 		name := strings.TrimSpace(cv.CustomerName)
 		if name == "" {
@@ -563,13 +460,11 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 
 	if err := h.DB.CreateInBatches(&msgs, 100).Error; err != nil {
-		log.Printf("[Broadcast] Lỗi lưu hàng đợi broadcast_messages cho chiến dịch #%d: %v", camp.ID, err)
 		_ = h.DB.Delete(&camp).Error
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không lưu được hàng đợi tin nhắn: " + err.Error()})
 		return
 	}
 
-	log.Printf("[Broadcast] Tạo chiến dịch #%d (%s) cho %d khách hàng", camp.ID, camp.Name, len(convs))
 	c.JSON(http.StatusCreated, camp)
 }
 
