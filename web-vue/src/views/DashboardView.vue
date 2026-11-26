@@ -10,6 +10,7 @@ import {
   Layers,
   LayoutDashboard,
   LogOut,
+   Globe, 
   Menu,
   MessageSquare,
   RefreshCw,
@@ -69,7 +70,9 @@ const navItems = computed(() => {
     { label: 'CSKH tự động', path: '/broadcasts', icon: Send, active: false, badge: 0 },
     { label: 'Phân tích đối thủ', path: '/competitors', icon: TrendingUp, active: false, badge: 0 },
     { label: 'Lên lịch đăng bài', path: '/posts', icon: CalendarClock, active: false, badge: 0 },
-    { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0 }
+    { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0 },
+        { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0 },
+    { label: 'Website bán hàng', path: '/sites', icon: Globe, active: false, badge: 0 }
   ]
   if (canManageRoles.value) {
     list.push({ label: 'Phân cấp & Phân quyền', path: '/roles', icon: Users, active: false, badge: 0 })

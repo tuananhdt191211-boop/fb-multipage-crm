@@ -76,6 +76,7 @@ const isDraggingMedia = ref(false)
 const uploadingMedia = ref(false)
 const uploadingVideo = ref(false)
 const fetchingSocialVideo = ref(false)
+const downloadingVideo = ref(false)
 const videoUploadProgress = ref(0)
 const copiedIndex = ref<number | null>(null)
 const copiedSuggestionIndex = ref<number | null>(null)
@@ -134,6 +135,12 @@ const isVideoLinkPattern = (text: string) =>
 const isImageLinkPattern = (text: string) =>
   /^https?:\/\/.+\.(jpg|jpeg|png|gif|webp)(\?.*)?$/i.test(text.trim())
 
+const isVideoFileReady = computed(() => {
+  const src = (videoPreviewURL.value || mediaURL.value || '').trim()
+  if (!src) return false
+  return src.startsWith('blob:') || src.includes('/uploads/posts/') || isDirectVideoLink(src)
+})
+
 const filteredPages = computed(() => {
   const q = pageSearch.value.trim().toLowerCase()
   if (!q) return pages.value
@@ -178,6 +185,48 @@ function resolveMediaDownloadURL(rawURL: string): string {
   const base = (api.defaults.baseURL || '').replace(/\/api\/v1\/?$/, '').replace(/\/+$/, '')
   const path = clean.startsWith('/') ? clean : `/${clean}`
   return base ? `${base}${path}` : path
+}
+
+async function handleDownloadVideoToDevice() {
+  const rawSrc = (videoPreviewURL.value || mediaURL.value || '').trim()
+  if (!rawSrc) return
+
+  if (!isVideoFileReady.value) {
+    errorMsg.value = 'Hãy bấm "Lấy / Áp dụng" trước để tải file .mp4 về máy.'
+    return
+  }
+
+  downloadingVideo.value = true
+  errorMsg.value = ''
+  const targetURL = resolveMediaDownloadURL(rawSrc)
+  const rawName = (videoFileName.value || 'video_no_watermark.mp4').trim()
+  const fileName = /\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(rawName) ? rawName : `${rawName}.mp4`
+
+  try {
+    const res = await fetch(targetURL)
+    if (!res.ok) throw new Error('Không tải được luồng video')
+    const blob = await res.blob()
+    const blobUrl = URL.createObjectURL(blob)
+
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = fileName
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 3000)
+  } catch {
+    const link = document.createElement('a')
+    link.href = targetURL
+    link.download = fileName
+    link.target = '_blank'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  } finally {
+    downloadingVideo.value = false
+  }
 }
 
 function toggleAllPages() {
@@ -274,9 +323,10 @@ async function applyVideoLink(urlValue: string) {
         }, 3000)
       }
     } catch (err: any) {
+      clearVideoAttachment()
       errorMsg.value =
         err?.response?.data?.error ||
-        'Không tải được video từ link mạng xã hội này (hãy kiểm tra link công khai hoặc cấu hình yt-dlp trên server).'
+        'Không tải được video từ link mạng xã hội này (hãy kiểm tra link công khai hoặc cài yt-dlp trên server).'
     } finally {
       fetchingSocialVideo.value = false
     }
@@ -1188,16 +1238,16 @@ onMounted(() => {
                   </div>
 
                   <div class="flex items-center gap-1.5">
-                    <a
-                      :href="resolveMediaDownloadURL(videoPreviewURL || mediaURL)"
-                      :download="videoFileName || 'video_no_watermark.mp4'"
-                      target="_blank"
-                      rel="noopener"
-                      class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 cursor-pointer"
+                    <button
+                      type="button"
+                      @click="handleDownloadVideoToDevice"
+                      :disabled="downloadingVideo || !isVideoFileReady"
+                      class="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-emerald-500 disabled:opacity-45 cursor-pointer"
                     >
-                      <Download class="h-3 w-3" />
-                      <span>Tải về máy</span>
-                    </a>
+                      <Loader2 v-if="downloadingVideo" class="h-3 w-3 animate-spin" />
+                      <Download v-else class="h-3 w-3" />
+                      <span>{{ downloadingVideo ? 'Đang tải...' : 'Tải về máy' }}</span>
+                    </button>
 
                     <button
                       type="button"

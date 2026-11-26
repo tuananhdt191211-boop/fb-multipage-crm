@@ -46,10 +46,7 @@ const router = createRouter({
       component: () => import('@/views/InboxView.vue'),
       meta: { requiresAuth: true }
     },
-    {
-      path: '/:pathMatch(.*)*',
-      redirect: '/'
-    },
+  
     {
   path: '/posts',
   name: 'posts',
@@ -67,6 +64,44 @@ const router = createRouter({
   name: 'broadcasts',
   component: BroadcastView,
   meta: { requiresAuth: true }
+},
+{
+  path: '/sites',
+  name: 'sites',
+  component: () => import('../views/SitesView.vue'),
+  meta: { requiresAuth: true }
+},
+{
+  path: '/sites/:id/edit',
+  name: 'site-edit',
+  component: () => import('../views/StoreBuilderView.vue'),
+  meta: { requiresAuth: true }
+},
+{
+  path: '/sites/:id/products',
+  name: 'site-products',
+  component: () => import('../views/ProductsView.vue'),
+  meta: { requiresAuth: true }
+},
+{
+  // đường dẫn cũ → danh sách website
+  path: '/store-builder',
+  name: 'store-builder',
+  redirect: { name: 'sites' }
+},
+{
+  path: '/store',
+  name: 'public-store',
+  component: () => import('../views/PublicStoreView.vue')
+},
+{
+  path: '/s/:slug',
+  name: 'public-site',
+  component: () => import('../views/PublicStoreView.vue')
+},
+{
+  path: '/:pathMatch(.*)*',
+  redirect: '/'
 }
   ]
 })
