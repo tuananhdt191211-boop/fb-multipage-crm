@@ -39,7 +39,7 @@ func main() {
 	postHandler := handlers.NewPostHandler(db, cfg)
 	pageHandler := handlers.NewFacebookPageHandler(db, cfg)
 	aiHandler := handlers.NewAIHandler(db, cfg)
-	postAIHandler := handlers.NewPostAIHandler(db, cfg)
+	postAIHandler := handlers.NewPostAIHandler(db, cfg, aiHandler)
 
 	inboxHandler := handlers.NewInboxHandler(db, cfg)
 	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
@@ -164,6 +164,7 @@ func main() {
 		postsGroup.POST("", postHandler.CreateScheduledPost)
 		postsGroup.POST("/ai-rewrite", postAIHandler.RewriteContent)
 		postsGroup.POST("/:id/publish-now", postHandler.PublishNowPost)
+		postsGroup.POST("/upload-images", postAIHandler.UploadPostImages)
 		postsGroup.DELETE("/:id", postHandler.DeleteScheduledPost)
 	}
 
