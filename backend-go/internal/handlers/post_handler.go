@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -29,7 +32,7 @@ func NewPostHandler(db *gorm.DB, cfg *config.Config) *PostHandler {
 	h := &PostHandler{
 		DB:         db,
 		Cfg:        cfg,
-		HTTPClient: &http.Client{Timeout: 45 * time.Second},
+		HTTPClient: &http.Client{Timeout: 180 * time.Second},
 	}
 	go h.startSchedulerWorker()
 	return h
@@ -66,7 +69,6 @@ func (h *PostHandler) startSchedulerWorker() {
 		}
 
 		for _, post := range duePosts {
-			// Khóa trạng thái sang processing để tránh trùng lặp
 			res := h.DB.Model(&models.ScheduledPost{}).
 				Where("id = ? AND status = ?", post.ID, "pending").
 				Update("status", "processing")
@@ -153,26 +155,22 @@ func (h *PostHandler) executePublishPost(postID uint) {
 
 func (h *PostHandler) publishToSinglePage(pageID, pageToken, content, mediaType, mediaURL string) (string, string) {
 	trimmedMedia := strings.TrimSpace(mediaURL)
+
+	// 1. Đăng Ảnh (hỗ trợ cả file upload nội bộ /uploads/... lẫn URL công khai)
+	if trimmedMedia != "" && mediaType == "image" {
+		return h.uploadPhotoToPage(pageID, pageToken, content, trimmedMedia)
+	}
+
+	// 2. Đăng Video (hỗ trợ cả file upload nội bộ /uploads/... lẫn URL công khai)
+	if trimmedMedia != "" && mediaType == "video" {
+		return h.uploadVideoToPage(pageID, pageToken, content, trimmedMedia)
+	}
+
+	// 3. Đăng bài chỉ có văn bản
 	endpoint := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/feed", pageID)
 	payload := map[string]interface{}{
 		"message":      content,
 		"access_token": pageToken,
-	}
-
-	if trimmedMedia != "" && mediaType == "image" {
-		endpoint = fmt.Sprintf("https://graph.facebook.com/v21.0/%s/photos", pageID)
-		payload = map[string]interface{}{
-			"url":          trimmedMedia,
-			"caption":      content,
-			"access_token": pageToken,
-		}
-	} else if trimmedMedia != "" && mediaType == "video" {
-		endpoint = fmt.Sprintf("https://graph.facebook.com/v21.0/%s/videos", pageID)
-		payload = map[string]interface{}{
-			"file_url":     trimmedMedia,
-			"description":  content,
-			"access_token": pageToken,
-		}
 	}
 
 	bodyBytes, _ := json.Marshal(payload)
@@ -201,6 +199,179 @@ func (h *PostHandler) publishToSinglePage(pageID, pageToken, content, mediaType,
 	return fbRes.ID, ""
 }
 
+func (h *PostHandler) uploadPhotoToPage(pageID, pageToken, caption, imageSource string) (string, string) {
+	endpoint := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/photos", pageID)
+	localPath := strings.TrimPrefix(imageSource, "/")
+
+	// Nếu là file ảnh upload nội bộ trên server -> đẩy trực tiếp bytes bằng multipart/form-data
+	if strings.HasPrefix(localPath, "uploads/") {
+		diskPath := filepath.FromSlash(localPath)
+		fileBytes, err := os.ReadFile(diskPath)
+		if err != nil {
+			return "", fmt.Sprintf("Không tìm thấy file ảnh trên server (%s): %v", diskPath, err)
+		}
+
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		_ = writer.WriteField("access_token", pageToken)
+		if strings.TrimSpace(caption) != "" {
+			_ = writer.WriteField("caption", caption)
+		}
+
+		part, err := writer.CreateFormFile("source", filepath.Base(diskPath))
+		if err != nil {
+			return "", "Lỗi đóng gói file ảnh"
+		}
+		if _, err := part.Write(fileBytes); err != nil {
+			return "", "Lỗi ghi dữ liệu file ảnh"
+		}
+		_ = writer.Close()
+
+		req, err := http.NewRequest(http.MethodPost, endpoint, &body)
+		if err != nil {
+			return "", "Không tạo được request upload ảnh"
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+
+		resp, err := h.HTTPClient.Do(req)
+		if err != nil {
+			return "", "Không kết nối được Facebook Graph API khi tải ảnh"
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+
+		var fbRes struct {
+			ID     string `json:"id"`
+			PostID string `json:"post_id"`
+			Error  *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(respBody, &fbRes)
+		if fbRes.Error != nil {
+			return "", fbRes.Error.Message
+		}
+		if fbRes.PostID != "" {
+			return fbRes.PostID, ""
+		}
+		return fbRes.ID, ""
+	}
+
+	// Nếu là URL ảnh công khai
+	payload := map[string]interface{}{
+		"url":          imageSource,
+		"caption":      caption,
+		"access_token": pageToken,
+	}
+	bodyBytes, _ := json.Marshal(payload)
+	resp, err := h.HTTPClient.Post(endpoint, "application/json", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", "Không kết nối được Facebook Graph API"
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var fbRes struct {
+		ID     string `json:"id"`
+		PostID string `json:"post_id"`
+		Error  *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(respBody, &fbRes)
+	if fbRes.Error != nil {
+		return "", fbRes.Error.Message
+	}
+	if fbRes.PostID != "" {
+		return fbRes.PostID, ""
+	}
+	return fbRes.ID, ""
+}
+
+func (h *PostHandler) uploadVideoToPage(pageID, pageToken, description, videoSource string) (string, string) {
+	graphVideoURL := fmt.Sprintf("https://graph-video.facebook.com/v21.0/%s/videos", pageID)
+	localPath := strings.TrimPrefix(videoSource, "/")
+
+	// 1. Nếu là file video nội bộ trên server (/uploads/posts/...) -> upload trực tiếp file bytes bằng multipart/form-data
+	if strings.HasPrefix(localPath, "uploads/") {
+		diskPath := filepath.FromSlash(localPath)
+		fileBytes, err := os.ReadFile(diskPath)
+		if err != nil {
+			return "", fmt.Sprintf("Không tìm thấy file video trên server (%s): %v", diskPath, err)
+		}
+
+		var body bytes.Buffer
+		writer := multipart.NewWriter(&body)
+		_ = writer.WriteField("access_token", pageToken)
+		if strings.TrimSpace(description) != "" {
+			_ = writer.WriteField("description", description)
+		}
+
+		part, err := writer.CreateFormFile("source", filepath.Base(diskPath))
+		if err != nil {
+			return "", "Lỗi đóng gói file video"
+		}
+		if _, err := part.Write(fileBytes); err != nil {
+			return "", "Lỗi ghi dữ liệu file video"
+		}
+		_ = writer.Close()
+
+		req, err := http.NewRequest(http.MethodPost, graphVideoURL, &body)
+		if err != nil {
+			return "", "Không tạo được request upload video"
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+
+		resp, err := h.HTTPClient.Do(req)
+		if err != nil {
+			return "", fmt.Sprintf("Lỗi kết nối khi tải video lên Facebook: %v", err)
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+
+		var fbRes struct {
+			ID    string `json:"id"`
+			Error *struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(respBody, &fbRes)
+		if fbRes.Error != nil {
+			return "", fbRes.Error.Message
+		}
+		if fbRes.ID == "" {
+			return "", fmt.Sprintf("Facebook không trả về ID video: %s", string(respBody))
+		}
+		return fbRes.ID, ""
+	}
+
+	// 2. Nếu là URL video công khai (https://...mp4) -> gửi qua file_url
+	payload := map[string]interface{}{
+		"file_url":     videoSource,
+		"description":  description,
+		"access_token": pageToken,
+	}
+	bodyBytes, _ := json.Marshal(payload)
+	resp, err := h.HTTPClient.Post(graphVideoURL, "application/json", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", "Không kết nối được Facebook Graph API"
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+
+	var fbRes struct {
+		ID    string `json:"id"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(respBody, &fbRes)
+	if fbRes.Error != nil {
+		return "", fbRes.Error.Message
+	}
+	return fbRes.ID, ""
+}
+
 // ListScheduledPosts trả về danh sách lịch đăng bài và danh sách Fanpage đang bật
 func (h *PostHandler) ListScheduledPosts(c *gin.Context) {
 	var posts []models.ScheduledPost
@@ -219,7 +390,7 @@ func (h *PostHandler) ListScheduledPosts(c *gin.Context) {
 }
 
 type createScheduledPostReq struct {
-	Content     string   `json:"content" binding:"required"`
+	Content     string   `json:"content"`
 	MediaType   string   `json:"media_type"`
 	MediaURL    string   `json:"media_url"`
 	PageIDs     []string `json:"page_ids" binding:"required"`
@@ -231,13 +402,14 @@ type createScheduledPostReq struct {
 func (h *PostHandler) CreateScheduledPost(c *gin.Context) {
 	var req createScheduledPostReq
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng nhập nội dung và chọn ít nhất 1 Fanpage"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng chọn ít nhất 1 Fanpage"})
 		return
 	}
 
 	content := strings.TrimSpace(req.Content)
-	if content == "" || len(req.PageIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Nội dung bài viết và danh sách Fanpage không được để trống"})
+	mediaURL := strings.TrimSpace(req.MediaURL)
+	if (content == "" && mediaURL == "") || len(req.PageIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng nhập nội dung (hoặc đính kèm ảnh/video) và chọn ít nhất 1 Fanpage"})
 		return
 	}
 
@@ -274,7 +446,7 @@ func (h *PostHandler) CreateScheduledPost(c *gin.Context) {
 	post := models.ScheduledPost{
 		Content:       content,
 		MediaType:     mediaType,
-		MediaURL:      strings.TrimSpace(req.MediaURL),
+		MediaURL:      mediaURL,
 		PageIDsJSON:   string(idsBytes),
 		PageNamesJSON: string(namesBytes),
 		ScheduledAt:   schedTime,
