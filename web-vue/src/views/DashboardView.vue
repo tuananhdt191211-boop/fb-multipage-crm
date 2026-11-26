@@ -4,14 +4,17 @@ import { useRouter } from 'vue-router'
 import {
   ArrowRight,
   Bell,
+  CalendarClock,
   CheckCircle2,
   Facebook,
   Layers,
   LogOut,
   MessageSquare,
   RefreshCw,
+  Send,
   ShieldCheck,
   Sparkles,
+  TrendingUp,
   Users
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
@@ -54,6 +57,88 @@ const totalUnreadCount = computed(() =>
 const recentUnreadConversations = computed(() =>
   conversations.value.filter((c) => c.unread_count > 0).slice(0, 4)
 )
+
+const featureModules = computed(() => {
+  const items = [
+    {
+      title: 'Hộp thư chat gộp đa Page',
+      shortLabel: 'Hộp thư đa Page',
+      path: '/inbox',
+      badge: totalUnreadCount.value > 0 ? `${totalUnreadCount.value} mới` : 'Trực tiếp',
+      badgeClass: 'bg-emerald-100 text-emerald-800',
+      icon: MessageSquare,
+      iconWrap: 'bg-emerald-600 text-white',
+      description:
+        'Xem và trả lời tin nhắn Messenger từ tất cả Fanpage trên một màn hình duy nhất, hỗ trợ gửi ảnh và phân loại khách hàng.',
+      cta: 'Vào khung chat'
+    },
+    {
+      title: 'Chăm sóc khách cũ tự động',
+      shortLabel: 'CSKH tự động',
+      path: '/broadcasts',
+      badge: 'Conversion',
+      badgeClass: 'bg-amber-100 text-amber-800',
+      icon: Send,
+      iconWrap: 'bg-amber-500 text-white',
+      description:
+        'Quét toàn bộ khách đã nhắn tin trên Meta Business và tự động gửi tin nhắn chăm sóc lại theo nhịp giãn cách an toàn.',
+      cta: 'Tạo chiến dịch gửi'
+    },
+    {
+      title: 'Phân tích đối thủ cạnh tranh',
+      shortLabel: 'Đối thủ',
+      path: '/competitors',
+      badge: 'Competitor',
+      badgeClass: 'bg-indigo-100 text-indigo-800',
+      icon: TrendingUp,
+      iconWrap: 'bg-indigo-600 text-white',
+      description:
+        'Theo dõi bài đăng, tần suất hoạt động và nội dung nổi bật của các Fanpage đối thủ để tối ưu chiến lược nội dung.',
+      cta: 'Xem phân tích đối thủ'
+    },
+    {
+      title: 'Lên lịch & Quản lý bài đăng',
+      shortLabel: 'Đăng bài tự động',
+      path: '/posts',
+      badge: 'Auto Post',
+      badgeClass: 'bg-sky-100 text-sky-800',
+      icon: CalendarClock,
+      iconWrap: 'bg-sky-600 text-white',
+      description:
+        'Soạn nội dung, đính kèm hình ảnh và hẹn giờ đăng bài tự động lên nhiều Fanpage cùng lúc.',
+      cta: 'Quản lý lịch đăng'
+    },
+    {
+      title: 'Quản lý & Gộp Fanpage',
+      shortLabel: 'Gộp Fanpage',
+      path: '/pages',
+      badge: `${activePagesCount.value}/${pages.value.length} bật`,
+      badgeClass: 'bg-teal-100 text-teal-800',
+      icon: Layers,
+      iconWrap: 'bg-teal-600 text-white',
+      description:
+        'Đồng bộ tự động danh sách Fanpage từ Facebook, bật/tắt trạng thái hoạt động từng Page và làm mới Page Access Token.',
+      cta: 'Quản lý danh sách Page'
+    }
+  ]
+
+  if (canManageRoles.value) {
+    items.push({
+      title: 'Phân cấp & Phân quyền nhân sự',
+      shortLabel: 'Phân quyền',
+      path: '/roles',
+      badge: 'Admin / Manager',
+      badgeClass: 'bg-slate-200 text-slate-800',
+      icon: Users,
+      iconWrap: 'bg-slate-800 text-white',
+      description:
+        'Chia vai trò Quản lý và Nhân viên trực Page, giới hạn quyền truy cập dữ liệu theo từng Fanpage được giao.',
+      cta: 'Thiết lập đội ngũ'
+    })
+  }
+
+  return items
+})
 
 function getInitials(name: string) {
   if (!name) return 'U'
@@ -111,11 +196,14 @@ onMounted(fetchOverviewData)
 
 <template>
   <div class="min-h-screen bg-[#f6f9f8] text-slate-900">
-    <!-- Top Navigation Bar (1 hàng chuẩn SaaS, không rớt chữ) -->
+    <!-- Top Navigation Bar: Đầy đủ tất cả chức năng -->
     <header class="sticky top-0 z-20 border-b border-slate-200/80 bg-white/95 backdrop-blur-xs">
-      <div class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+      <div class="mx-auto flex h-16 max-w-7xl items-center justify-between gap-3 px-4 sm:px-6 lg:px-8">
         <!-- Brand Logo -->
-        <div class="flex items-center gap-3 shrink-0">
+        <button
+          @click="router.push('/')"
+          class="flex items-center gap-2.5 shrink-0 text-left cursor-pointer"
+        >
           <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-600 to-teal-600 text-white shadow-sm">
             <MessageSquare class="h-5 w-5" />
           </div>
@@ -127,24 +215,16 @@ onMounted(fetchOverviewData)
               Quản lý & CSKH đa Fanpage
             </span>
           </div>
-        </div>
+        </button>
 
-        <!-- Center Navigation Pills -->
-        <nav class="hidden md:flex items-center gap-2">
-          <button
-            @click="router.push('/pages')"
-            class="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
-          >
-            <Layers class="h-4 w-4 text-emerald-600" />
-            <span>Gộp Fanpage</span>
-          </button>
-
+        <!-- Center Navigation Pills (Đủ tất cả 6 chức năng) -->
+        <nav class="hidden lg:flex items-center gap-1.5 overflow-x-auto py-1">
           <button
             @click="router.push('/inbox')"
-            class="inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition hover:bg-emerald-700 cursor-pointer"
+            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs transition hover:bg-emerald-700 cursor-pointer"
           >
-            <MessageSquare class="h-4 w-4" />
-            <span>Hộp thư đa Page</span>
+            <MessageSquare class="h-3.5 w-3.5" />
+            <span>Hộp thư</span>
             <span
               v-if="totalUnreadCount > 0"
               class="rounded-full bg-white px-1.5 py-0.2 text-[10px] font-bold text-emerald-700"
@@ -154,18 +234,50 @@ onMounted(fetchOverviewData)
           </button>
 
           <button
+            @click="router.push('/broadcasts')"
+            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-amber-200 bg-amber-50/70 px-3 py-2 text-xs font-semibold text-amber-900 transition hover:border-amber-300 hover:bg-amber-100 cursor-pointer"
+          >
+            <Send class="h-3.5 w-3.5 text-amber-600" />
+            <span>CSKH tự động</span>
+          </button>
+
+          <button
+            @click="router.push('/competitors')"
+            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-800 cursor-pointer"
+          >
+            <TrendingUp class="h-3.5 w-3.5 text-indigo-600" />
+            <span>Đối thủ</span>
+          </button>
+
+          <button
+            @click="router.push('/posts')"
+            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50 hover:text-sky-800 cursor-pointer"
+          >
+            <CalendarClock class="h-3.5 w-3.5 text-sky-600" />
+            <span>Đăng bài</span>
+          </button>
+
+          <button
+            @click="router.push('/pages')"
+            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+          >
+            <Layers class="h-3.5 w-3.5 text-emerald-600" />
+            <span>Gộp Page</span>
+          </button>
+
+          <button
             v-if="canManageRoles"
             @click="router.push('/roles')"
-            class="inline-flex items-center gap-2 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+            class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
           >
-            <Users class="h-4 w-4 text-emerald-600" />
-            <span>Phân cấp & Phân quyền</span>
+            <Users class="h-3.5 w-3.5 text-slate-600" />
+            <span>Phân quyền</span>
           </button>
         </nav>
 
         <!-- Right User Profile & Logout -->
-        <div class="flex items-center gap-3 shrink-0">
-          <div class="hidden sm:flex items-center gap-2.5 rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-1.5">
+        <div class="flex items-center gap-2.5 shrink-0">
+          <div class="hidden sm:flex items-center gap-2 rounded-2xl border border-slate-100 bg-slate-50/80 px-2.5 py-1.5">
             <div class="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-800">
               {{ getInitials(userName) }}
             </div>
@@ -177,7 +289,7 @@ onMounted(fetchOverviewData)
                   {{ userRole }}
                 </span>
               </div>
-              <p v-if="userEmail" class="text-[11px] text-slate-500">{{ userEmail }}</p>
+              <p v-if="userEmail" class="text-[10px] text-slate-500 max-w-[140px] truncate">{{ userEmail }}</p>
             </div>
           </div>
 
@@ -186,9 +298,22 @@ onMounted(fetchOverviewData)
             class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-red-200 hover:bg-red-50 hover:text-red-600 cursor-pointer"
           >
             <LogOut class="h-3.5 w-3.5" />
-            <span>Đăng xuất</span>
+            <span class="hidden sm:inline">Đăng xuất</span>
           </button>
         </div>
+      </div>
+
+      <!-- Mobile/Tablet Sub-Nav Bar (Hiển thị đủ nút trên màn hình nhỏ) -->
+      <div class="flex lg:hidden items-center gap-2 overflow-x-auto border-t border-slate-100 bg-slate-50/70 px-4 py-2">
+        <button
+          v-for="mod in featureModules"
+          :key="mod.path"
+          @click="router.push(mod.path)"
+          class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-2xs"
+        >
+          <component :is="mod.icon" class="h-3.5 w-3.5 text-emerald-600" />
+          <span>{{ mod.shortLabel }}</span>
+        </button>
       </div>
     </header>
 
@@ -214,18 +339,25 @@ onMounted(fetchOverviewData)
               Xin chào, {{ userName }}!
             </h1>
             <p class="text-sm text-emerald-50/90 leading-relaxed">
-              Quản lý tập trung toàn bộ tin nhắn khách hàng từ nhiều Fanpage trên một màn hình duy nhất, phân quyền nhân viên trực Page và phản hồi tức thì.
+              Trung tâm điều hành đa Fanpage: trực tin nhắn gộp, gửi chăm sóc khách cũ tự động, theo dõi đối thủ và lên lịch đăng bài trên một giao diện duy nhất.
             </p>
           </div>
 
           <div class="flex flex-wrap items-center gap-3 shrink-0">
             <button
               @click="router.push('/inbox')"
-              class="inline-flex items-center gap-2 whitespace-nowrap rounded-2xl bg-white px-5 py-3 text-sm font-bold text-emerald-800 shadow-sm transition hover:bg-emerald-50 cursor-pointer"
+              class="inline-flex items-center gap-2 whitespace-nowrap rounded-2xl bg-white px-4 py-3 text-sm font-bold text-emerald-800 shadow-sm transition hover:bg-emerald-50 cursor-pointer"
             >
               <MessageSquare class="h-4 w-4 text-emerald-600" />
-              <span>Mở Hộp thư đa Page</span>
-              <ArrowRight class="h-4 w-4" />
+              <span>Mở Hộp thư</span>
+            </button>
+
+            <button
+              @click="router.push('/broadcasts')"
+              class="inline-flex items-center gap-2 whitespace-nowrap rounded-2xl bg-amber-400 px-4 py-3 text-sm font-bold text-slate-950 shadow-sm transition hover:bg-amber-300 cursor-pointer"
+            >
+              <Send class="h-4 w-4" />
+              <span>Nhắn tin tự động</span>
             </button>
 
             <button
@@ -234,7 +366,7 @@ onMounted(fetchOverviewData)
               class="inline-flex items-center gap-2 whitespace-nowrap rounded-2xl border border-white/30 bg-white/10 px-4 py-3 text-sm font-semibold text-white backdrop-blur-xs transition hover:bg-white/20 disabled:opacity-60 cursor-pointer"
             >
               <RefreshCw class="h-4 w-4" :class="{ 'animate-spin': syncingAll }" />
-              <span>{{ syncingAll ? 'Đang kéo tin...' : 'Kéo tin nhắn mới' }}</span>
+              <span>{{ syncingAll ? 'Đang kéo tin...' : 'Kéo tin mới' }}</span>
             </button>
           </div>
         </div>
@@ -295,70 +427,52 @@ onMounted(fetchOverviewData)
         </div>
       </section>
 
-      <!-- 3 Chức năng chính (Quick Action Cards) -->
-      <section class="grid grid-cols-1 gap-4 md:grid-cols-3">
-        <button
-          @click="router.push('/inbox')"
-          class="group flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-6 text-left shadow-2xs transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md cursor-pointer"
-        >
+      <!-- Lưới điều hướng tất cả chức năng hệ thống -->
+      <section class="space-y-3">
+        <div class="flex items-center justify-between">
           <div>
-            <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-600 text-white">
-              <MessageSquare class="h-5 w-5" />
-            </div>
-            <h2 class="mt-4 text-base font-bold !text-slate-900 group-hover:text-emerald-700">
-              Hộp thư chat gộp đa Page
-            </h2>
-            <p class="mt-1.5 text-xs leading-relaxed text-slate-500">
-              Xem và trả lời tin nhắn Messenger từ tất cả Fanpage trên cùng một giao diện, hỗ trợ xem ảnh khách gửi và lọc theo từng Page.
-            </p>
+            <h2 class="text-base font-extrabold !text-slate-900">Tất cả chức năng hệ thống</h2>
+            <p class="text-xs text-slate-500">Chọn nhanh công cụ bạn muốn làm việc</p>
           </div>
-          <div class="mt-5 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
-            <span>Vào khung chat</span>
-            <ArrowRight class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
-          </div>
-        </button>
+        </div>
 
-        <button
-          @click="router.push('/pages')"
-          class="group flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-6 text-left shadow-2xs transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md cursor-pointer"
-        >
-          <div>
-            <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-teal-50 text-teal-700 border border-teal-100">
-              <Layers class="h-5 w-5" />
-            </div>
-            <h2 class="mt-4 text-base font-bold !text-slate-900 group-hover:text-emerald-700">
-              Quản lý & Gộp Fanpage
-            </h2>
-            <p class="mt-1.5 text-xs leading-relaxed text-slate-500">
-              Đồng bộ tự động danh sách Fanpage từ Facebook, bật/tắt trạng thái hoạt động từng Page và làm mới Page Access Token.
-            </p>
-          </div>
-          <div class="mt-5 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
-            <span>Quản lý danh sách Page</span>
-            <ArrowRight class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
-          </div>
-        </button>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <button
+            v-for="mod in featureModules"
+            :key="mod.path"
+            @click="router.push(mod.path)"
+            class="group flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-5 text-left shadow-2xs transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md cursor-pointer"
+          >
+            <div>
+              <div class="flex items-center justify-between gap-2">
+                <div
+                  class="flex h-11 w-11 items-center justify-center rounded-2xl shadow-2xs"
+                  :class="mod.iconWrap"
+                >
+                  <component :is="mod.icon" class="h-5 w-5" />
+                </div>
+                <span
+                  class="rounded-full px-2.5 py-0.5 text-[11px] font-bold"
+                  :class="mod.badgeClass"
+                >
+                  {{ mod.badge }}
+                </span>
+              </div>
 
-        <button
-          @click="router.push('/roles')"
-          class="group flex flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-6 text-left shadow-2xs transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md cursor-pointer"
-        >
-          <div>
-            <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-              <Users class="h-5 w-5" />
+              <h3 class="mt-4 text-base font-bold !text-slate-900 group-hover:text-emerald-700">
+                {{ mod.title }}
+              </h3>
+              <p class="mt-1.5 text-xs leading-relaxed text-slate-500">
+                {{ mod.description }}
+              </p>
             </div>
-            <h2 class="mt-4 text-base font-bold !text-slate-900 group-hover:text-emerald-700">
-              Phân cấp & Phân quyền nhân sự
-            </h2>
-            <p class="mt-1.5 text-xs leading-relaxed text-slate-500">
-              Chia vai trò Quản lý (Manager) và Nhân viên (Staff), giới hạn quyền truy cập theo từng Fanpage được giao.
-            </p>
-          </div>
-          <div class="mt-5 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
-            <span>Thiết lập đội ngũ</span>
-            <ArrowRight class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
-          </div>
-        </button>
+
+            <div class="mt-5 inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+              <span>{{ mod.cta }}</span>
+              <ArrowRight class="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
+            </div>
+          </button>
+        </div>
       </section>
 
       <!-- Danh sách Fanpage đang kết nối & Tin nhắn chưa đọc mới nhất -->
