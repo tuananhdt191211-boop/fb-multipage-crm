@@ -204,15 +204,15 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 	}
 	messages = append(messages, chatMessagePayload{Role: "user", Content: userPrompt})
 
-	reqPayload := map[string]interface{}{
-		"model":       model,
-		"messages":    messages,
-		"temperature": 0.65,
+	// Danh sách model thử lần lượt: model chính trước, nếu 503 quá tải thì tự đổi sang model dự phòng
+	modelsToTry := []string{model}
+	if strings.Contains(baseURL, "generativelanguage.googleapis.com") {
+		for _, fallbackM := range []string{"gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.0-flash"} {
+			if fallbackM != model {
+				modelsToTry = append(modelsToTry, fallbackM)
+			}
+		}
 	}
-	if jsonMode && !strings.Contains(baseURL, "openrouter.ai") {
-		reqPayload["response_format"] = map[string]string{"type": "json_object"}
-	}
-	bodyBytes, _ := json.Marshal(reqPayload)
 
 	endpoint := baseURL + "/chat/completions"
 	referer := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
@@ -222,72 +222,91 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 
 	var lastErr error
 
-	for idx, apiKey := range apiKeys {
-		for attempt := 1; attempt <= 2; attempt++ {
-			req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBuffer(bodyBytes))
-			if err != nil {
-				return "", err
-			}
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-			req.Header.Set("HTTP-Referer", referer)
-			req.Header.Set("X-Title", "PagePilot CRM")
-			req.Header.Set("User-Agent", "PagePilot-CRM/1.0")
+	for _, currentModel := range modelsToTry {
+		reqPayload := map[string]interface{}{
+			"model":       currentModel,
+			"messages":    messages,
+			"temperature": 0.75,
+		}
+		if jsonMode && !strings.Contains(baseURL, "openrouter.ai") {
+			reqPayload["response_format"] = map[string]string{"type": "json_object"}
+		}
+		bodyBytes, _ := json.Marshal(reqPayload)
 
-			resp, err := h.HTTPClient.Do(req)
-			if err != nil {
-				lastErr = fmt.Errorf("lỗi kết nối AI (%s): %v", model, err)
-				log.Printf("[AI][URL: %s][Key #%d][Attempt %d] %v", endpoint, idx+1, attempt, lastErr)
-				time.Sleep(1 * time.Second)
-				continue
-			}
-
-			respData, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-
-			var chatResp struct {
-				Choices []struct {
-					Message struct {
-						Content string `json:"content"`
-					} `json:"message"`
-				} `json:"choices"`
-				Error *struct {
-					Message string      `json:"message"`
-					Code    interface{} `json:"code"`
-				} `json:"error"`
-			}
-
-			if err := json.Unmarshal(respData, &chatResp); err != nil {
-				lastErr = fmt.Errorf("phản hồi AI không hợp lệ (HTTP %d): %s", resp.StatusCode, string(respData))
-				log.Printf("[AI][URL: %s] %v", endpoint, lastErr)
-				break
-			}
-
-			if chatResp.Error != nil || resp.StatusCode >= 400 {
-				errMsg := fmt.Sprintf("HTTP %d", resp.StatusCode)
-				if chatResp.Error != nil && chatResp.Error.Message != "" {
-					errMsg = chatResp.Error.Message
+		for idx, apiKey := range apiKeys {
+			for attempt := 1; attempt <= 3; attempt++ {
+				req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewBuffer(bodyBytes))
+				if err != nil {
+					return "", err
 				}
-				lastErr = fmt.Errorf("AI báo lỗi (%d): %s", resp.StatusCode, errMsg)
-				log.Printf("[AI][URL: %s][Model: %s][Key #%d][Attempt %d] %v", endpoint, model, idx+1, attempt, lastErr)
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer "+apiKey)
+				req.Header.Set("HTTP-Referer", referer)
+				req.Header.Set("X-Title", "PagePilot CRM")
+				req.Header.Set("User-Agent", "PagePilot-CRM/1.0")
 
-				if resp.StatusCode == http.StatusTooManyRequests {
-					break
-				}
-				if resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusBadGateway {
-					time.Sleep(1500 * time.Millisecond)
+				resp, err := h.HTTPClient.Do(req)
+				if err != nil {
+					lastErr = fmt.Errorf("lỗi kết nối AI (%s): %v", currentModel, err)
+					log.Printf("[AI][URL: %s][Model: %s][Key #%d][Attempt %d] %v", endpoint, currentModel, idx+1, attempt, lastErr)
+					time.Sleep(time.Duration(attempt) * 1500 * time.Millisecond)
 					continue
 				}
-				break
-			}
 
-			if len(chatResp.Choices) > 0 {
-				replyText := strings.TrimSpace(chatResp.Choices[0].Message.Content)
-				if replyText != "" {
-					return replyText, nil
+				respData, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+
+				// Nếu server quá tải (503/502/504) hoặc rate limit (429), đợi ngắn rồi retry ngay
+				if resp.StatusCode == http.StatusServiceUnavailable ||
+					resp.StatusCode == http.StatusBadGateway ||
+					resp.StatusCode == http.StatusGatewayTimeout {
+					lastErr = fmt.Errorf("Model %s đang quá tải (HTTP %d), đang thử lại...", currentModel, resp.StatusCode)
+					log.Printf("[AI][Model: %s][Key #%d][Attempt %d] HTTP %d", currentModel, idx+1, attempt, resp.StatusCode)
+					time.Sleep(time.Duration(attempt) * 1500 * time.Millisecond)
+					continue
 				}
+
+				if resp.StatusCode == http.StatusTooManyRequests {
+					lastErr = fmt.Errorf("API Key #%d chạm giới hạn lượt gọi (429)", idx+1)
+					break // Chuyển sang key tiếp theo
+				}
+
+				var chatResp struct {
+					Choices []struct {
+						Message struct {
+							Content string `json:"content"`
+						} `json:"message"`
+					} `json:"choices"`
+					Error *struct {
+						Message string      `json:"message"`
+						Code    interface{} `json:"code"`
+					} `json:"error"`
+				}
+
+				if err := json.Unmarshal(respData, &chatResp); err != nil {
+					lastErr = fmt.Errorf("phản hồi AI không hợp lệ (HTTP %d): %s", resp.StatusCode, string(respData))
+					log.Printf("[AI][URL: %s] %v", endpoint, lastErr)
+					break
+				}
+
+				if chatResp.Error != nil || resp.StatusCode >= 400 {
+					errMsg := fmt.Sprintf("HTTP %d", resp.StatusCode)
+					if chatResp.Error != nil && chatResp.Error.Message != "" {
+						errMsg = chatResp.Error.Message
+					}
+					lastErr = fmt.Errorf("AI báo lỗi (%d): %s", resp.StatusCode, errMsg)
+					log.Printf("[AI][URL: %s][Model: %s][Key #%d] %v", endpoint, currentModel, idx+1, lastErr)
+					break
+				}
+
+				if len(chatResp.Choices) > 0 {
+					replyText := strings.TrimSpace(chatResp.Choices[0].Message.Content)
+					if replyText != "" {
+						return replyText, nil
+					}
+				}
+				lastErr = fmt.Errorf("AI trả về nội dung rỗng")
 			}
-			lastErr = fmt.Errorf("AI trả về nội dung rỗng")
 		}
 	}
 
