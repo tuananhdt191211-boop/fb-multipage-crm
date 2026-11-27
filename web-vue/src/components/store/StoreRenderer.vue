@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Eye,
   EyeOff,
   GripVertical,
   Mail,
@@ -58,7 +59,7 @@ watchEffect(() => ensureFonts(usedFonts(props.theme, props.blocks)))
 
 const emit = defineEmits<{
   (e: 'select', id: string | null): void
-  (e: 'edit', id: string, path: (string | number)[], value: string): void
+  (e: 'edit', id: string, path: (string | number)[], value: string | boolean): void
   (e: 'action', kind: 'up' | 'down' | 'duplicate' | 'hide' | 'delete', index: number): void
   (e: 'drop', index: number): void
   (e: 'section-dragstart', index: number, ev: DragEvent): void
@@ -176,6 +177,20 @@ function navItems(blk: StoreBlock): { label: string; link: string; idx: number }
 
 function logoSrc(blk: StoreBlock): string {
   return safeImg(blk.data.logo_url) || safeImg(props.logoUrl)
+}
+
+// Logo có hiện không (có ảnh và không bị tắt)
+function showLogo(blk: StoreBlock): boolean {
+  return !!logoSrc(blk) && blk.data.show_logo !== false
+}
+
+// Tên chữ luôn hiện nếu không có logo, để đầu trang không bị trống
+function showBrand(blk: StoreBlock): boolean {
+  return blk.data.show_brand !== false || !showLogo(blk)
+}
+
+function toggleFlag(blk: StoreBlock, key: string, v: boolean) {
+  emit('edit', blk.id, [key], v)
 }
 
 function logoH(blk: StoreBlock): number {
@@ -368,17 +383,38 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           <div :class="inner" class="py-3.5">
             <div class="flex flex-wrap items-center gap-x-8 gap-y-3" :class="headerLayout(blk.data.layout).wrap">
               <!-- Logo + tên -->
-              <div class="flex min-w-0 flex-1 items-center gap-2.5 @3xl:flex-none" :class="headerLayout(blk.data.layout).brand">
-                <img v-if="logoSrc(blk)" :src="logoSrc(blk)" :alt="blk.data.brand_name || siteTitle" class="w-auto max-w-[180px] object-contain" :style="{ height: logoH(blk) + 'px' }" />
+              <div class="group/brand flex min-w-0 flex-1 items-center gap-2.5 @3xl:flex-none" :class="headerLayout(blk.data.layout).brand">
+                <img v-if="showLogo(blk)" :src="logoSrc(blk)" :alt="blk.data.brand_name || siteTitle" class="w-auto max-w-[180px] object-contain" :style="{ height: logoH(blk) + 'px' }" />
                 <EditableText :fx="fx(blk, ['brand_name'])"
-                  v-if="blk.data.show_brand !== false || !logoSrc(blk)"
+                  v-if="showBrand(blk)"
                   :model-value="blk.data.brand_name || (editable ? '' : siteTitle)"
                   :editable="editable"
-                  placeholder="Tên thương hiệu"
+                  :placeholder="siteTitle || 'Tên thương hiệu'"
                   class="pp-hfont truncate font-extrabold tracking-tight"
                   :class="[brandSizeClass(blk.data.brand_size), blk.data.text_color ? '' : 'text-slate-900']"
                   @update:model-value="set(blk, ['brand_name'], $event)"
                 />
+                <!-- Trình chỉnh sửa: ẩn / hiện tên chữ ngay trên trang (chỉ khi có logo) -->
+                <template v-if="editable && showLogo(blk)">
+                  <button
+                    v-if="blk.data.show_brand !== false"
+                    type="button"
+                    class="shrink-0 rounded-full bg-slate-900/80 p-1 text-white opacity-0 shadow transition hover:bg-rose-600 group-hover/brand:opacity-100"
+                    title="Ẩn tên thương hiệu (chỉ hiện logo)"
+                    @click.stop="toggleFlag(blk, 'show_brand', false)"
+                  >
+                    <EyeOff class="h-3 w-3" />
+                  </button>
+                  <button
+                    v-else
+                    type="button"
+                    class="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-indigo-400 px-2 py-0.5 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50"
+                    title="Hiện lại tên thương hiệu cạnh logo"
+                    @click.stop="toggleFlag(blk, 'show_brand', true)"
+                  >
+                    <Eye class="h-3 w-3" /> Hiện tên
+                  </button>
+                </template>
               </div>
 
               <!-- Menu máy tính -->

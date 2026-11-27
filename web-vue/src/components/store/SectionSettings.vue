@@ -1,17 +1,34 @@
 <script setup lang="ts">
 // Bảng cài đặt cho section đang chọn (cột phải của trình chỉnh sửa)
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { GripVertical, Plus, Trash2 } from 'lucide-vue-next'
 import ImageField from './ImageField.vue'
 import { iconChoices } from '../../lib/blockFactory'
 import type { StoreBlock } from '../../types/store'
 
-const props = defineProps<{ block: StoreBlock; siteId: number | string }>()
+const props = defineProps<{ block: StoreBlock; siteId: number | string; siteLogo?: string }>()
 
 const inp = 'w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none'
 const lbl = 'block text-xs font-bold text-slate-600'
 
 const d = () => props.block.data
+
+// ----- Đầu trang: hiện logo, tên chữ hay cả hai -----
+const hasLogo = computed(() => !!String(d().logo_url || props.siteLogo || '').trim())
+const brandModes = [
+  { v: 'both', t: 'Logo + tên' },
+  { v: 'logo', t: 'Chỉ logo' },
+  { v: 'name', t: 'Chỉ tên' }
+] as const
+type BrandMode = (typeof brandModes)[number]['v']
+const brandMode = computed<BrandMode>(() => {
+  if (!hasLogo.value || d().show_logo === false) return 'name'
+  return d().show_brand === false ? 'logo' : 'both'
+})
+function setBrandMode(m: BrandMode) {
+  d().show_logo = m !== 'name'
+  d().show_brand = m !== 'logo'
+}
 
 function list(key: string): any[] {
   if (!Array.isArray(d()[key])) d()[key] = []
@@ -85,12 +102,26 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         <span :class="lbl">Tên thương hiệu</span>
         <input v-model="block.data.brand_name" :class="inp" />
       </label>
+      <div class="space-y-1">
+        <span :class="lbl">Hiển thị ở đầu trang</span>
+        <div class="grid grid-cols-3 gap-1">
+          <button
+            v-for="m in brandModes"
+            :key="m.v"
+            type="button"
+            class="rounded-lg border px-1 py-1.5 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-40"
+            :class="brandMode === m.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'"
+            :disabled="m.v !== 'name' && !hasLogo"
+            :title="m.v !== 'name' && !hasLogo ? 'Hãy chọn ảnh logo trước' : ''"
+            @click="setBrandMode(m.v)"
+          >
+            {{ m.t }}
+          </button>
+        </div>
+        <p v-if="!hasLogo" class="text-[10px] text-slate-400">Chưa có logo nên đầu trang hiện tên chữ.</p>
+      </div>
       <div class="flex flex-wrap items-center gap-4">
-        <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-          <input type="checkbox" :checked="block.data.show_brand !== false" @change="block.data.show_brand = ($event.target as HTMLInputElement).checked" />
-          Hiện tên chữ
-        </label>
-        <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+        <label v-if="brandMode !== 'logo'" class="flex items-center gap-2 text-xs font-bold text-slate-600">
           Cỡ chữ
           <select :value="block.data.brand_size || 'md'" class="rounded-lg border border-slate-200 px-2 py-1 text-sm" @change="block.data.brand_size = ($event.target as HTMLSelectElement).value">
             <option value="sm">Nhỏ</option>

@@ -249,7 +249,7 @@ func normalizeHeader(data map[string]interface{}) {
 	pick("layout", "left", "left", "split", "center", "center_split")
 	pick("brand_size", "md", "sm", "md", "lg")
 
-	for _, k := range []string{"show_brand", "show_cta", "sticky", "border"} {
+	for _, k := range []string{"show_brand", "show_logo", "show_cta", "sticky", "border"} {
 		if _, ok := data[k].(bool); !ok {
 			delete(data, k)
 		}
