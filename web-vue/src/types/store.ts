@@ -1,8 +1,13 @@
 export type BlockType =
+  | 'announcement'
   | 'header'
+  | 'banner'
   | 'hero'
+  | 'image_text'
   | 'products'
+  | 'collections'
   | 'features'
+  | 'icon_strip'
   | 'testimonials'
   | 'cta'
   | 'richtext'
@@ -10,6 +15,8 @@ export type BlockType =
   | 'gallery'
   | 'faq'
   | 'contact'
+  | 'newsletter'
+  | 'footer'
   | 'html'
 
 export interface BlockStyle {
@@ -59,4 +66,44 @@ export interface PublicProduct {
   compare_price: number
   image_url: string
   in_stock: boolean
+}
+
+export interface PublicSiteData {
+  id: number
+  slug: string
+  site_title: string
+  primary_color: string
+  logo_url: string
+  blocks: StoreBlock[]
+  products: PublicProduct[]
+}
+
+export interface OrderItem {
+  product_id: number
+  name: string
+  image_url: string
+  price: number
+  qty: number
+  line_total: number
+}
+
+export interface ShopOrder {
+  id: number
+  code: string
+  customer_name: string
+  phone: string
+  email: string
+  address: string
+  note: string
+  items: OrderItem[]
+  subtotal: number
+  shipping_fee: number
+  total: number
+  payment_method: 'cod' | 'vnpay'
+  payment_status: 'unpaid' | 'pending' | 'paid' | 'failed'
+  status: 'new' | 'confirmed' | 'shipping' | 'completed' | 'cancelled'
+  vnp_transaction_no?: string
+  vnp_bank_code?: string
+  paid_at?: string | null
+  created_at: string
 }

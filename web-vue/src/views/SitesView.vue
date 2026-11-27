@@ -15,7 +15,11 @@ const maxSites = ref(5)
 
 const showCreate = ref(false)
 const creating = ref(false)
-const form = ref({ site_title: '', slug: '' })
+const form = ref({ site_title: '', slug: '', template: 'wellness' })
+const templates = [
+  { key: 'wellness', name: 'Mỹ phẩm / Sức khoẻ', desc: 'Đầy đủ: banner, sản phẩm, giỏ hàng, chân trang', color: '#2f6f5e' },
+  { key: '', name: 'Cơ bản', desc: 'Vài section đơn giản để tự xây', color: '#059669' }
+]
 
 const canCreate = computed(() => sites.value.length < maxSites.value)
 
@@ -51,10 +55,11 @@ async function createSite() {
   try {
     const { data } = await api.post<{ site: Site }>('/storefront/sites', {
       site_title: form.value.site_title.trim(),
-      slug: form.value.slug.trim()
+      slug: form.value.slug.trim(),
+      template: form.value.template
     })
     showCreate.value = false
-    form.value = { site_title: '', slug: '' }
+    form.value = { site_title: '', slug: '', template: 'wellness' }
     router.push({ name: 'site-edit', params: { id: data.site.id } })
   } catch (err) {
     errorMsg.value = apiError(err, 'Tạo website thất bại.')
@@ -163,6 +168,12 @@ onMounted(loadSites)
               Sản phẩm
             </button>
             <button
+              class="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold hover:bg-slate-50"
+              @click="router.push({ name: 'site-orders', params: { id: s.id } })"
+            >
+              Đơn hàng
+            </button>
+            <button
               class="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold hover:bg-slate-50"
               @click="router.push({ name: 'site-edit', params: { id: s.id } })"
             >
@@ -201,6 +212,27 @@ onMounted(loadSites)
             <input v-model="form.slug" class="w-full rounded-xl px-1 py-2 outline-none" placeholder="my-pham-hana" />
           </div>
         </label>
+        <div class="space-y-1.5">
+          <span class="text-xs font-bold text-slate-600">Mẫu giao diện</span>
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              v-for="t in templates"
+              :key="t.key"
+              type="button"
+              class="rounded-xl border-2 p-3 text-left transition"
+              :class="form.template === t.key ? 'border-emerald-600 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'"
+              @click="form.template = t.key"
+            >
+              <div class="mb-2 flex h-14 flex-col gap-1 overflow-hidden rounded-lg bg-slate-100 p-1.5">
+                <div class="h-1.5 rounded" :style="{ backgroundColor: t.color }" />
+                <div class="flex-1 rounded" :style="{ background: t.key ? `linear-gradient(120deg, ${t.color}, #a7c4bc)` : '#e2e8f0' }" />
+                <div class="flex gap-1"><div class="h-2 flex-1 rounded bg-white" /><div class="h-2 flex-1 rounded bg-white" /><div class="h-2 flex-1 rounded bg-white" /></div>
+              </div>
+              <div class="text-xs font-extrabold">{{ t.name }}</div>
+              <div class="text-[11px] text-slate-500">{{ t.desc }}</div>
+            </button>
+          </div>
+        </div>
         <div class="flex justify-end gap-2">
           <button class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold" @click="showCreate = false">Hủy</button>
           <button

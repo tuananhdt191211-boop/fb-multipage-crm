@@ -53,6 +53,16 @@ const deviceWidth = computed(() => (device.value === 'mobile' ? '390px' : device
 const selectedBlock = computed(() => blocks.value.find((b) => b.id === selectedId.value) || null)
 const publicUrl = computed(() => (site.value ? `${window.location.origin}/s/${site.value.slug}` : ''))
 
+const catalogGroups = computed(() => {
+  const groups: { name: string; items: typeof blockCatalog }[] = []
+  for (const m of blockCatalog) {
+    let g = groups.find((x) => x.name === m.group)
+    if (!g) groups.push((g = { name: m.group, items: [] }))
+    g.items.push(m)
+  }
+  return groups
+})
+
 const colorPresets = ['#059669', '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#ca8a04', '#0f172a']
 
 function showToast(text: string, undo = false) {
@@ -595,9 +605,10 @@ watch(selectedId, (id) => {
             <!-- Thư viện section: kéo thả vào trang -->
             <template v-else-if="leftTab === 'add'">
               <p class="mb-2 text-[11px] text-slate-500">Kéo section thả vào vị trí bất kỳ trên trang, hoặc bấm để thêm vào cuối.</p>
-              <div class="space-y-1.5">
+              <div v-for="g in catalogGroups" :key="g.name" class="mb-3 space-y-1.5">
+                <div class="pt-1 text-[11px] font-extrabold uppercase tracking-wide text-slate-400">{{ g.name }}</div>
                 <div
-                  v-for="m in blockCatalog"
+                  v-for="m in g.items"
                   :key="m.type"
                   draggable="true"
                   class="cursor-grab rounded-xl border border-slate-200 bg-white p-2.5 transition hover:border-indigo-400 hover:shadow-sm active:cursor-grabbing"
@@ -646,6 +657,12 @@ watch(selectedId, (id) => {
                   class="block rounded-xl border border-slate-200 px-3 py-2 text-center text-xs font-bold text-slate-700 hover:border-indigo-400 hover:text-indigo-700"
                 >
                   Quản lý sản phẩm
+                </router-link>
+                <router-link
+                  :to="{ name: 'site-orders', params: { id: site.id } }"
+                  class="block rounded-xl border border-slate-200 px-3 py-2 text-center text-xs font-bold text-slate-700 hover:border-indigo-400 hover:text-indigo-700"
+                >
+                  Đơn hàng & thanh toán
                 </router-link>
               </div>
             </template>

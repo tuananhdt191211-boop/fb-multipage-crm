@@ -95,9 +95,30 @@ const router = createRouter({
   component: () => import('../views/PublicStoreView.vue')
 },
 {
+  path: '/sites/:id/orders',
+  name: 'site-orders',
+  component: () => import('../views/SiteOrdersView.vue'),
+  meta: { requiresAuth: true }
+},
+{
   path: '/s/:slug',
   name: 'public-site',
   component: () => import('../views/PublicStoreView.vue')
+},
+{
+  path: '/s/:slug/p/:pid',
+  name: 'public-product',
+  component: () => import('../views/PublicProductView.vue')
+},
+{
+  path: '/s/:slug/checkout',
+  name: 'public-checkout',
+  component: () => import('../views/PublicCheckoutView.vue')
+},
+{
+  path: '/s/:slug/order/:code',
+  name: 'public-order',
+  component: () => import('../views/PublicOrderView.vue')
 },
 {
   path: '/:pathMatch(.*)*',

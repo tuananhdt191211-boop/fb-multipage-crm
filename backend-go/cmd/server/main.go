@@ -89,6 +89,14 @@ func main() {
 
 	r.GET("/api/v1/storefront/public", storefrontHandler.GetPublicStorefront)
 	r.GET("/api/v1/storefront/media/:mid", storefrontHandler.ServeSiteMedia)
+	// Giỏ hàng & đặt hàng trên web công khai
+	r.GET("/api/v1/storefront/public/checkout-config", storefrontHandler.PublicCheckoutConfig)
+	r.POST("/api/v1/storefront/public/orders", storefrontHandler.CreatePublicOrder)
+	r.GET("/api/v1/storefront/public/orders/:code", storefrontHandler.GetPublicOrder)
+	r.POST("/api/v1/storefront/public/orders/:code/pay", storefrontHandler.RetryVnpPayment)
+	r.GET("/api/v1/storefront/public/vnpay-return", storefrontHandler.VnpayReturnCheck)
+	r.POST("/api/v1/storefront/public/subscribe", storefrontHandler.PublicSubscribe)
+	r.GET("/api/v1/payments/vnpay/ipn", storefrontHandler.VnpayIPN)
 	r.GET("/api/v1/inbox/avatar-check/:page_id/:psid", inboxHandler.CheckCustomerAvatar)
 
 	storefrontGroup := r.Group("/api/v1/storefront", middleware.JWTAuth(cfg.JWTSecret))
@@ -112,6 +120,12 @@ func main() {
 		storefrontGroup.GET("/sites/:id/media", storefrontHandler.ListSiteMedia)
 		storefrontGroup.POST("/sites/:id/media", storefrontHandler.UploadSiteMedia)
 		storefrontGroup.DELETE("/sites/:id/media/:mid", storefrontHandler.DeleteSiteMedia)
+		// Đơn hàng, thanh toán, email đăng ký
+		storefrontGroup.GET("/sites/:id/orders", storefrontHandler.ListOrders)
+		storefrontGroup.PATCH("/sites/:id/orders/:oid", storefrontHandler.UpdateOrderStatus)
+		storefrontGroup.GET("/sites/:id/payment-settings", storefrontHandler.GetPaymentSettings)
+		storefrontGroup.PUT("/sites/:id/payment-settings", storefrontHandler.SavePaymentSettings)
+		storefrontGroup.GET("/sites/:id/subscribers", storefrontHandler.ListSiteSubscribers)
 	}
 
 	// Route trả ảnh đại diện khách hàng từ Graph API

@@ -37,6 +37,8 @@ var (
 		"features": true, "testimonials": true, "cta": true,
 		"richtext": true, "image": true, "gallery": true,
 		"faq": true, "contact": true, "html": true,
+		"announcement": true, "banner": true, "image_text": true,
+		"collections": true, "icon_strip": true, "newsletter": true, "footer": true,
 	}
 )
 
@@ -327,6 +329,7 @@ func (h *StorefrontHandler) ListSites(c *gin.Context) {
 type createSiteReq struct {
 	SiteTitle string `json:"site_title"`
 	Slug      string `json:"slug"`
+	Template  string `json:"template"` // "" = mặc định, "wellness" = Mỹ phẩm / Sức khoẻ
 }
 
 // CreateSite POST /api/v1/storefront/sites
@@ -369,12 +372,18 @@ func (h *StorefrontHandler) CreateSite(c *gin.Context) {
 	}
 
 	blocks := defaultBlocksJSON()
+	color := "#059669"
+	tplJSON, tpl, useTpl := templateBlocksJSON(req.Template)
+	if useTpl {
+		blocks = tplJSON
+		color = tpl.PrimaryColor
+	}
 	sf := models.Storefront{
 		UserID:              uid,
 		Domain:              "", // site mới truy cập qua /s/:slug; domain riêng gắn sau
 		Slug:                slug,
 		SiteTitle:           title,
-		PrimaryColor:        "#059669",
+		PrimaryColor:        color,
 		DraftBlocksJSON:     blocks,
 		PublishedBlocksJSON: blocks,
 		IsPublished:         false,
@@ -382,6 +391,9 @@ func (h *StorefrontHandler) CreateSite(c *gin.Context) {
 	if err := h.DB.Create(&sf).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tạo website thất bại."})
 		return
+	}
+	if useTpl {
+		createTemplateProducts(h.DB, &sf, tpl)
 	}
 	c.JSON(http.StatusCreated, gin.H{"site": sf})
 }
