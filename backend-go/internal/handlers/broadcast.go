@@ -7,7 +7,10 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,24 +22,42 @@ import (
 	"gorm.io/gorm"
 )
 
+// BroadcastAttachment là 1 file ảnh/video đính kèm chiến dịch.
+// AttachmentID được Facebook cấp sau lần upload đầu tiên và dùng lại cho mọi khách.
+type BroadcastAttachment struct {
+	Type         string `json:"type"` // image | video
+	URL          string `json:"url"`
+	Name         string `json:"name,omitempty"`
+	AttachmentID string `json:"attachment_id,omitempty"`
+}
+
+const (
+	broadcastUploadDir     = "uploads/broadcast"
+	broadcastMaxAttach     = 5
+	broadcastMaxImageBytes = 8 << 20  // Messenger: ảnh tối đa 8MB
+	broadcastMaxVideoBytes = 25 << 20 // Messenger: video tối đa 25MB
+)
+
 type BroadcastCampaign struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	PageID          string    `gorm:"index;not null" json:"page_id"`
-	Name            string    `gorm:"not null" json:"name"`
-	TemplatesJSON   string    `gorm:"type:text;not null" json:"-"`
-	TargetMode      string    `gorm:"default:'all'" json:"target_mode"`
-	OutOfWindowTag  string    `gorm:"default:'HUMAN_AGENT'" json:"out_of_window_tag"`
-	MinDelaySec     int       `gorm:"default:4" json:"min_delay_sec"`
-	MaxDelaySec     int       `gorm:"default:9" json:"max_delay_sec"`
-	BatchSize       int       `gorm:"default:20" json:"batch_size"`
-	BatchPauseSec   int       `gorm:"default:60" json:"batch_pause_sec"`
-	Status          string    `gorm:"index;default:'running'" json:"status"`
-	PauseReason     string    `json:"pause_reason"`
-	TotalRecipients int       `json:"total_recipients"`
-	SentCount       int       `json:"sent_count"`
-	FailedCount     int       `json:"failed_count"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              uint                  `gorm:"primaryKey" json:"id"`
+	PageID          string                `gorm:"index;not null" json:"page_id"`
+	Name            string                `gorm:"not null" json:"name"`
+	TemplatesJSON   string                `gorm:"type:text;not null" json:"-"`
+	AttachmentsJSON string                `gorm:"type:text" json:"-"`
+	Attachments     []BroadcastAttachment `gorm:"-" json:"attachments"`
+	TargetMode      string                `gorm:"default:'all'" json:"target_mode"`
+	OutOfWindowTag  string                `gorm:"default:'HUMAN_AGENT'" json:"out_of_window_tag"`
+	MinDelaySec     int                   `gorm:"default:4" json:"min_delay_sec"`
+	MaxDelaySec     int                   `gorm:"default:9" json:"max_delay_sec"`
+	BatchSize       int                   `gorm:"default:20" json:"batch_size"`
+	BatchPauseSec   int                   `gorm:"default:60" json:"batch_pause_sec"`
+	Status          string                `gorm:"index;default:'running'" json:"status"`
+	PauseReason     string                `json:"pause_reason"`
+	TotalRecipients int                   `json:"total_recipients"`
+	SentCount       int                   `json:"sent_count"`
+	FailedCount     int                   `json:"failed_count"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
 type BroadcastMessage struct {
@@ -328,7 +349,18 @@ func (h *BroadcastHandler) startWorker() {
 			continue
 		}
 
-		fbMsgID, errCode, errMsg := h.sendDirectMessage(page.PageID, pageToken, psid, msg.RenderedText, camp.OutOfWindowTag)
+		atts, attErr := h.ensureCampaignAttachments(&camp, pageToken)
+		if attErr != nil {
+			log.Printf("[Broadcast] Lỗi upload media chiến dịch %d: %v", camp.ID, attErr)
+			_ = h.DB.Model(&msg).Updates(map[string]any{"status": "pending"}).Error
+			_ = h.DB.Model(&camp).Updates(map[string]any{
+				"status":       "paused",
+				"pause_reason": "Không tải được ảnh/video lên Facebook: " + attErr.Error(),
+			}).Error
+			continue
+		}
+
+		fbMsgID, sentAtts, errCode, errMsg := h.sendBroadcastContent(page.PageID, pageToken, psid, msg.RenderedText, atts, camp.OutOfWindowTag)
 
 		if errCode == 0 && errMsg == "" {
 			now := time.Now()
@@ -341,17 +373,34 @@ func (h *BroadcastHandler) startWorker() {
 			_ = h.DB.Model(&camp).UpdateColumn("sent_count", gorm.Expr("sent_count + 1")).Error
 
 			conv.LastMessage = msg.RenderedText
+			if strings.TrimSpace(conv.LastMessage) == "" && len(sentAtts) > 0 {
+				conv.LastMessage = attachmentPreviewLabel(sentAtts[len(sentAtts)-1].Type)
+			}
 			conv.LastMessageTime = now
 			_ = h.DB.Save(&conv).Error
 
-			_ = h.DB.Create(&models.Message{
-				ConversationID: conv.ID,
-				FBMessageID:    fbMsgID,
-				SenderType:     "page",
-				SenderName:     page.Name,
-				Content:        msg.RenderedText,
-				SentAt:         now,
-			}).Error
+			if strings.TrimSpace(msg.RenderedText) != "" {
+				_ = h.DB.Create(&models.Message{
+					ConversationID: conv.ID,
+					FBMessageID:    fbMsgID,
+					SenderType:     "page",
+					SenderName:     page.Name,
+					Content:        msg.RenderedText,
+					SentAt:         now,
+				}).Error
+			}
+			for _, sa := range sentAtts {
+				_ = h.DB.Create(&models.Message{
+					ConversationID: conv.ID,
+					FBMessageID:    sa.MessageID,
+					SenderType:     "page",
+					SenderName:     page.Name,
+					Content:        "",
+					AttachmentURL:  sa.URL,
+					AttachmentType: sa.Type,
+					SentAt:         now,
+				}).Error
+			}
 
 			log.Printf("[Broadcast] Đã gửi thành công tới %s (%s)", msg.RecipientName, psid)
 		} else {
@@ -400,86 +449,367 @@ func (h *BroadcastHandler) startWorker() {
 	}
 }
 
-func (h *BroadcastHandler) sendDirectMessage(pageID, pageToken, psid, text, preferredTag string) (string, int, string) {
-	callFBSend := func(msgType, tag string) (string, int, string) {
-		payload := map[string]any{
-			"recipient":      map[string]string{"id": psid},
-			"messaging_type": msgType,
-			"message":        map[string]string{"text": text},
-		}
-		if tag != "" {
-			payload["tag"] = tag
-		}
-		bodyBytes, _ := json.Marshal(payload)
-
-		sendURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages?access_token=%s", pageID, pageToken)
-		resp, err := h.HTTPClient.Post(sendURL, "application/json", bytes.NewBuffer(bodyBytes))
-		if err != nil {
-			return "", -1, "Không kết nối được Facebook: " + err.Error()
-		}
-		defer resp.Body.Close()
-
-		respBytes, _ := io.ReadAll(resp.Body)
-		var fbRes struct {
-			MessageID string `json:"message_id"`
-			Error     *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		_ = json.Unmarshal(respBytes, &fbRes)
-		if fbRes.Error != nil {
-			code := fbRes.Error.Code
-			if code == 0 {
-				code = resp.StatusCode
-			}
-			return "", code, fbRes.Error.Message
-		}
-		return fbRes.MessageID, 0, ""
+// callFBSend gửi 1 tin (text hoặc attachment) qua Send API.
+func (h *BroadcastHandler) callFBSend(pageID, pageToken, psid string, message any, msgType, tag string) (string, int, string) {
+	payload := map[string]any{
+		"recipient":      map[string]string{"id": psid},
+		"messaging_type": msgType,
+		"message":        message,
 	}
+	if tag != "" {
+		payload["tag"] = tag
+	}
+	bodyBytes, _ := json.Marshal(payload)
 
-	// 1. Gửi thẳng cho khách trong 24h (RESPONSE)
-	mid, code, errMsg := callFBSend("RESPONSE", "")
+	sendURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages?access_token=%s", pageID, pageToken)
+	resp, err := h.HTTPClient.Post(sendURL, "application/json", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", -1, "Không kết nối được Facebook: " + err.Error()
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var fbRes struct {
+		MessageID string `json:"message_id"`
+		Error     *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(respBytes, &fbRes)
+	if fbRes.Error != nil {
+		code := fbRes.Error.Code
+		if code == 0 {
+			code = resp.StatusCode
+		}
+		return "", code, fbRes.Error.Message
+	}
+	if resp.StatusCode >= 300 {
+		return "", resp.StatusCode, string(respBytes)
+	}
+	return fbRes.MessageID, 0, ""
+}
+
+// sendWithFallback thử gửi trong cửa sổ 24h (RESPONSE), nếu quá 24h (#10) thì lần lượt thử các Message Tag.
+// Trả về thêm messaging_type/tag đã thành công để các tin tiếp theo của cùng khách dùng lại.
+func (h *BroadcastHandler) sendWithFallback(pageID, pageToken, psid string, message any, preferredTag string) (mid string, code int, errMsg, usedType, usedTag string) {
+	mid, code, errMsg = h.callFBSend(pageID, pageToken, psid, message, "RESPONSE", "")
 	if errMsg == "" {
-		return mid, 0, ""
+		return mid, 0, "", "RESPONSE", ""
 	}
 
-	// 2. Nếu quá 24h (#10), tự động thử lần lượt các Message Tag hợp lệ
 	if code == 10 || strings.Contains(errMsg, "(#10)") {
+		preferredTag = strings.TrimSpace(preferredTag)
 		tags := []string{}
-		if strings.TrimSpace(preferredTag) != "" {
-			tags = append(tags, strings.TrimSpace(preferredTag))
+		if preferredTag != "" {
+			tags = append(tags, preferredTag)
 		}
 		for _, t := range []string{"HUMAN_AGENT", "POST_PURCHASE_UPDATE", "CONFIRMED_EVENT_UPDATE"} {
-			if t != strings.TrimSpace(preferredTag) {
+			if t != preferredTag {
 				tags = append(tags, t)
 			}
 		}
 		for _, tag := range tags {
-			mid, code, errMsg = callFBSend("MESSAGE_TAG", tag)
+			mid, code, errMsg = h.callFBSend(pageID, pageToken, psid, message, "MESSAGE_TAG", tag)
 			if errMsg == "" {
-				return mid, 0, ""
+				return mid, 0, "", "MESSAGE_TAG", tag
 			}
 		}
 	}
+	return "", code, errMsg, "", ""
+}
 
-	return "", code, errMsg
+type sentAttachment struct {
+	Type      string
+	URL       string
+	MessageID string
+}
+
+// sendBroadcastContent gửi nội dung chữ (nếu có) rồi lần lượt từng ảnh/video cho 1 khách.
+// Tin đầu tiên quyết định messaging_type/tag, các tin sau dùng lại để không phải thử lại.
+func (h *BroadcastHandler) sendBroadcastContent(pageID, pageToken, psid, text string, atts []BroadcastAttachment, preferredTag string) (string, []sentAttachment, int, string) {
+	var (
+		firstMID string
+		usedType string
+		usedTag  string
+		sent     []sentAttachment
+	)
+
+	send := func(message any) (string, int, string) {
+		if usedType == "" {
+			mid, code, errMsg, t, tag := h.sendWithFallback(pageID, pageToken, psid, message, preferredTag)
+			if errMsg == "" {
+				usedType, usedTag = t, tag
+			}
+			return mid, code, errMsg
+		}
+		return h.callFBSend(pageID, pageToken, psid, message, usedType, usedTag)
+	}
+
+	if strings.TrimSpace(text) != "" {
+		mid, code, errMsg := send(map[string]string{"text": text})
+		if errMsg != "" {
+			return "", nil, code, errMsg
+		}
+		firstMID = mid
+	}
+
+	for _, a := range atts {
+		message := map[string]any{
+			"attachment": map[string]any{
+				"type":    a.Type,
+				"payload": map[string]string{"attachment_id": a.AttachmentID},
+			},
+		}
+		mid, code, errMsg := send(message)
+		if errMsg != "" {
+			// Chữ đã tới khách nhưng media lỗi: vẫn báo lỗi để người dùng thấy trong thống kê
+			return firstMID, sent, code, "Gửi " + attachmentPreviewLabel(a.Type) + " thất bại: " + errMsg
+		}
+		if firstMID == "" {
+			firstMID = mid
+		}
+		sent = append(sent, sentAttachment{Type: a.Type, URL: a.URL, MessageID: mid})
+	}
+
+	return firstMID, sent, 0, ""
+}
+
+// ensureCampaignAttachments upload ảnh/video của chiến dịch lên Facebook đúng 1 lần
+// (Attachment Upload API) rồi lưu attachment_id để tái sử dụng cho toàn bộ khách.
+func (h *BroadcastHandler) ensureCampaignAttachments(camp *BroadcastCampaign, pageToken string) ([]BroadcastAttachment, error) {
+	atts := decodeAttachments(camp.AttachmentsJSON)
+	if len(atts) == 0 {
+		return nil, nil
+	}
+
+	changed := false
+	for i := range atts {
+		if atts[i].AttachmentID != "" {
+			continue
+		}
+		id, err := h.uploadAttachmentToFacebook(camp.PageID, pageToken, atts[i])
+		if err != nil {
+			return nil, err
+		}
+		atts[i].AttachmentID = id
+		changed = true
+	}
+
+	if changed {
+		b, _ := json.Marshal(atts)
+		camp.AttachmentsJSON = string(b)
+		_ = h.DB.Model(&BroadcastCampaign{}).Where("id = ?", camp.ID).Update("attachments_json", camp.AttachmentsJSON).Error
+	}
+	return atts, nil
+}
+
+func (h *BroadcastHandler) uploadAttachmentToFacebook(pageID, pageToken string, att BroadcastAttachment) (string, error) {
+	localPath, ok := broadcastLocalPath(att.URL)
+	if !ok {
+		return "", fmt.Errorf("đường dẫn file không hợp lệ")
+	}
+	f, err := os.Open(localPath)
+	if err != nil {
+		return "", fmt.Errorf("không tìm thấy file %s trên server (hãy tải lại file và tạo chiến dịch mới)", filepath.Base(localPath))
+	}
+	defer f.Close()
+
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	go func() {
+		msgJSON, _ := json.Marshal(map[string]any{
+			"attachment": map[string]any{
+				"type":    att.Type,
+				"payload": map[string]bool{"is_reusable": true},
+			},
+		})
+		_ = writer.WriteField("message", string(msgJSON))
+		part, err := writer.CreateFormFile("filedata", filepath.Base(localPath))
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if _, err := io.Copy(part, f); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		_ = pw.CloseWithError(writer.Close())
+	}()
+
+	uploadURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/message_attachments?access_token=%s", pageID, pageToken)
+	req, err := http.NewRequest(http.MethodPost, uploadURL, pr)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("không kết nối được Facebook: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	var res struct {
+		AttachmentID string `json:"attachment_id"`
+		Error        *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &res)
+	if res.Error != nil {
+		return "", fmt.Errorf("%s", res.Error.Message)
+	}
+	if res.AttachmentID == "" {
+		return "", fmt.Errorf("Facebook không trả về attachment_id")
+	}
+	return res.AttachmentID, nil
+}
+
+func decodeAttachments(raw string) []BroadcastAttachment {
+	atts := []BroadcastAttachment{}
+	if strings.TrimSpace(raw) == "" {
+		return atts
+	}
+	_ = json.Unmarshal([]byte(raw), &atts)
+	return atts
+}
+
+func attachmentPreviewLabel(t string) string {
+	if t == "video" {
+		return "[Video]"
+	}
+	return "[Hình ảnh]"
+}
+
+var (
+	broadcastImageExts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true}
+	broadcastVideoExts = map[string]bool{".mp4": true, ".mov": true, ".m4v": true, ".webm": true}
+)
+
+// broadcastLocalPath chỉ chấp nhận file nằm trong thư mục uploads/broadcast (chặn đọc file tùy ý).
+func broadcastLocalPath(url string) (string, bool) {
+	clean := strings.TrimPrefix(strings.TrimSpace(url), "/")
+	if !strings.HasPrefix(clean, broadcastUploadDir+"/") {
+		return "", false
+	}
+	name := strings.TrimPrefix(clean, broadcastUploadDir+"/")
+	if name == "" || strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return "", false
+	}
+	return filepath.Join(filepath.FromSlash(broadcastUploadDir), name), true
+}
+
+func sanitizeBroadcastAttachment(t, url, name string) (BroadcastAttachment, bool) {
+	t = strings.ToLower(strings.TrimSpace(t))
+	localPath, ok := broadcastLocalPath(url)
+	if !ok {
+		return BroadcastAttachment{}, false
+	}
+	ext := strings.ToLower(filepath.Ext(localPath))
+	switch t {
+	case "image":
+		if !broadcastImageExts[ext] {
+			return BroadcastAttachment{}, false
+		}
+	case "video":
+		if !broadcastVideoExts[ext] {
+			return BroadcastAttachment{}, false
+		}
+	default:
+		return BroadcastAttachment{}, false
+	}
+	if _, err := os.Stat(localPath); err != nil {
+		return BroadcastAttachment{}, false
+	}
+	return BroadcastAttachment{Type: t, URL: "/" + filepath.ToSlash(localPath), Name: strings.TrimSpace(name)}, true
+}
+
+// UploadMedia POST /api/v1/broadcasts/upload-media (multipart, field "files")
+func (h *BroadcastHandler) UploadMedia(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, int64(broadcastMaxAttach)*broadcastMaxVideoBytes+(1<<20))
+
+	form, err := c.MultipartForm()
+	if err != nil || form == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File quá lớn hoặc dữ liệu tải lên không hợp lệ"})
+		return
+	}
+	files := form.File["files"]
+	if len(files) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng chọn ít nhất 1 ảnh hoặc video"})
+		return
+	}
+	if len(files) > broadcastMaxAttach {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Tối đa %d file mỗi lần", broadcastMaxAttach)})
+		return
+	}
+
+	if err := os.MkdirAll(filepath.FromSlash(broadcastUploadDir), 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không tạo được thư mục lưu file"})
+		return
+	}
+
+	var out []BroadcastAttachment
+	var rejected []string
+	for idx, file := range files {
+		ext := strings.ToLower(filepath.Ext(file.Filename))
+		var t string
+		var limit int64
+		switch {
+		case broadcastImageExts[ext]:
+			t, limit = "image", broadcastMaxImageBytes
+		case broadcastVideoExts[ext]:
+			t, limit = "video", broadcastMaxVideoBytes
+		default:
+			rejected = append(rejected, file.Filename+" (định dạng không hỗ trợ)")
+			continue
+		}
+		if file.Size > limit {
+			rejected = append(rejected, fmt.Sprintf("%s (vượt %dMB)", file.Filename, limit>>20))
+			continue
+		}
+
+		filename := fmt.Sprintf("%s_%d_%d%s", t, time.Now().UnixNano(), idx, ext)
+		dst := filepath.Join(filepath.FromSlash(broadcastUploadDir), filename)
+		if err := c.SaveUploadedFile(file, dst); err != nil {
+			rejected = append(rejected, file.Filename+" (lỗi lưu file)")
+			continue
+		}
+		out = append(out, BroadcastAttachment{
+			Type: t,
+			URL:  "/" + broadcastUploadDir + "/" + filename,
+			Name: file.Filename,
+		})
+	}
+
+	if len(out) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Không có file hợp lệ. Ảnh: JPG/PNG/GIF/WEBP ≤ 8MB; Video: MP4/MOV/M4V/WEBM ≤ 25MB. " + strings.Join(rejected, ", ")})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"files": out, "rejected": rejected})
 }
 
 // CreateCampaign POST /api/v1/broadcasts
 func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	var req struct {
-		PageID         string   `json:"page_id" binding:"required"`
-		Name           string   `json:"name" binding:"required"`
-		Templates      []string `json:"templates" binding:"required,min=1"`
-		TargetMode     string   `json:"target_mode"`
-		OutOfWindowTag string   `json:"out_of_window_tag"`
-		CooldownDays   int      `json:"cooldown_days"`
-		MaxRecipients  int      `json:"max_recipients"`
-		MinDelaySec    int      `json:"min_delay_sec"`
-		MaxDelaySec    int      `json:"max_delay_sec"`
-		BatchSize      int      `json:"batch_size"`
-		BatchPauseSec  int      `json:"batch_pause_sec"`
+		PageID      string   `json:"page_id" binding:"required"`
+		Name        string   `json:"name" binding:"required"`
+		Templates   []string `json:"templates"`
+		Attachments []struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+			Name string `json:"name"`
+		} `json:"attachments"`
+		TargetMode     string `json:"target_mode"`
+		OutOfWindowTag string `json:"out_of_window_tag"`
+		CooldownDays   int    `json:"cooldown_days"`
+		MaxRecipients  int    `json:"max_recipients"`
+		MinDelaySec    int    `json:"min_delay_sec"`
+		MaxDelaySec    int    `json:"max_delay_sec"`
+		BatchSize      int    `json:"batch_size"`
+		BatchPauseSec  int    `json:"batch_pause_sec"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -492,8 +822,23 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 			validTemplates = append(validTemplates, s)
 		}
 	}
-	if len(validTemplates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần ít nhất 1 mẫu nội dung"})
+
+	var validAtts []BroadcastAttachment
+	for _, a := range req.Attachments {
+		att, ok := sanitizeBroadcastAttachment(a.Type, a.URL, a.Name)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "File đính kèm không hợp lệ, vui lòng tải lại ảnh/video"})
+			return
+		}
+		validAtts = append(validAtts, att)
+	}
+	if len(validAtts) > broadcastMaxAttach {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Tối đa %d ảnh/video cho mỗi chiến dịch", broadcastMaxAttach)})
+		return
+	}
+
+	if len(validTemplates) == 0 && len(validAtts) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần ít nhất 1 mẫu nội dung hoặc 1 ảnh/video"})
 		return
 	}
 
@@ -568,10 +913,15 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 
 	tplJSON, _ := json.Marshal(validTemplates)
+	if validAtts == nil {
+		validAtts = []BroadcastAttachment{}
+	}
+	attJSON, _ := json.Marshal(validAtts)
 	camp := BroadcastCampaign{
 		PageID:          req.PageID,
 		Name:            req.Name,
 		TemplatesJSON:   string(tplJSON),
+		AttachmentsJSON: string(attJSON),
 		TargetMode:      req.TargetMode,
 		OutOfWindowTag:  req.OutOfWindowTag,
 		MinDelaySec:     req.MinDelaySec,
@@ -593,7 +943,10 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		if psid == "" {
 			continue
 		}
-		tpl := validTemplates[rand.Intn(len(validTemplates))]
+		tpl := ""
+		if len(validTemplates) > 0 {
+			tpl = validTemplates[rand.Intn(len(validTemplates))]
+		}
 		name := strings.TrimSpace(cv.CustomerName)
 		if name == "" {
 			name = "anh/chị"
@@ -624,6 +977,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		return
 	}
 
+	camp.Attachments = validAtts
 	c.JSON(http.StatusCreated, camp)
 }
 
@@ -631,6 +985,9 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 func (h *BroadcastHandler) ListCampaigns(c *gin.Context) {
 	var list []BroadcastCampaign
 	_ = h.DB.Order("created_at DESC").Limit(30).Find(&list).Error
+	for i := range list {
+		list[i].Attachments = decodeAttachments(list[i].AttachmentsJSON)
+	}
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 

@@ -211,6 +211,7 @@ func main() {
 	{
 		broadcastsGroup.GET("", broadcastHandler.ListCampaigns)
 		broadcastsGroup.POST("", broadcastHandler.CreateCampaign)
+		broadcastsGroup.POST("/upload-media", broadcastHandler.UploadMedia)
 		broadcastsGroup.PATCH("/:id/status", broadcastHandler.ToggleStatus)
 	}
 
