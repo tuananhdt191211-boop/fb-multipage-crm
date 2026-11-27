@@ -336,6 +336,16 @@ func (h *CompetitorHandler) ExploreContent(c *gin.Context) {
 		err = h.exploreFacebook(target, cursor, res)
 	}
 	if err != nil {
+		// Máy chủ hay bị tikwm chặn (IP đám mây). Trả kèm mục tiêu đã nhận diện
+		// để trình duyệt của người dùng tự gọi TikTok.
+		var ue *userError
+		if target.Platform == "tiktok" && errors.As(err, &ue) && ue.status == http.StatusBadGateway {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error":    ue.msg,
+				"fallback": gin.H{"platform": "tiktok", "kind": target.Kind, "value": target.Value},
+			})
+			return
+		}
 		h.exploreFail(c, err)
 		return
 	}
@@ -593,6 +603,8 @@ func (h *CompetitorHandler) exploreTikTok(t exploreTarget, cursor string, res *e
 				}
 			} else if ue, ok := err.(*userError); ok && strings.Contains(strings.ToLower(ue.msg), "user") {
 				return badInput("Không tìm thấy kênh TikTok @" + handle + ".")
+			} else if strings.Contains(err.Error(), "HTTP ") {
+				return err // bị chặn hẳn: khỏi gọi tiếp danh sách video
 			}
 		}
 		res.Channel = ch

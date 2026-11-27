@@ -24,6 +24,7 @@ import {
 } from 'lucide-vue-next'
 import { api } from '../../lib/api'
 import { safeHref, safeImg } from '../../lib/safeUrl'
+import { exploreTikTokInBrowser, type TikTokTarget } from '../../lib/tiktokBrowser'
 
 type Platform = 'tiktok' | 'youtube' | 'facebook'
 type Mode = 'keyword' | 'channel'
@@ -83,6 +84,8 @@ const errorMsg = ref('')
 const toast = ref('')
 
 const lastRequest = ref<{ q: string; platform: Platform; mode: Mode } | null>(null)
+// Khi máy chủ bị TikTok chặn, trình duyệt tự gọi TikTok với mục tiêu máy chủ đã nhận diện
+const browserTarget = ref<TikTokTarget | null>(null)
 const result = ref<ExploreResult | null>(null)
 const items = ref<ExploreItem[]>([])
 const channels = ref<ExploreChannel[]>([])
@@ -180,7 +183,16 @@ async function runSearch(override?: { q: string; platform?: Platform; mode?: Mod
   loading.value = true
   errorMsg.value = ''
   try {
-    const { data } = await api.get<ExploreResult>('/competitors/explore', { params: req, timeout: 90000 })
+    let data: ExploreResult
+    browserTarget.value = null
+    try {
+      data = (await api.get<ExploreResult>('/competitors/explore', { params: req, timeout: 90000 })).data
+    } catch (err: any) {
+      const fb = err.response?.data?.fallback as TikTokTarget | undefined
+      if (!fb) throw err
+      data = (await exploreTikTokInBrowser(fb)) as ExploreResult
+      browserTarget.value = fb
+    }
     lastRequest.value = req
     result.value = data
     items.value = data.items || []
@@ -192,7 +204,13 @@ async function runSearch(override?: { q: string; platform?: Platform; mode?: Mod
     if (data.platform && data.platform !== platform.value) platform.value = data.platform
     rememberSearch(req)
   } catch (err: any) {
-    errorMsg.value = err.response?.data?.error || (err.code === 'ECONNABORTED' ? 'Máy chủ phản hồi quá lâu, thử lại sau ít phút.' : 'Quét thất bại, thử lại sau.')
+    // Xoá kết quả cũ để không lẫn với lỗi của lần quét này
+    result.value = null
+    items.value = []
+    channels.value = []
+    errorMsg.value =
+      err.response?.data?.error ||
+      (err.code === 'ECONNABORTED' ? 'Máy chủ phản hồi quá lâu, thử lại sau ít phút.' : err.message || 'Quét thất bại, thử lại sau.')
   } finally {
     loading.value = false
   }
@@ -203,10 +221,14 @@ async function loadMore() {
   loadingMore.value = true
   errorMsg.value = ''
   try {
-    const { data } = await api.get<ExploreResult>('/competitors/explore', {
-      params: { ...lastRequest.value, cursor: nextCursor.value },
-      timeout: 90000
-    })
+    const data = browserTarget.value
+      ? ((await exploreTikTokInBrowser(browserTarget.value, nextCursor.value)) as ExploreResult)
+      : (
+          await api.get<ExploreResult>('/competitors/explore', {
+            params: { ...lastRequest.value, cursor: nextCursor.value },
+            timeout: 90000
+          })
+        ).data
     const seen = new Set(items.value.map(keyOf))
     items.value.push(...(data.items || []).filter((it) => !seen.has(keyOf(it))))
     const seenCh = new Set(channels.value.map((c) => c.url))
@@ -214,7 +236,7 @@ async function loadMore() {
     nextCursor.value = data.next_cursor || ''
     hasMore.value = Boolean(data.has_more) && nextCursor.value !== ''
   } catch (err: any) {
-    errorMsg.value = err.response?.data?.error || 'Không tải thêm được.'
+    errorMsg.value = err.response?.data?.error || err.message || 'Không tải thêm được.'
   } finally {
     loadingMore.value = false
   }
