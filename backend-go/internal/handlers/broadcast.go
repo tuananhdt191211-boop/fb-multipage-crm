@@ -94,6 +94,22 @@ func NewBroadcastHandler(db *gorm.DB, cfg *config.Config) *BroadcastHandler {
 	migrateMarketingTables(db)
 	migrateBroadcastMediaTables(db)
 
+	// Cột cũ recipient_psid (NOT NULL) không còn được ghi: GORM lưu PSID vào recipient_ps_id.
+	// Bỏ ràng buộc để insert không bị lỗi 23502.
+	if err := db.Exec(`
+		DO $$
+		BEGIN
+		  IF EXISTS (
+		    SELECT 1 FROM information_schema.columns
+		    WHERE table_name = 'broadcast_messages' AND column_name = 'recipient_psid' AND is_nullable = 'NO'
+		  ) THEN
+		    ALTER TABLE broadcast_messages ALTER COLUMN recipient_psid DROP NOT NULL;
+		  END IF;
+		END $$;
+	`).Error; err != nil {
+		log.Printf("[Broadcast] Không bỏ được NOT NULL của broadcast_messages.recipient_psid: %v", err)
+	}
+
 	_ = db.Exec(`
 		ALTER TABLE broadcast_messages
 		  ADD COLUMN IF NOT EXISTS page_id TEXT,
