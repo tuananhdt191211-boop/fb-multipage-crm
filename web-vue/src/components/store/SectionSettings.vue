@@ -6,7 +6,7 @@ import ImageField from './ImageField.vue'
 import { iconChoices } from '../../lib/blockFactory'
 import type { StoreBlock } from '../../types/store'
 
-const props = defineProps<{ block: StoreBlock; siteId: number | string; siteLogo?: string }>()
+const props = defineProps<{ block: StoreBlock; siteId: number | string; siteLogo?: string; siteColor?: string }>()
 
 const inp = 'w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none'
 const lbl = 'block text-xs font-bold text-slate-600'
@@ -78,6 +78,49 @@ function rowClass(key: string, i: number) {
   ]
 }
 
+// ----- Đầu trang: kiểu có sẵn -----
+// Màu chủ đạo của website làm đậm (trộn với đen) -> nền đầu trang theo thương hiệu của chính shop
+function darken(hex: string | undefined, keep = 0.35): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim())
+  if (!m) return '#1e293b'
+  const n = parseInt(m[1]!, 16)
+  const ch = (shift: number) => Math.round(((n >> shift) & 255) * keep).toString(16).padStart(2, '0')
+  return `#${ch(16)}${ch(8)}${ch(0)}`
+}
+
+const headerPresets = computed(() => [
+  { key: 'brand' as const, name: 'Tối giản · màu thương hiệu', bg: darken(props.siteColor), fg: '#ffffff' },
+  { key: 'black' as const, name: 'Tối giản · đen', bg: '#111111', fg: '#ffffff' },
+  { key: 'light' as const, name: 'Tối giản · trắng', bg: '#ffffff', fg: '#0f172a' },
+  { key: 'classic' as const, name: 'Cổ điển · nút đặt mua', bg: '#f8fafc', fg: '#334155' }
+])
+
+function applyHeaderPreset(key: 'brand' | 'black' | 'light' | 'classic') {
+  const p = headerPresets.value.find((x) => x.key === key)!
+  const data = d()
+  const st: Record<string, string> = { ...(data.style || {}) }
+  if (key === 'classic') {
+    Object.assign(data, { layout: 'left', right_mode: 'cta', show_cta: true, border: true, text_color: '' })
+    delete st.bg
+  } else {
+    // Logo + menu sát logo bên trái, biểu tượng 🔍 👤 🛍 bên phải
+    Object.assign(data, { layout: 'left_menu', right_mode: 'account', account_style: 'icon', show_search: true, sticky: true })
+    if (key === 'light') {
+      Object.assign(data, { border: true, text_color: '' })
+      delete st.bg
+    } else {
+      Object.assign(data, { border: false, text_color: p.fg })
+      st.bg = p.bg
+    }
+    // Có logo thì chỉ hiện logo cho gọn
+    if (hasLogo.value) {
+      data.show_logo = true
+      data.show_brand = false
+    }
+  }
+  data.style = st
+}
+
 const cssPlaceholder = 'border-radius: 24px;\n\nh2 {\n  color: #be123c;\n  font-size: 48px;\n}\n\nbutton:hover {\n  transform: scale(1.03);\n}'
 
 function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
@@ -92,6 +135,29 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
   <div class="space-y-4 text-left">
     <!-- ===== Đầu trang ===== -->
     <template v-if="block.type === 'header'">
+      <!-- Kiểu có sẵn: áp cả bộ trong 1 lần bấm -->
+      <div class="space-y-1.5">
+        <span :class="lbl">Kiểu đầu trang có sẵn</span>
+        <div class="grid grid-cols-2 gap-1.5">
+          <button
+            v-for="p in headerPresets"
+            :key="p.key"
+            type="button"
+            class="overflow-hidden rounded-xl border border-slate-200 text-left transition hover:border-indigo-400 hover:shadow-sm"
+            @click="applyHeaderPreset(p.key)"
+          >
+            <div class="flex h-8 items-center gap-1.5 px-2" :style="{ backgroundColor: p.bg, color: p.fg }">
+              <span class="h-3.5 w-3.5 rounded-sm" :style="{ backgroundColor: p.fg, opacity: 0.85 }" />
+              <span class="h-1 w-4 rounded-full" :style="{ backgroundColor: p.fg, opacity: 0.6 }" />
+              <span class="h-1 w-4 rounded-full" :style="{ backgroundColor: p.fg, opacity: 0.6 }" />
+              <span class="ml-auto flex gap-1">
+                <span v-for="n in 3" :key="n" class="h-2 w-2 rounded-full border" :style="{ borderColor: p.fg }" />
+              </span>
+            </div>
+            <div class="px-2 py-1.5 text-[11px] font-bold text-slate-700">{{ p.name }}</div>
+          </button>
+        </div>
+      </div>
       <ImageField v-model="block.data.logo_url" :site-id="siteId" label="Logo" compact />
       <label class="flex items-center gap-3 text-xs font-bold text-slate-600">
         Cao logo
@@ -133,6 +199,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
       <label class="space-y-1">
         <span :class="lbl">Bố cục</span>
         <select v-model="block.data.layout" :class="inp">
+          <option value="left_menu">Logo · Menu sát logo · Biểu tượng bên phải</option>
           <option value="left">Logo trái · Menu và nút bên phải</option>
           <option value="split">Logo trái · Menu giữa · Nút phải</option>
           <option value="center">Logo giữa · Menu bên dưới</option>
@@ -177,9 +244,26 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
             {{ m.t }}
           </button>
         </div>
-        <p v-if="block.data.right_mode === 'account'" class="text-[10px] leading-snug text-slate-400">
-          Khách thấy giỏ hàng, nút Đăng nhập / Đăng ký; đã đăng nhập thì thấy tên mình, “Đơn hàng của tôi” và Đăng xuất.
-        </p>
+        <template v-if="block.data.right_mode === 'account'">
+          <span :class="lbl" class="pt-1">Kiểu nút tài khoản</span>
+          <div class="grid grid-cols-2 gap-1">
+            <button
+              v-for="m in [{ v: 'icon', t: 'Biểu tượng 👤' }, { v: 'buttons', t: 'Chữ Đăng nhập / Đăng ký' }]"
+              :key="m.v"
+              type="button"
+              class="rounded-lg border px-1 py-1.5 text-[11px] font-bold"
+              :class="(block.data.account_style || 'buttons') === m.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'"
+              @click="block.data.account_style = m.v"
+            >
+              {{ m.t }}
+            </button>
+          </div>
+          <p class="text-[10px] leading-snug text-slate-400">
+            {{ block.data.account_style === 'icon'
+              ? 'Chưa đăng nhập: bấm 👤 mở hộp Đăng nhập / Đăng ký. Đã đăng nhập: 👤 có chấm xanh, bấm mở Đơn hàng của tôi / Đăng xuất.'
+              : 'Khách thấy nút Đăng nhập / Đăng ký; đã đăng nhập thì thấy tên mình, “Đơn hàng của tôi” và Đăng xuất.' }}
+          </p>
+        </template>
       </div>
       <template v-if="block.data.right_mode !== 'account'">
         <label class="flex items-center gap-2 text-xs font-bold text-slate-600">

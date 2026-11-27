@@ -38,6 +38,7 @@ import { customerState, useCustomer } from '../../lib/customer'
 import EditableText from './EditableText.vue'
 import BannerSlider from './BannerSlider.vue'
 import NewsletterForm from './NewsletterForm.vue'
+import AccountMenu from './AccountMenu.vue'
 import StoreIcon from './StoreIcon.vue'
 import { pathKey, scopedSectionCss } from '../../lib/textStyle'
 import { themeCss, usedFonts } from '../../lib/theme'
@@ -138,6 +139,13 @@ const accountPath = computed(() => (props.siteSlug ? storePath(props.siteSlug, '
 function openAuth(mode: 'login' | 'register') {
   if (cust) customerState.dialog = mode
 }
+// Kiểu tối giản: tài khoản chỉ là biểu tượng 👤, biểu tượng to hơn
+function iconMode(blk: StoreBlock) {
+  return blk.data.right_mode === 'account' && blk.data.account_style === 'icon'
+}
+function iconCls(blk: StoreBlock) {
+  return iconMode(blk) ? 'h-[22px] w-[22px]' : 'h-5 w-5'
+}
 function logoutCustomer() {
   cust?.logout()
   accountOpen.value = false
@@ -235,6 +243,9 @@ function headerLayout(layout?: string) {
         nav: '@3xl:order-1 @3xl:justify-start',
         cta: '@3xl:order-3 @3xl:justify-self-end'
       }
+    // Logo · menu sát logo · biểu tượng dồn hết sang phải (kiểu tối giản)
+    case 'left_menu':
+      return { wrap: '@3xl:flex-nowrap', brand: '', nav: '@3xl:mr-auto', cta: '' }
     default:
       return { wrap: '', brand: '@3xl:mr-auto', nav: '', cta: '' }
   }
@@ -443,11 +454,12 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <!-- Menu máy tính -->
               <nav
                 v-if="navItems(blk).length"
-                class="hidden flex-wrap items-center gap-x-7 gap-y-1 text-[15px] font-medium @3xl:flex"
+                class="hidden flex-wrap items-center gap-x-7 gap-y-1 font-medium @3xl:flex"
+                :style="{ fontSize: blk.data.layout === 'left_menu' ? '16.5px' : '15px' }"
                 :class="[headerLayout(blk.data.layout).nav, blk.data.text_color ? '' : 'text-slate-600']"
               >
                 <template v-for="item in navItems(blk)" :key="item.idx">
-                  <a :href="safeHref(item.link)" class="transition-colors hover:opacity-70">
+                  <a :href="safeHref(item.link)" class="transition" :class="blk.data.text_color ? 'opacity-80 hover:opacity-100' : 'hover:opacity-70'">
                     <EditableText :fx="fx(blk, ['nav_items', item.idx, 'label'])" :model-value="item.label" :editable="editable" placeholder="Mục menu" @update:model-value="set(blk, ['nav_items', item.idx, 'label'], $event)" />
                   </a>
                 </template>
@@ -464,22 +476,48 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 <EditableText :fx="fx(blk, ['cta_label'])" :model-value="blk.data.cta_label || (editable ? '' : 'Đặt mua ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
               </a>
 
-              <!-- Tìm kiếm, giỏ hàng, menu điện thoại -->
-              <div class="flex items-center gap-0.5" :class="[blk.data.text_color ? '' : 'text-slate-700', headerLayout(blk.data.layout).cta ? '@3xl:order-4' : '']">
-                <button v-if="blk.data.show_search" type="button" class="rounded-full p-2 hover:bg-black/5" aria-label="Tìm kiếm" @click.stop="toggleSearch(blk.id)">
-                  <Search class="h-5 w-5" />
+              <!-- Tìm kiếm, tài khoản, giỏ hàng, menu điện thoại -->
+              <div
+                class="flex items-center"
+                :class="[blk.data.text_color ? '' : 'text-slate-700', headerLayout(blk.data.layout).cta ? '@3xl:order-4' : '', iconMode(blk) ? 'gap-1 @3xl:gap-2.5' : 'gap-0.5']"
+              >
+                <button v-if="blk.data.show_search" type="button" class="rounded-full p-2 transition hover:bg-current/10" aria-label="Tìm kiếm" @click.stop="toggleSearch(blk.id)">
+                  <Search :class="iconCls(blk)" />
                 </button>
-                <!-- Điện thoại: biểu tượng tài khoản -->
-                <template v-if="blk.data.right_mode === 'account'">
+
+                <!-- Tài khoản dạng biểu tượng (kiểu tối giản): chưa đăng nhập -> mở hộp đăng nhập; đã đăng nhập -> menu -->
+                <div v-if="iconMode(blk)" class="relative">
+                  <button
+                    type="button"
+                    class="relative rounded-full p-2 transition hover:bg-current/10"
+                    :aria-label="customerName ? 'Tài khoản của ' + customerName : 'Đăng nhập'"
+                    :title="customerName ? customerName : 'Đăng nhập / Đăng ký'"
+                    @click.stop="customerName ? (accountOpen = !accountOpen) : openAuth('login')"
+                  >
+                    <User :class="iconCls(blk)" />
+                    <span v-if="customerName" class="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-emerald-400 ring-2 ring-white" />
+                  </button>
+                  <AccountMenu
+                    v-if="accountOpen && customerName"
+                    :name="customerName"
+                    :phone="customerState.customer?.phone"
+                    :account-path="accountPath"
+                    @close="accountOpen = false"
+                    @logout="logoutCustomer"
+                  />
+                </div>
+                <!-- Kiểu chữ: trên điện thoại vẫn dùng biểu tượng -->
+                <template v-else-if="blk.data.right_mode === 'account'">
                   <router-link v-if="customerName" :to="accountPath" class="rounded-full p-1.5 @xl:hidden" aria-label="Tài khoản">
                     <span class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white" :style="{ backgroundColor: accent }">{{ initial(customerName) }}</span>
                   </router-link>
-                  <button v-else type="button" class="rounded-full p-2 hover:bg-black/5 @xl:hidden" aria-label="Đăng nhập" @click.stop="openAuth('login')">
+                  <button v-else type="button" class="rounded-full p-2 transition hover:bg-current/10 @xl:hidden" aria-label="Đăng nhập" @click.stop="openAuth('login')">
                     <User class="h-5 w-5" />
                   </button>
                 </template>
-                <button v-if="blk.data.show_cart || blk.data.right_mode === 'account'" type="button" class="relative rounded-full p-2 hover:bg-black/5" aria-label="Giỏ hàng" @click.stop="openCart">
-                  <ShoppingBag class="h-5 w-5" />
+
+                <button v-if="blk.data.show_cart || blk.data.right_mode === 'account'" type="button" class="relative rounded-full p-2 transition hover:bg-current/10" aria-label="Giỏ hàng" @click.stop="openCart">
+                  <ShoppingBag :class="iconCls(blk)" />
                   <span
                     v-if="cartCount > 0"
                     class="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
@@ -488,36 +526,34 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     {{ cartCount > 99 ? '99+' : cartCount }}
                   </span>
                 </button>
-                <!-- Tài khoản khách: Đăng nhập / Đăng ký, hoặc tên + menu khi đã đăng nhập -->
-                <div v-if="blk.data.right_mode === 'account'" class="ml-1.5 hidden items-center gap-1.5 @xl:flex">
+
+                <!-- Tài khoản dạng chữ (máy tính): Đăng nhập / Đăng ký, hoặc tên + menu -->
+                <div v-if="blk.data.right_mode === 'account' && !iconMode(blk)" class="ml-1.5 hidden items-center gap-1.5 @xl:flex">
                   <div v-if="customerName" class="relative">
                     <button
                       type="button"
-                      class="flex items-center gap-2 rounded-full border border-slate-200/80 py-1 pl-1 pr-3 text-sm font-semibold transition hover:bg-black/5"
+                      class="flex items-center gap-2 rounded-full border border-current/20 py-1 pl-1 pr-3 text-sm font-semibold transition hover:bg-current/10"
                       @click.stop="accountOpen = !accountOpen"
                     >
                       <span class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white" :style="{ backgroundColor: accent }">{{ initial(customerName) }}</span>
                       <span class="max-w-[120px] truncate">{{ firstName }}</span>
                       <ChevronDown class="h-3.5 w-3.5 opacity-60" />
                     </button>
-                    <template v-if="accountOpen">
-                      <div class="fixed inset-0 z-30" @click.stop="accountOpen = false" />
-                      <div class="absolute right-0 top-full z-40 mt-2 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1.5 text-sm text-slate-700 shadow-xl">
-                        <div class="border-b border-slate-100 px-4 pb-2 pt-1">
-                          <div class="truncate font-bold text-slate-900">{{ customerName }}</div>
-                          <div class="truncate text-xs text-slate-500">{{ customerState.customer?.phone }}</div>
-                        </div>
-                        <router-link :to="accountPath" class="flex items-center gap-2.5 px-4 py-2.5 hover:bg-slate-50" @click="accountOpen = false"><Package class="h-4 w-4 text-slate-400" /> Đơn hàng của tôi</router-link>
-                        <router-link :to="accountPath" class="flex items-center gap-2.5 px-4 py-2.5 hover:bg-slate-50" @click="accountOpen = false"><User class="h-4 w-4 text-slate-400" /> Thông tin tài khoản</router-link>
-                        <button type="button" class="flex w-full items-center gap-2.5 border-t border-slate-100 px-4 py-2.5 text-left text-rose-600 hover:bg-rose-50" @click="logoutCustomer"><LogOut class="h-4 w-4" /> Đăng xuất</button>
-                      </div>
-                    </template>
+                    <AccountMenu
+                      v-if="accountOpen"
+                      :name="customerName"
+                      :phone="customerState.customer?.phone"
+                      :account-path="accountPath"
+                      @close="accountOpen = false"
+                      @logout="logoutCustomer"
+                    />
                   </div>
                   <template v-else>
-                    <button type="button" class="rounded-full px-3.5 py-2 text-sm font-semibold transition hover:bg-black/5" @click.stop="openAuth('login')">Đăng nhập</button>
+                    <button type="button" class="rounded-full px-3.5 py-2 text-sm font-semibold transition hover:bg-current/10" @click.stop="openAuth('login')">Đăng nhập</button>
                     <button type="button" class="rounded-full px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-110" :style="{ backgroundColor: accent }" @click.stop="openAuth('register')">Đăng ký</button>
                   </template>
                 </div>
+
                 <button
                   v-if="navItems(blk).length"
                   type="button"

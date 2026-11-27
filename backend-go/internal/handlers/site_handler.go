@@ -246,7 +246,8 @@ func normalizeHeader(data map[string]interface{}) {
 		}
 		data[key] = def
 	}
-	pick("layout", "left", "left", "split", "center", "center_split")
+	pick("layout", "left", "left", "left_menu", "split", "center", "center_split")
+	pick("account_style", "buttons", "buttons", "icon")
 	pick("brand_size", "md", "sm", "md", "lg")
 	pick("right_mode", "cta", "cta", "account")
 
