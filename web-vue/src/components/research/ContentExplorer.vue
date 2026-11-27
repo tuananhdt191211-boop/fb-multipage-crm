@@ -468,7 +468,7 @@ const modeLabel = computed(() => {
         </div>
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-bold !text-slate-900">{{ result.channel.name }}</p>
-          <p class="truncate text-xs text-slate-500">
+          <p class="break-words text-xs text-slate-500">
             {{ platformLabel(result.channel.platform) }}
             <template v-if="result.channel.handle"> · @{{ result.channel.handle }}</template>
             <template v-if="result.channel.followers"> · {{ fmtNum(result.channel.followers) }} người theo dõi</template>
