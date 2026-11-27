@@ -4,10 +4,16 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { safeHref, safeImg } from '../../lib/safeUrl'
 import EditableText from './EditableText.vue'
-import type { StoreBlock } from '../../types/store'
+import { pathKey } from '../../lib/textStyle'
+import type { StoreBlock, TextFx, TextStyle } from '../../types/store'
 
 const props = defineProps<{ blk: StoreBlock; editable?: boolean; accent: string }>()
 const emit = defineEmits<{ (e: 'edit', path: (string | number)[], v: string): void }>()
+
+function fx(path: (string | number)[]): TextFx {
+  const key = pathKey(path)
+  return { block: props.blk.id, key, style: props.blk.data?._text?.[key] as TextStyle | undefined }
+}
 
 const slides = computed<any[]>(() => (Array.isArray(props.blk.data.slides) ? props.blk.data.slides : []))
 const idx = ref(0)
@@ -79,7 +85,7 @@ function onTouchEnd(e: TouchEvent) {
         <!-- Chữ -->
         <div class="relative mx-auto w-full max-w-6xl px-6 py-16 @3xl:px-10">
           <div class="max-w-xl space-y-4 text-white">
-            <EditableText
+            <EditableText :fx="fx(['slides', i, 'heading'])"
               v-if="s.heading || editable"
               tag="h2"
               :model-value="s.heading"
@@ -88,7 +94,7 @@ function onTouchEnd(e: TouchEvent) {
               class="block text-3xl font-extrabold leading-tight tracking-tight drop-shadow-sm @3xl:text-5xl"
               @update:model-value="emit('edit', ['slides', i, 'heading'], $event)"
             />
-            <EditableText
+            <EditableText :fx="fx(['slides', i, 'text'])"
               v-if="s.text || editable"
               tag="p"
               multiline
@@ -100,7 +106,7 @@ function onTouchEnd(e: TouchEvent) {
             />
             <div v-if="s.button_label || editable" class="pt-2">
               <a :href="safeHref(s.link, '#products')" class="inline-flex rounded-full bg-white px-7 py-3.5 text-sm font-bold shadow-lg transition hover:-translate-y-0.5" :style="{ color: accent }">
-                <EditableText :model-value="s.button_label" :editable="editable" placeholder="Chữ trên nút" @update:model-value="emit('edit', ['slides', i, 'button_label'], $event)" />
+                <EditableText :fx="fx(['slides', i, 'button_label'])" :model-value="s.button_label" :editable="editable" placeholder="Chữ trên nút" @update:model-value="emit('edit', ['slides', i, 'button_label'], $event)" />
               </a>
             </div>
           </div>

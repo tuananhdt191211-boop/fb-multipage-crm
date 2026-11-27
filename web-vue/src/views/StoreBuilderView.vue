@@ -3,7 +3,7 @@
 // - Cột trái: thư viện section (kéo thả vào trang) / danh sách section / cài đặt chung
 // - Giữa: trang thật, click để chọn, gõ chữ trực tiếp, kéo để đổi vị trí
 // - Cột phải: cài đặt chi tiết của section đang chọn
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -28,8 +28,9 @@ import { api } from '../lib/api'
 import { blockCatalog, blockLabels, newBlock } from '../lib/blockFactory'
 import StoreRenderer from '../components/store/StoreRenderer.vue'
 import SectionSettings from '../components/store/SectionSettings.vue'
+import TextStylePanel from '../components/store/TextStylePanel.vue'
 import ImageField from '../components/store/ImageField.vue'
-import type { AdminProduct, BlockType, PublicProduct, Site, StoreBlock } from '../types/store'
+import type { AdminProduct, BlockType, PublicProduct, Site, StoreBlock, TextFx } from '../types/store'
 
 const route = useRoute()
 const router = useRouter()
@@ -288,7 +289,25 @@ function scrollToBlock(id: string) {
 
 function selectBlock(id: string | null) {
   selectedId.value = id
+  if (activeText.value && activeText.value.block !== id) activeText.value = null
 }
+
+// Bấm vào một đoạn chữ trên trang -> mở bảng "Kiểu chữ" cho đoạn đó
+const activeText = ref<{ block: string; key: string; baseTag: string } | null>(null)
+provide('ppTextFocus', (fx: TextFx, baseTag: string) => {
+  selectedId.value = fx.block
+  activeText.value = { block: fx.block, key: fx.key, baseTag }
+})
+// Nội dung hiện tại của đoạn chữ đang chọn (để xem trước code)
+const activeTextValue = computed(() => {
+  const t = activeText.value
+  const b = t && blocks.value.find((x) => x.id === t.block)
+  if (!t || !b) return ''
+  let v: any = b.data
+  for (const k of t.key.split('.')) v = v?.[/^\d+$/.test(k) ? Number(k) : k]
+  if (v && typeof v === 'object') v = v.label
+  return v === undefined || v === null ? '' : String(v)
+})
 
 function selectFromList(id: string) {
   selectedId.value = id
@@ -705,7 +724,19 @@ watch(selectedId, (id) => {
               </div>
               <button class="rounded-lg p-1 hover:bg-slate-100" title="Bỏ chọn (Esc)" @click="selectBlock(null)"><X class="h-4 w-4" /></button>
             </div>
-            <div class="p-4">
+            <div class="space-y-4 p-4">
+              <TextStylePanel
+                v-if="activeText && activeText.block === selectedBlock.id"
+                :key="activeText.key"
+                :block="selectedBlock"
+                :fx-key="activeText.key"
+                :base-tag="activeText.baseTag"
+                :text="activeTextValue"
+                @close="activeText = null"
+              />
+              <p v-else class="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
+                Mẹo: bấm vào một dòng chữ trên trang để chỉnh cỡ chữ, màu, thẻ H1/H2… và xem code CSS/HTML.
+              </p>
               <SectionSettings :key="selectedBlock.id" :block="selectedBlock" :site-id="site.id" />
             </div>
           </template>

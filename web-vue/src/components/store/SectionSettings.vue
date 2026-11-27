@@ -61,9 +61,11 @@ function rowClass(key: string, i: number) {
   ]
 }
 
-function setStyle(key: 'bg' | 'pad', val: string) {
+const cssPlaceholder = 'border-radius: 24px;\n\nh2 {\n  color: #be123c;\n  font-size: 48px;\n}\n\nbutton:hover {\n  transform: scale(1.03);\n}'
+
+function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
   const st: Record<string, string> = { ...(d().style || {}) }
-  if (!val || (key === 'pad' && val === 'none')) delete st[key]
+  if (!val.trim() || (key === 'pad' && val === 'none')) delete st[key]
   else st[key] = val
   d().style = st
 }
@@ -185,7 +187,7 @@ function setStyle(key: 'bg' | 'pad', val: string) {
       <template v-if="block.data.show_buy !== false">
         <label v-if="block.data.source === 'catalog'" class="space-y-1">
           <span :class="lbl">Khi bấm nút</span>
-          <select v-model="block.data.buy_mode" :class="inp">
+          <select :value="block.data.buy_mode || 'cart'" :class="inp" @change="block.data.buy_mode = ($event.target as HTMLSelectElement).value">
             <option value="cart">Thêm vào giỏ hàng (khách đặt hàng & thanh toán trên web)</option>
             <option value="link">Mở liên kết (Messenger, Zalo, số điện thoại...)</option>
           </select>
@@ -622,6 +624,20 @@ function setStyle(key: 'bg' | 'pad', val: string) {
           </button>
         </div>
       </div>
+      <label class="block space-y-1">
+        <span class="text-xs font-bold text-slate-600">CSS tuỳ chỉnh cho section này</span>
+        <textarea
+          :value="block.data.style?.css || ''"
+          rows="6"
+          spellcheck="false"
+          :placeholder="cssPlaceholder"
+          class="w-full rounded-lg border border-slate-200 bg-slate-900 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-emerald-200 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+          @input="setStyle('css', ($event.target as HTMLTextAreaElement).value)"
+        />
+        <span class="block text-[10px] leading-snug text-slate-400">
+          Chỉ áp dụng trong section này. Viết thuộc tính trực tiếp (áp cho cả section) hoặc kèm bộ chọn như <code>h2 { … }</code>, <code>a:hover { … }</code>, <code>&amp;:hover { … }</code>.
+        </span>
+      </label>
     </div>
   </div>
 </template>

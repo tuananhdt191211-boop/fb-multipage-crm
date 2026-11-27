@@ -182,7 +182,30 @@ func normalizeStyle(data map[string]interface{}) {
 	if pad, ok := raw["pad"].(string); ok && (pad == "sm" || pad == "md" || pad == "lg") {
 		clean["pad"] = pad
 	}
+	if css, ok := raw["css"].(string); ok {
+		if css = cleanSectionCSS(css); css != "" {
+			clean["css"] = css
+		}
+	}
 	data["style"] = clean
+}
+
+var (
+	cssStyleTagRe = regexp.MustCompile(`(?i)</?\s*style`)
+	cssImportRe   = regexp.MustCompile(`(?i)@import[^;]*;?`)
+	cssExprRe     = regexp.MustCompile(`(?i)expression\s*\(`)
+)
+
+// cleanSectionCSS: CSS tuỳ chỉnh của section — giới hạn 20KB, bỏ thẻ style / @import / expression().
+// Frontend ghi CSS này dạng chữ thuần vào thẻ <style>, bọc trong selector của section.
+func cleanSectionCSS(css string) string {
+	if len(css) > 20000 {
+		css = css[:20000]
+	}
+	css = cssStyleTagRe.ReplaceAllString(css, "")
+	css = cssImportRe.ReplaceAllString(css, "")
+	css = cssExprRe.ReplaceAllString(css, "")
+	return strings.TrimSpace(css)
 }
 
 // normalizeHeader làm sạch cấu hình section Đầu trang.

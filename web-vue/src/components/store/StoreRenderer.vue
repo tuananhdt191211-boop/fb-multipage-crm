@@ -34,7 +34,8 @@ import EditableText from './EditableText.vue'
 import BannerSlider from './BannerSlider.vue'
 import NewsletterForm from './NewsletterForm.vue'
 import StoreIcon from './StoreIcon.vue'
-import type { BlockStyle, PublicProduct, StoreBlock } from '../../types/store'
+import { pathKey, scopedSectionCss } from '../../lib/textStyle'
+import type { BlockStyle, PublicProduct, StoreBlock, TextFx, TextStyle } from '../../types/store'
 
 const props = defineProps<{
   siteTitle: string
@@ -86,6 +87,17 @@ function wrapStyle(blk: StoreBlock): Record<string, string> {
 
 function set(blk: StoreBlock, path: (string | number)[], v: string) {
   emit('edit', blk.id, path, v)
+}
+
+// Kiểu chữ tuỳ chỉnh của một đoạn chữ (block.data._text["đường.dẫn"])
+function fx(blk: StoreBlock, path: (string | number)[]): TextFx {
+  const key = pathKey(path)
+  return { block: blk.id, key, style: blk.data?._text?.[key] as TextStyle | undefined }
+}
+
+// CSS tuỳ chỉnh của section (chỉ áp dụng bên trong section đó)
+function sectionCss(blk: StoreBlock): string {
+  return scopedSectionCss(blk.id, (blk.data?.style as BlockStyle | undefined)?.css)
 }
 
 // ----- Giỏ hàng & sản phẩm (chỉ trên web công khai) -----
@@ -294,6 +306,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
     <template v-for="{ blk, index } in visibleBlocks()" :key="blk.id">
       <div
         :data-block-id="blk.id"
+        :data-pp-sec="blk.id"
         :style="wrapStyle(blk)"
         :class="editable ? ['relative transition-opacity', !blk.enabled ? 'opacity-40' : ''] : ''"
         @click="onSectionClick(blk)"
@@ -301,6 +314,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         @mouseleave="editable && hoverId === blk.id && (hoverId = null)"
         @dragover="onSectionDragOver(index, $event)"
       >
+        <!-- CSS tuỳ chỉnh của section (ghi dạng chữ thuần vào thẻ style, không chạy được mã) -->
+        <component :is="'style'" v-if="sectionCss(blk)">{{ sectionCss(blk) }}</component>
         <!-- ===== Khung chọn & thanh công cụ (chỉ trong trình chỉnh sửa) ===== -->
         <template v-if="editable">
           <div v-if="dragActive && dropIndex === index" class="pointer-events-none absolute inset-x-0 -top-[3px] z-40 h-[6px] rounded-full bg-indigo-500 shadow-[0_0_0_3px_rgba(99,102,241,0.25)]" />
@@ -347,7 +362,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <!-- Logo + tên -->
               <div class="flex min-w-0 flex-1 items-center gap-2.5 @3xl:flex-none" :class="headerLayout(blk.data.layout).brand">
                 <img v-if="logoSrc(blk)" :src="logoSrc(blk)" :alt="blk.data.brand_name || siteTitle" class="w-auto max-w-[180px] object-contain" :style="{ height: logoH(blk) + 'px' }" />
-                <EditableText
+                <EditableText :fx="fx(blk, ['brand_name'])"
                   v-if="blk.data.show_brand !== false || !logoSrc(blk)"
                   :model-value="blk.data.brand_name || (editable ? '' : siteTitle)"
                   :editable="editable"
@@ -366,7 +381,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               >
                 <template v-for="item in navItems(blk)" :key="item.idx">
                   <a :href="safeHref(item.link)" class="transition-colors hover:opacity-70">
-                    <EditableText :model-value="item.label" :editable="editable" placeholder="Mục menu" @update:model-value="set(blk, ['nav_items', item.idx, 'label'], $event)" />
+                    <EditableText :fx="fx(blk, ['nav_items', item.idx, 'label'])" :model-value="item.label" :editable="editable" placeholder="Mục menu" @update:model-value="set(blk, ['nav_items', item.idx, 'label'], $event)" />
                   </a>
                 </template>
               </nav>
@@ -379,7 +394,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 :class="headerLayout(blk.data.layout).cta"
                 :style="{ backgroundColor: accent }"
               >
-                <EditableText :model-value="blk.data.cta_label || (editable ? '' : 'Đặt mua ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
+                <EditableText :fx="fx(blk, ['cta_label'])" :model-value="blk.data.cta_label || (editable ? '' : 'Đặt mua ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
               </a>
 
               <!-- Tìm kiếm, giỏ hàng, menu điện thoại -->
@@ -466,9 +481,9 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 class="inline-flex items-center rounded-full px-3.5 py-1 text-xs font-bold tracking-wide"
                 :style="{ backgroundColor: tint(15), color: accent }"
               >
-                <EditableText :model-value="blk.data.badge" :editable="editable" placeholder="Nhãn nhỏ" @update:model-value="set(blk, ['badge'], $event)" />
+                <EditableText :fx="fx(blk, ['badge'])" :model-value="blk.data.badge" :editable="editable" placeholder="Nhãn nhỏ" @update:model-value="set(blk, ['badge'], $event)" />
               </span>
-              <EditableText
+              <EditableText :fx="fx(blk, ['title'])"
                 tag="h1"
                 :model-value="blk.data.title"
                 :editable="editable"
@@ -476,7 +491,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 class="block text-[2rem] font-extrabold leading-[1.15] tracking-tight text-slate-900 @3xl:text-5xl"
                 @update:model-value="set(blk, ['title'], $event)"
               />
-              <EditableText
+              <EditableText :fx="fx(blk, ['subtitle'])"
                 tag="p"
                 multiline
                 :model-value="blk.data.subtitle"
@@ -491,7 +506,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   class="inline-flex items-center justify-center rounded-full px-7 py-3.5 text-base font-bold text-white shadow-lg transition hover:-translate-y-0.5 hover:brightness-110"
                   :style="{ backgroundColor: accent, boxShadow: `0 10px 25px -8px ${accent}` }"
                 >
-                  <EditableText :model-value="blk.data.cta_label || (editable ? '' : 'Khám phá ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
+                  <EditableText :fx="fx(blk, ['cta_label'])" :model-value="blk.data.cta_label || (editable ? '' : 'Khám phá ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
                 </a>
               </div>
             </div>
@@ -508,7 +523,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <section v-else-if="blk.type === 'products'" id="products">
           <div :class="inner" class="space-y-10 py-16 @3xl:py-20">
             <div class="mx-auto max-w-2xl text-center">
-              <EditableText
+              <EditableText :fx="fx(blk, ['heading'])"
                 tag="h2"
                 :model-value="blk.data.heading || (editable ? '' : 'Sản phẩm nổi bật')"
                 :editable="editable"
@@ -570,9 +585,9 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   <div v-else-if="editable" class="flex h-full items-center justify-center text-xs text-slate-400">Chưa có ảnh</div>
                 </div>
                 <div class="flex flex-1 flex-col gap-1.5 p-3.5 @3xl:p-4">
-                  <EditableText tag="h3" :model-value="prod.name" :editable="editable" placeholder="Tên sản phẩm" class="line-clamp-2 text-sm font-bold leading-snug text-slate-900 @3xl:text-[15px]" @update:model-value="set(blk, ['items', pIdx, 'name'], $event)" />
-                  <EditableText tag="p" multiline :model-value="prod.desc" :editable="editable" placeholder="Mô tả" class="text-xs leading-relaxed text-slate-500" @update:model-value="set(blk, ['items', pIdx, 'desc'], $event)" />
-                  <EditableText tag="div" :model-value="prod.price" :editable="editable" placeholder="Giá" class="mt-auto pt-1.5 text-base font-extrabold @3xl:text-lg" :style="{ color: accent }" @update:model-value="set(blk, ['items', pIdx, 'price'], $event)" />
+                  <EditableText :fx="fx(blk, ['items', pIdx, 'name'])" tag="h3" :model-value="prod.name" :editable="editable" placeholder="Tên sản phẩm" class="line-clamp-2 text-sm font-bold leading-snug text-slate-900 @3xl:text-[15px]" @update:model-value="set(blk, ['items', pIdx, 'name'], $event)" />
+                  <EditableText :fx="fx(blk, ['items', pIdx, 'desc'])" tag="p" multiline :model-value="prod.desc" :editable="editable" placeholder="Mô tả" class="text-xs leading-relaxed text-slate-500" @update:model-value="set(blk, ['items', pIdx, 'desc'], $event)" />
+                  <EditableText :fx="fx(blk, ['items', pIdx, 'price'])" tag="div" :model-value="prod.price" :editable="editable" placeholder="Giá" class="mt-auto pt-1.5 text-base font-extrabold @3xl:text-lg" :style="{ color: accent }" @update:model-value="set(blk, ['items', pIdx, 'price'], $event)" />
                   <a
                     v-if="blk.data.show_buy !== false"
                     :href="safeHref(blk.data.buy_link, '#contact')"
@@ -590,7 +605,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <!-- ===================== CAM KẾT ===================== -->
         <section v-else-if="blk.type === 'features'">
           <div :class="inner" class="space-y-10 py-14 @3xl:py-16">
-            <EditableText
+            <EditableText :fx="fx(blk, ['heading'])"
               tag="h2"
               :model-value="blk.data.heading || (editable ? '' : 'Cam kết dịch vụ')"
               :editable="editable"
@@ -601,7 +616,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <div class="grid grid-cols-1 gap-4 @xl:grid-cols-2 @5xl:grid-cols-3">
               <div v-for="(feat, fIdx) in blk.data.items || []" :key="fIdx" class="flex items-start gap-4 rounded-2xl p-5" :style="{ backgroundColor: tint(6) }">
                 <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-lg font-bold text-white" :style="{ backgroundColor: accent }">✓</span>
-                <EditableText tag="p" :model-value="feat" :editable="editable" placeholder="Cam kết" class="pt-2 text-[15px] font-semibold leading-snug text-slate-800" @update:model-value="set(blk, ['items', fIdx], $event)" />
+                <EditableText :fx="fx(blk, ['items', fIdx])" tag="p" :model-value="feat" :editable="editable" placeholder="Cam kết" class="pt-2 text-[15px] font-semibold leading-snug text-slate-800" @update:model-value="set(blk, ['items', fIdx], $event)" />
               </div>
             </div>
           </div>
@@ -610,7 +625,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <!-- ===================== ĐÁNH GIÁ ===================== -->
         <section v-else-if="blk.type === 'testimonials'" :style="blk.data.style?.bg ? undefined : { backgroundColor: '#f8fafc' }">
           <div :class="inner" class="space-y-10 py-16 @3xl:py-20">
-            <EditableText
+            <EditableText :fx="fx(blk, ['heading'])"
               tag="h2"
               :model-value="blk.data.heading || (editable ? '' : 'Khách hàng nói gì')"
               :editable="editable"
@@ -643,11 +658,11 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               >
                 <div class="text-base tracking-widest text-amber-400">★★★★★</div>
                 <blockquote class="mt-3 flex-1 text-[15px] leading-relaxed text-slate-700">
-                  “<EditableText :model-value="t.quote" :editable="editable" multiline placeholder="Nội dung đánh giá" @update:model-value="set(blk, ['items', tIdx, 'quote'], $event)" />”
+                  “<EditableText :fx="fx(blk, ['items', tIdx, 'quote'])" :model-value="t.quote" :editable="editable" multiline placeholder="Nội dung đánh giá" @update:model-value="set(blk, ['items', tIdx, 'quote'], $event)" />”
                 </blockquote>
                 <figcaption class="mt-5 flex items-center gap-3">
                   <span class="flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold text-white" :style="{ backgroundColor: accent }">{{ initial(t.name) }}</span>
-                  <EditableText :model-value="t.name" :editable="editable" placeholder="Tên khách" class="text-sm font-bold text-slate-900" @update:model-value="set(blk, ['items', tIdx, 'name'], $event)" />
+                  <EditableText :fx="fx(blk, ['items', tIdx, 'name'])" :model-value="t.name" :editable="editable" placeholder="Tên khách" class="text-sm font-bold text-slate-900" @update:model-value="set(blk, ['items', tIdx, 'name'], $event)" />
                 </figcaption>
               </figure>
             </div>
@@ -659,7 +674,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <section v-else-if="blk.type === 'richtext'">
           <div :class="inner" class="py-14">
             <div class="max-w-3xl space-y-4" :class="alignOf(blk.data.align) === 'center' ? 'mx-auto' : alignOf(blk.data.align) === 'right' ? 'ml-auto' : ''" :style="{ textAlign: alignOf(blk.data.align) }">
-              <EditableText
+              <EditableText :fx="fx(blk, ['heading'])"
                 v-if="blk.data.heading || editable"
                 tag="h2"
                 :model-value="blk.data.heading"
@@ -668,7 +683,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 class="block text-2xl font-extrabold tracking-tight text-slate-900 @3xl:text-3xl"
                 @update:model-value="set(blk, ['heading'], $event)"
               />
-              <EditableText
+              <EditableText :fx="fx(blk, ['body'])"
                 tag="p"
                 multiline
                 :model-value="blk.data.body"
@@ -694,7 +709,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <!-- ===================== THƯ VIỆN ẢNH ===================== -->
         <section v-else-if="blk.type === 'gallery'">
           <div :class="inner" class="space-y-8 py-14">
-            <EditableText
+            <EditableText :fx="fx(blk, ['heading'])"
               v-if="blk.data.heading || editable"
               tag="h2"
               :model-value="blk.data.heading"
@@ -709,7 +724,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   <img v-if="safeImg(g.image_url)" :src="safeImg(g.image_url)" :alt="g.caption || ''" loading="lazy" class="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
                   <div v-else class="flex h-full items-center justify-center text-xs text-slate-400">Chưa chọn ảnh</div>
                 </div>
-                <EditableText
+                <EditableText :fx="fx(blk, ['items', gIdx, 'caption'])"
                   v-if="g.caption || editable"
                   tag="figcaption"
                   :model-value="g.caption"
@@ -727,7 +742,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <section v-else-if="blk.type === 'faq'" id="faq">
           <div :class="inner" class="py-14 @3xl:py-16">
             <div class="mx-auto max-w-3xl space-y-8">
-              <EditableText
+              <EditableText :fx="fx(blk, ['heading'])"
                 v-if="blk.data.heading || editable"
                 tag="h2"
                 :model-value="blk.data.heading"
@@ -739,10 +754,10 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <div class="space-y-3">
                 <details v-for="(f, fqIdx) in blk.data.items || []" :key="fqIdx" class="group rounded-2xl border border-slate-200 bg-white open:shadow-sm" :open="editable || undefined">
                   <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-[15px] font-bold text-slate-900 [&::-webkit-details-marker]:hidden">
-                    <EditableText :model-value="f.q" :editable="editable" placeholder="Câu hỏi" @update:model-value="set(blk, ['items', fqIdx, 'q'], $event)" />
+                    <EditableText :fx="fx(blk, ['items', fqIdx, 'q'])" :model-value="f.q" :editable="editable" placeholder="Câu hỏi" @update:model-value="set(blk, ['items', fqIdx, 'q'], $event)" />
                     <ChevronDown class="h-5 w-5 shrink-0 text-slate-400 transition group-open:rotate-180" />
                   </summary>
-                  <EditableText tag="p" multiline :model-value="f.a" :editable="editable" placeholder="Câu trả lời" class="block whitespace-pre-line px-5 pb-5 text-[15px] leading-relaxed text-slate-600" @update:model-value="set(blk, ['items', fqIdx, 'a'], $event)" />
+                  <EditableText :fx="fx(blk, ['items', fqIdx, 'a'])" tag="p" multiline :model-value="f.a" :editable="editable" placeholder="Câu trả lời" class="block whitespace-pre-line px-5 pb-5 text-[15px] leading-relaxed text-slate-600" @update:model-value="set(blk, ['items', fqIdx, 'a'], $event)" />
                 </details>
               </div>
             </div>
@@ -752,7 +767,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <!-- ===================== LIÊN HỆ ===================== -->
         <section v-else-if="blk.type === 'contact'" id="contact">
           <div :class="inner" class="space-y-8 py-14 @3xl:py-16">
-            <EditableText
+            <EditableText :fx="fx(blk, ['heading'])"
               v-if="blk.data.heading || editable"
               tag="h2"
               :model-value="blk.data.heading"
@@ -792,7 +807,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           :style="{ backgroundColor: blk.data.style?.bg ? undefined : accent, color: blk.data.text_color || '#ffffff' }"
         >
           <component :is="blk.data.link && !editable ? 'a' : 'span'" :href="blk.data.link ? safeHref(blk.data.link) : undefined" class="hover:underline">
-            <EditableText :model-value="blk.data.text" :editable="editable" placeholder="Nội dung thông báo" @update:model-value="set(blk, ['text'], $event)" />
+            <EditableText :fx="fx(blk, ['text'])" :model-value="blk.data.text" :editable="editable" placeholder="Nội dung thông báo" @update:model-value="set(blk, ['text'], $event)" />
           </component>
         </div>
 
@@ -807,21 +822,21 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <div v-else class="flex aspect-[4/3] items-center justify-center text-xs text-slate-400" :style="{ background: tint(10) }">{{ editable ? 'Chọn ảnh ở bảng bên phải' : '' }}</div>
             </div>
             <div class="space-y-5" :class="safeImg(blk.data.image_url) || editable ? '' : '@3xl:col-span-2 mx-auto max-w-3xl'">
-              <EditableText v-if="blk.data.eyebrow || editable" tag="p" :model-value="blk.data.eyebrow" :editable="editable" placeholder="Dòng chữ nhỏ phía trên" class="block text-xs font-bold uppercase tracking-[0.18em]" :style="{ color: accent }" @update:model-value="set(blk, ['eyebrow'], $event)" />
-              <EditableText tag="h2" :model-value="blk.data.heading" :editable="editable" placeholder="Tiêu đề" class="block text-3xl font-extrabold leading-tight tracking-tight text-slate-900 @3xl:text-4xl" @update:model-value="set(blk, ['heading'], $event)" />
-              <EditableText tag="p" multiline :model-value="blk.data.body" :editable="editable" placeholder="Nội dung" class="block whitespace-pre-line text-base leading-relaxed text-slate-600 @3xl:text-[17px]" @update:model-value="set(blk, ['body'], $event)" />
+              <EditableText :fx="fx(blk, ['eyebrow'])" v-if="blk.data.eyebrow || editable" tag="p" :model-value="blk.data.eyebrow" :editable="editable" placeholder="Dòng chữ nhỏ phía trên" class="block text-xs font-bold uppercase tracking-[0.18em]" :style="{ color: accent }" @update:model-value="set(blk, ['eyebrow'], $event)" />
+              <EditableText :fx="fx(blk, ['heading'])" tag="h2" :model-value="blk.data.heading" :editable="editable" placeholder="Tiêu đề" class="block text-3xl font-extrabold leading-tight tracking-tight text-slate-900 @3xl:text-4xl" @update:model-value="set(blk, ['heading'], $event)" />
+              <EditableText :fx="fx(blk, ['body'])" tag="p" multiline :model-value="blk.data.body" :editable="editable" placeholder="Nội dung" class="block whitespace-pre-line text-base leading-relaxed text-slate-600 @3xl:text-[17px]" @update:model-value="set(blk, ['body'], $event)" />
               <ul v-if="(blk.data.points || []).length" class="space-y-4 pt-1">
                 <li v-for="(pt, pIdx) in blk.data.points" :key="pIdx" class="flex gap-3.5">
                   <span class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white" :style="{ backgroundColor: accent }">✓</span>
                   <div>
-                    <EditableText tag="p" :model-value="pt.title" :editable="editable" placeholder="Điểm nổi bật" class="block font-bold text-slate-900" @update:model-value="set(blk, ['points', pIdx, 'title'], $event)" />
-                    <EditableText v-if="pt.text || editable" tag="p" :model-value="pt.text" :editable="editable" placeholder="Mô tả" class="block text-sm text-slate-600" @update:model-value="set(blk, ['points', pIdx, 'text'], $event)" />
+                    <EditableText :fx="fx(blk, ['points', pIdx, 'title'])" tag="p" :model-value="pt.title" :editable="editable" placeholder="Điểm nổi bật" class="block font-bold text-slate-900" @update:model-value="set(blk, ['points', pIdx, 'title'], $event)" />
+                    <EditableText :fx="fx(blk, ['points', pIdx, 'text'])" v-if="pt.text || editable" tag="p" :model-value="pt.text" :editable="editable" placeholder="Mô tả" class="block text-sm text-slate-600" @update:model-value="set(blk, ['points', pIdx, 'text'], $event)" />
                   </div>
                 </li>
               </ul>
               <div v-if="blk.data.button_label || editable" class="pt-2">
                 <a :href="safeHref(blk.data.button_link, '#products')" class="inline-flex rounded-full px-7 py-3.5 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5 hover:brightness-110" :style="{ backgroundColor: accent }">
-                  <EditableText :model-value="blk.data.button_label" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['button_label'], $event)" />
+                  <EditableText :fx="fx(blk, ['button_label'])" :model-value="blk.data.button_label" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['button_label'], $event)" />
                 </a>
               </div>
             </div>
@@ -831,7 +846,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <!-- ===================== Ô DANH MỤC ===================== -->
         <section v-else-if="blk.type === 'collections'" id="collections">
           <div :class="inner" class="space-y-8 py-14 @3xl:py-16">
-            <EditableText v-if="blk.data.heading || editable" tag="h2" :model-value="blk.data.heading" :editable="editable" placeholder="Tiêu đề mục" class="block text-center text-2xl font-extrabold tracking-tight text-slate-900 @3xl:text-3xl" @update:model-value="set(blk, ['heading'], $event)" />
+            <EditableText :fx="fx(blk, ['heading'])" v-if="blk.data.heading || editable" tag="h2" :model-value="blk.data.heading" :editable="editable" placeholder="Tiêu đề mục" class="block text-center text-2xl font-extrabold tracking-tight text-slate-900 @3xl:text-3xl" @update:model-value="set(blk, ['heading'], $event)" />
             <div class="grid grid-cols-1 gap-4 @xl:grid-cols-2" :class="(blk.data.items || []).length >= 3 ? '@5xl:grid-cols-3' : ''">
               <a
                 v-for="(col, cIdx) in blk.data.items || []"
@@ -843,7 +858,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 <img v-if="safeImg(col.image_url)" :src="safeImg(col.image_url)" :alt="col.title" loading="lazy" class="absolute inset-0 h-full w-full object-cover transition duration-700 group-hover:scale-105" />
                 <div class="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
                 <div class="absolute inset-x-0 bottom-0 flex items-end justify-between gap-3 p-5 text-white">
-                  <EditableText tag="h3" :model-value="col.title" :editable="editable" placeholder="Tên danh mục" class="text-xl font-extrabold @3xl:text-2xl" @update:model-value="set(blk, ['items', cIdx, 'title'], $event)" />
+                  <EditableText :fx="fx(blk, ['items', cIdx, 'title'])" tag="h3" :model-value="col.title" :editable="editable" placeholder="Tên danh mục" class="text-xl font-extrabold @3xl:text-2xl" @update:model-value="set(blk, ['items', cIdx, 'title'], $event)" />
                   <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/90 text-slate-900 transition group-hover:translate-x-1"><ChevronRight class="h-5 w-5" /></span>
                 </div>
               </a>
@@ -859,8 +874,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 <StoreIcon :name="ic.icon" />
               </span>
               <div>
-                <EditableText tag="p" :model-value="ic.title" :editable="editable" placeholder="Tiêu đề" class="block font-bold text-slate-900" @update:model-value="set(blk, ['items', iIdx, 'title'], $event)" />
-                <EditableText v-if="ic.text || editable" tag="p" :model-value="ic.text" :editable="editable" placeholder="Mô tả" class="block text-sm text-slate-600" @update:model-value="set(blk, ['items', iIdx, 'text'], $event)" />
+                <EditableText :fx="fx(blk, ['items', iIdx, 'title'])" tag="p" :model-value="ic.title" :editable="editable" placeholder="Tiêu đề" class="block font-bold text-slate-900" @update:model-value="set(blk, ['items', iIdx, 'title'], $event)" />
+                <EditableText :fx="fx(blk, ['items', iIdx, 'text'])" v-if="ic.text || editable" tag="p" :model-value="ic.text" :editable="editable" placeholder="Mô tả" class="block text-sm text-slate-600" @update:model-value="set(blk, ['items', iIdx, 'text'], $event)" />
               </div>
             </div>
           </div>
@@ -877,8 +892,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <footer v-else-if="blk.type === 'footer'" class="border-t border-slate-200" :style="blk.data.style?.bg ? undefined : { backgroundColor: '#0f172a', color: '#cbd5e1' }">
           <div :class="inner" class="grid grid-cols-1 gap-10 py-14 @3xl:grid-cols-[1.4fr_repeat(var(--cols),1fr)]" :style="{ '--cols': Math.max(1, (blk.data.columns || []).length) }">
             <div class="space-y-3">
-              <EditableText tag="p" :model-value="blk.data.company || (editable ? '' : siteTitle)" :editable="editable" placeholder="Tên công ty" class="block text-lg font-extrabold text-white" @update:model-value="set(blk, ['company'], $event)" />
-              <EditableText v-if="blk.data.about_text || editable" tag="p" multiline :model-value="blk.data.about_text" :editable="editable" placeholder="Giới thiệu ngắn" class="block text-sm leading-relaxed opacity-80" @update:model-value="set(blk, ['about_text'], $event)" />
+              <EditableText :fx="fx(blk, ['company'])" tag="p" :model-value="blk.data.company || (editable ? '' : siteTitle)" :editable="editable" placeholder="Tên công ty" class="block text-lg font-extrabold text-white" @update:model-value="set(blk, ['company'], $event)" />
+              <EditableText :fx="fx(blk, ['about_text'])" v-if="blk.data.about_text || editable" tag="p" multiline :model-value="blk.data.about_text" :editable="editable" placeholder="Giới thiệu ngắn" class="block text-sm leading-relaxed opacity-80" @update:model-value="set(blk, ['about_text'], $event)" />
               <ul class="space-y-1.5 pt-1 text-sm">
                 <li v-if="blk.data.address" class="flex gap-2"><MapPin class="mt-0.5 h-4 w-4 shrink-0 opacity-70" /> {{ blk.data.address }}</li>
                 <li v-if="blk.data.phone" class="flex gap-2"><Phone class="mt-0.5 h-4 w-4 shrink-0 opacity-70" /> <a :href="safeHref('tel:' + blk.data.phone)" class="hover:underline">{{ blk.data.phone }}</a></li>
@@ -900,18 +915,18 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               </div>
             </div>
             <div v-for="(col, cIdx) in blk.data.columns || []" :key="cIdx" class="space-y-3">
-              <EditableText tag="p" :model-value="col.title" :editable="editable" placeholder="Tiêu đề cột" class="block text-sm font-bold uppercase tracking-wider text-white" @update:model-value="set(blk, ['columns', cIdx, 'title'], $event)" />
+              <EditableText :fx="fx(blk, ['columns', cIdx, 'title'])" tag="p" :model-value="col.title" :editable="editable" placeholder="Tiêu đề cột" class="block text-sm font-bold uppercase tracking-wider text-white" @update:model-value="set(blk, ['columns', cIdx, 'title'], $event)" />
               <ul class="space-y-2 text-sm">
                 <li v-for="(lnk, lIdx) in col.links || []" :key="lIdx">
                   <a :href="safeHref(lnk.link)" class="opacity-80 transition hover:opacity-100 hover:underline">
-                    <EditableText :model-value="lnk.label" :editable="editable" placeholder="Liên kết" @update:model-value="set(blk, ['columns', cIdx, 'links', lIdx, 'label'], $event)" />
+                    <EditableText :fx="fx(blk, ['columns', cIdx, 'links', lIdx, 'label'])" :model-value="lnk.label" :editable="editable" placeholder="Liên kết" @update:model-value="set(blk, ['columns', cIdx, 'links', lIdx, 'label'], $event)" />
                   </a>
                 </li>
               </ul>
             </div>
           </div>
           <div class="border-t border-white/10">
-            <EditableText :class="inner" tag="p" :model-value="blk.data.copyright" :editable="editable" placeholder="Dòng bản quyền" class="block py-5 text-center text-xs opacity-60" @update:model-value="set(blk, ['copyright'], $event)" />
+            <EditableText :fx="fx(blk, ['copyright'])" :class="inner" tag="p" :model-value="blk.data.copyright" :editable="editable" placeholder="Dòng bản quyền" class="block py-5 text-center text-xs opacity-60" @update:model-value="set(blk, ['copyright'], $event)" />
           </div>
         </footer>
 
@@ -938,16 +953,16 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <div class="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/10" />
               <div class="pointer-events-none absolute -bottom-20 -left-10 h-48 w-48 rounded-full bg-white/10" />
               <div class="relative mx-auto max-w-2xl space-y-4">
-                <EditableText tag="h2" :model-value="blk.data.title" :editable="editable" placeholder="Tiêu đề" class="block text-2xl font-extrabold tracking-tight @3xl:text-4xl" @update:model-value="set(blk, ['title'], $event)" />
-                <EditableText tag="p" multiline :model-value="blk.data.subtitle" :editable="editable" placeholder="Mô tả" class="block text-base leading-relaxed text-white/85 @3xl:text-lg" @update:model-value="set(blk, ['subtitle'], $event)" />
+                <EditableText :fx="fx(blk, ['title'])" tag="h2" :model-value="blk.data.title" :editable="editable" placeholder="Tiêu đề" class="block text-2xl font-extrabold tracking-tight @3xl:text-4xl" @update:model-value="set(blk, ['title'], $event)" />
+                <EditableText :fx="fx(blk, ['subtitle'])" tag="p" multiline :model-value="blk.data.subtitle" :editable="editable" placeholder="Mô tả" class="block text-base leading-relaxed text-white/85 @3xl:text-lg" @update:model-value="set(blk, ['subtitle'], $event)" />
                 <div class="pt-3">
                   <a :href="safeHref(blk.data.button_link)" class="inline-flex items-center justify-center rounded-full bg-white px-7 py-3.5 text-base font-bold shadow-lg transition hover:-translate-y-0.5" :style="{ color: accent }">
-                    <EditableText :model-value="blk.data.button_text || (editable ? '' : 'Liên hệ ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['button_text'], $event)" />
+                    <EditableText :fx="fx(blk, ['button_text'])" :model-value="blk.data.button_text || (editable ? '' : 'Liên hệ ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['button_text'], $event)" />
                   </a>
                 </div>
               </div>
             </div>
-            <EditableText
+            <EditableText :fx="fx(blk, ['footer_note'])"
               v-if="blk.data.footer_note || editable"
               tag="p"
               :model-value="blk.data.footer_note"

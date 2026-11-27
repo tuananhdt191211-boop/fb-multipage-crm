@@ -1,6 +1,18 @@
 <script setup lang="ts">
 // Chữ hiển thị bình thường trên web công khai; trong trình chỉnh sửa thì bấm vào là gõ trực tiếp.
-import { onMounted, ref, watch } from 'vue'
+// fx: kiểu chữ tuỳ chỉnh (cỡ, màu, thẻ H1/H2/P...) do người dùng chọn trong bảng "Kiểu chữ".
+import { computed, inject, nextTick, onMounted, ref, useAttrs, watch } from 'vue'
+import { textStyleAttrs } from '../../lib/textStyle'
+import type { TextFx } from '../../types/store'
+
+// Tự gộp class/style của cha để kiểu chữ người dùng chọn luôn được ưu tiên sau cùng
+defineOptions({ inheritAttrs: false })
+const attrs = useAttrs()
+// attrs không reactive trong computed -> đọc lại mỗi lần render
+function restAttrs() {
+  const { class: _c, style: _s, ...rest } = attrs
+  return rest
+}
 
 const props = defineProps<{
   modelValue?: string | number | null
@@ -8,11 +20,19 @@ const props = defineProps<{
   editable?: boolean
   multiline?: boolean
   placeholder?: string
+  fx?: TextFx
 }>()
 
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 
+// Trình chỉnh sửa cung cấp hàm này để mở bảng "Kiểu chữ" khi bấm vào chữ
+const onTextFocus = inject<((fx: TextFx, baseTag: string, text: string) => void) | null>('ppTextFocus', null)
+
 const el = ref<HTMLElement | null>(null)
+
+const baseTag = computed(() => props.tag || 'span')
+const renderTag = computed(() => props.fx?.style?.tag || baseTag.value)
+const fxAttrs = computed(() => textStyleAttrs(props.fx?.style))
 
 function current(): string {
   return props.modelValue === null || props.modelValue === undefined ? '' : String(props.modelValue)
@@ -28,16 +48,19 @@ function sync() {
 
 watch(() => props.modelValue, sync)
 watch(() => props.editable, () => requestAnimationFrame(sync))
+// Đổi thẻ (vd. P -> H2) tạo phần tử mới -> ghi lại nội dung
+watch(renderTag, () => nextTick(sync))
 onMounted(sync)
 
-function read(): string {
-  const raw = el.value?.innerText || ''
+// Đọc từ chính phần tử phát sự kiện: khi đổi thẻ (P -> H2), el đã trỏ sang phần tử mới (rỗng)
+function read(node: HTMLElement | null | undefined = el.value): string {
+  const raw = node?.innerText || ''
   const t = raw.replace(/ /g, ' ')
   return props.multiline ? t.replace(/\n$/, '') : t.replace(/\n/g, ' ')
 }
 
-function onInput() {
-  emit('update:modelValue', read())
+function onInput(e: Event) {
+  emit('update:modelValue', read(e.target as HTMLElement))
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -55,25 +78,36 @@ function onPaste(e: ClipboardEvent) {
   document.execCommand('insertText', false, text)
 }
 
-function onBlur() {
-  emit('update:modelValue', read())
+function onFocus() {
+  if (props.fx && onTextFocus) onTextFocus(props.fx, baseTag.value, current())
+}
+
+function onBlur(e: FocusEvent) {
+  const node = e.target as HTMLElement
+  // Phần tử cũ đã bị gỡ khỏi trang (vừa đổi thẻ) -> không ghi đè nội dung
+  if (!node.isConnected) return
+  emit('update:modelValue', read(node))
   sync()
 }
 </script>
 
 <template>
-  <component :is="tag || 'span'" v-if="!editable">{{ current() }}</component>
+  <component :is="renderTag" v-if="!editable" v-bind="restAttrs()" :class="[attrs.class, fxAttrs.cls]" :style="[attrs.style as any, fxAttrs.style]">{{ current() }}</component>
   <component
-    :is="tag || 'span'"
+    :is="renderTag"
     v-else
+    v-bind="restAttrs()"
     ref="el"
     contenteditable="true"
     spellcheck="false"
     class="pp-editable"
+    :class="[attrs.class, fxAttrs.cls]"
+    :style="[attrs.style as any, fxAttrs.style]"
     :data-placeholder="placeholder || 'Nhập nội dung...'"
     @input="onInput"
     @keydown="onKeydown"
     @paste="onPaste"
+    @focus="onFocus"
     @blur="onBlur"
     @dragstart.prevent
   />
@@ -98,5 +132,16 @@ function onBlur() {
   content: attr(data-placeholder);
   opacity: 0.4;
   pointer-events: none;
+}
+/* Cỡ chữ tuỳ chỉnh: theo chiều rộng khung trang (container query) */
+@container (min-width: 48rem) {
+  .pp-fx-fsd {
+    font-size: var(--pp-fs) !important;
+  }
+}
+@container (max-width: 47.98rem) {
+  .pp-fx-fsm {
+    font-size: var(--pp-fs-m) !important;
+  }
 }
 </style>

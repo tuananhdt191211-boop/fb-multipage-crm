@@ -22,6 +22,30 @@ export type BlockType =
 export interface BlockStyle {
   bg?: string
   pad?: 'none' | 'sm' | 'md' | 'lg'
+  css?: string // CSS tuỳ chỉnh, chỉ áp dụng trong section này
+}
+
+// Kiểu chữ riêng cho từng đoạn chữ (lưu ở block.data._text["đường.dẫn"])
+export interface TextStyle {
+  tag?: 'h1' | 'h2' | 'h3' | 'h4' | 'p' | 'div'
+  size?: number // px, máy tính
+  size_m?: number // px, điện thoại
+  color?: string
+  weight?: '300' | '400' | '500' | '600' | '700' | '800' | '900'
+  italic?: boolean
+  underline?: boolean
+  upper?: boolean
+  align?: 'left' | 'center' | 'right' | 'justify'
+  lh?: number // line-height
+  ls?: number // letter-spacing (px)
+  font?: string
+  css?: string // khai báo CSS tự viết thêm
+}
+
+export interface TextFx {
+  block: string
+  key: string
+  style?: TextStyle
 }
 
 export interface StoreBlock {
