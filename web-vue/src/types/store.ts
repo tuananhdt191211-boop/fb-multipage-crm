@@ -149,7 +149,11 @@ export interface ShopOrder {
   subtotal: number
   shipping_fee: number
   total: number
-  payment_method: 'cod' | 'vnpay'
+  payment_method: 'cod' | 'vnpay' | 'paypal' | 'stripe'
+  currency?: string
+  foreign_minor?: number
+  foreign_decimals?: number
+  gateway_txn?: string
   payment_status: 'unpaid' | 'pending' | 'paid' | 'failed'
   status: 'new' | 'confirmed' | 'shipping' | 'completed' | 'cancelled'
   vnp_transaction_no?: string

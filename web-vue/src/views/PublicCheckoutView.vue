@@ -2,11 +2,11 @@
 import { currentSlug, storePath } from '../lib/storeHost'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { CreditCard, Loader2, Lock, Minus, Plus, Trash2, Truck } from 'lucide-vue-next'
+import { CreditCard, Globe, Loader2, Lock, Minus, Plus, Trash2, Truck, Wallet } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
 import { loadPublicSite, localizeSite } from '../lib/publicSite'
-import { formatVndPlain, isForeignCurrency, money, t } from '../lib/i18n'
+import { formatVndPlain, isForeignCurrency, locale, money, t } from '../lib/i18n'
 import { useCart } from '../lib/cart'
 import { customerHeaders, useCustomer } from '../lib/customer'
 import { safeImg } from '../lib/safeUrl'
@@ -26,9 +26,11 @@ function nameOf(l: { product_id: number; name: string }) {
 const loading = ref(true)
 const submitting = ref(false)
 const errorMsg = ref('')
-const config = ref({ cod: true, vnpay: false, shipping_fee: 0, free_ship_from: 0 })
+const config = ref({ cod: true, vnpay: false, paypal: false, stripe: false, shipping_fee: 0, free_ship_from: 0 })
+type PayMethod = 'cod' | 'vnpay' | 'paypal' | 'stripe'
+const intlMethod = computed(() => form.value.payment_method === 'paypal' || form.value.payment_method === 'stripe')
 
-const form = ref({ customer_name: '', phone: '', email: '', address: '', note: '', payment_method: 'cod' as 'cod' | 'vnpay' })
+const form = ref({ customer_name: '', phone: '', email: '', address: '', note: '', payment_method: 'cod' as PayMethod })
 const accent = computed(() => site.value?.primary_color || '#059669')
 
 const shipping = computed(() => {
@@ -66,7 +68,9 @@ async function load() {
     document.title = `${t('checkout')} – ${rawSite.value.site_title}`
     const { data } = await api.get('/storefront/public/checkout-config', { params: { slug: slug.value } })
     config.value = data
-    form.value.payment_method = data.cod ? 'cod' : 'vnpay'
+    // Khách đang xem bằng ngoại tệ -> ưu tiên thẻ quốc tế / PayPal
+    if (locale.currency !== 'VND' && (data.stripe || data.paypal)) form.value.payment_method = data.stripe ? 'stripe' : 'paypal'
+    else form.value.payment_method = data.cod ? 'cod' : data.vnpay ? 'vnpay' : data.stripe ? 'stripe' : 'paypal'
     restoreInfo()
     // Đã đăng nhập: điền thông tin tài khoản vào ô còn trống
     const c = useCustomer(slug.value).state.customer
@@ -100,7 +104,8 @@ async function submit() {
       slug: slug.value,
       items: cart.state.lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
       ...f,
-      return_base: window.location.origin
+      return_base: window.location.origin,
+      currency: locale.currency
     }, { headers: customerHeaders(slug.value) })
     rememberInfo()
     if (data.payment_url) {
@@ -173,6 +178,16 @@ onMounted(load)
               <CreditCard class="h-5 w-5 text-slate-500" />
               <span><span class="block font-semibold text-slate-900">{{ t('vnpay') }}</span><span class="block text-xs text-slate-500">{{ t('vnpay_desc') }}</span></span>
             </label>
+            <label v-if="config.stripe" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'stripe' ? { borderColor: accent } : undefined" :class="form.payment_method === 'stripe' ? '' : 'border-slate-200'">
+              <input v-model="form.payment_method" type="radio" value="stripe" class="h-4 w-4" />
+              <Globe class="h-5 w-5 text-slate-500" />
+              <span><span class="block font-semibold text-slate-900">{{ t('card_intl') }}</span><span class="block text-xs text-slate-500">{{ t('card_intl_desc') }}</span></span>
+            </label>
+            <label v-if="config.paypal" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'paypal' ? { borderColor: accent } : undefined" :class="form.payment_method === 'paypal' ? '' : 'border-slate-200'">
+              <input v-model="form.payment_method" type="radio" value="paypal" class="h-4 w-4" />
+              <Wallet class="h-5 w-5 text-slate-500" />
+              <span><span class="block font-semibold text-slate-900">PayPal</span><span class="block text-xs text-slate-500">{{ t('paypal_desc') }}</span></span>
+            </label>
           </section>
         </div>
 
@@ -211,12 +226,13 @@ onMounted(load)
             </div>
           </div>
           <!-- Đang xem bằng ngoại tệ: ghi rõ số tiền VND thực thu -->
-          <p v-if="isForeignCurrency()" class="rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">{{ t('charged_in_vnd', { amount: formatVndPlain(total) }) }}</p>
+          <p v-if="isForeignCurrency() && intlMethod" class="rounded-xl bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-800">{{ t('charged_in_currency', { amount: money(total) }) }}</p>
+          <p v-else-if="isForeignCurrency()" class="rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">{{ t('charged_in_vnd', { amount: formatVndPlain(total) }) }}</p>
           <p v-if="errorMsg" class="rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{{ errorMsg }}</p>
           <button type="submit" :disabled="submitting" class="flex w-full items-center justify-center gap-2 rounded-full py-4 text-base font-bold text-white shadow-lg transition hover:brightness-110 disabled:opacity-60" :style="{ backgroundColor: accent }">
             <Loader2 v-if="submitting" class="h-5 w-5 animate-spin" />
             <Lock v-else class="h-4 w-4" />
-            {{ form.payment_method === 'vnpay' ? t('pay_vnpay') : t('place_order') }}
+            {{ form.payment_method === 'vnpay' ? t('pay_vnpay') : form.payment_method === 'paypal' ? t('pay_paypal') : form.payment_method === 'stripe' ? t('pay_card') : t('place_order') }}
           </button>
           <p class="text-center text-xs text-slate-400">{{ t('privacy_note') }}</p>
         </aside>

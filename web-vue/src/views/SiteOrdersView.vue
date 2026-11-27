@@ -89,17 +89,44 @@ const pay = ref({
   vnp_hash_secret: '',
   vnp_sandbox: true,
   shipping_fee: 0,
-  free_ship_from: 0
+  free_ship_from: 0,
+  // Quốc tế
+  paypal_enabled: false,
+  paypal_client_id: '',
+  paypal_secret: '',
+  paypal_sandbox: true,
+  stripe_enabled: false,
+  stripe_secret: '',
+  stripe_webhook_secret: ''
 })
 const secretSet = ref(false)
+const intl = ref({ paypal_secret_set: false, stripe_secret_set: false, stripe_webhook_set: false, stripe_webhook_url: '' })
+function applyPayResp(data: any) {
+  Object.assign(pay.value, data.settings, { vnp_hash_secret: '', paypal_secret: '', stripe_secret: '', stripe_webhook_secret: '' })
+  secretSet.value = !!data.vnp_secret_set
+  intl.value = {
+    paypal_secret_set: !!data.paypal_secret_set,
+    stripe_secret_set: !!data.stripe_secret_set,
+    stripe_webhook_set: !!data.stripe_webhook_set,
+    stripe_webhook_url: data.stripe_webhook_url || intl.value.stripe_webhook_url
+  }
+}
+// Số tiền ngoại tệ (khớp currencyDecimals ở backend)
+function fmtForeign(o: { currency?: string; foreign_minor?: number; payment_method: string }) {
+  if (!o.currency || !o.foreign_minor) return ''
+  const zero = ['JPY', 'CLP'].includes(o.currency) || (o.payment_method === 'paypal' && ['HUF', 'TWD'].includes(o.currency))
+  return ' · ' + (zero ? String(o.foreign_minor) : (o.foreign_minor / 100).toFixed(2)) + ' ' + o.currency
+}
+function payLabel(m: string) {
+  return m === 'cod' ? 'COD' : m === 'paypal' ? 'PayPal' : m === 'stripe' ? 'Thẻ QT (Stripe)' : 'VNPay'
+}
 const ipnUrl = ref('')
 const savingPay = ref(false)
 
 async function loadPayment() {
   try {
     const { data } = await api.get(`/storefront/sites/${siteId.value}/payment-settings`)
-    Object.assign(pay.value, data.settings, { vnp_hash_secret: '' })
-    secretSet.value = !!data.vnp_secret_set
+    applyPayResp(data)
     ipnUrl.value = data.vnp_ipn_url || ''
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || 'Không tải được cài đặt thanh toán.'
@@ -112,8 +139,7 @@ async function savePayment() {
   okMsg.value = ''
   try {
     const { data } = await api.put(`/storefront/sites/${siteId.value}/payment-settings`, pay.value)
-    Object.assign(pay.value, data.settings, { vnp_hash_secret: '' })
-    secretSet.value = !!data.vnp_secret_set
+    applyPayResp(data)
     okMsg.value = 'Đã lưu cài đặt thanh toán.'
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || 'Lưu cài đặt thất bại.'
@@ -218,7 +244,7 @@ onMounted(loadOrders)
               </div>
               <div class="flex items-center justify-between text-xs text-slate-500">
                 <span>
-                  {{ o.payment_method === 'cod' ? 'COD' : 'VNPay' }} ·
+                  {{ payLabel(o.payment_method) }} ·
                   <span :class="o.payment_status === 'paid' ? 'text-emerald-600' : o.payment_status === 'failed' ? 'text-rose-600' : ''">{{ payLabels[o.payment_status] }}</span>
                 </span>
                 <span>{{ fmtTime(o.created_at) }}</span>
@@ -246,7 +272,7 @@ onMounted(loadOrders)
                   </td>
                   <td class="px-4 py-3 text-right font-bold">{{ formatVnd(o.total) }}</td>
                   <td class="px-4 py-3">
-                    <div class="text-xs font-semibold">{{ o.payment_method === 'cod' ? 'COD' : 'VNPay' }}</div>
+                    <div class="text-xs font-semibold">{{ payLabel(o.payment_method) }}</div>
                     <div class="text-xs" :class="o.payment_status === 'paid' ? 'text-emerald-600' : o.payment_status === 'failed' ? 'text-rose-600' : 'text-slate-500'">{{ payLabels[o.payment_status] }}</div>
                   </td>
                   <td class="px-4 py-3">
@@ -311,6 +337,51 @@ onMounted(loadOrders)
             </div>
           </section>
 
+          <!-- ===== Thanh toán quốc tế: PayPal ===== -->
+          <section class="space-y-3 rounded-2xl bg-white p-5 ring-1 ring-slate-200">
+            <h2 class="font-extrabold">PayPal · khách nước ngoài trả bằng ngoại tệ</h2>
+            <p class="text-xs text-slate-500">
+              Cần tài khoản <b>PayPal Business</b> (đăng ký được ở Việt Nam). Vào developer.paypal.com → Apps &amp; Credentials → tạo App để lấy <b>Client ID</b> và <b>Secret</b>.
+              Khách trả bằng tiền tệ đang xem (USD, EUR, GBP, AUD, CAD, PLN…); tiền tệ PayPal không nhận sẽ quy sang USD.
+            </p>
+            <label class="block space-y-1">
+              <span class="text-xs font-bold text-slate-600">Client ID</span>
+              <input v-model="pay.paypal_client_id" autocomplete="off" class="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs" />
+            </label>
+            <label class="block space-y-1">
+              <span class="text-xs font-bold text-slate-600">Secret</span>
+              <input v-model="pay.paypal_secret" type="password" autocomplete="new-password" :placeholder="intl.paypal_secret_set ? '•••••• (đã lưu, để trống = giữ nguyên)' : 'Dán Secret'" class="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs" />
+            </label>
+            <div class="flex flex-wrap items-center gap-4">
+              <label class="flex items-center gap-2 text-sm font-semibold"><input v-model="pay.paypal_sandbox" type="checkbox" /> Chế độ thử nghiệm (Sandbox)</label>
+              <label class="flex items-center gap-2 text-sm font-semibold"><input v-model="pay.paypal_enabled" type="checkbox" /> Bật PayPal cho khách</label>
+            </div>
+            <p class="text-[11px] text-slate-400">Khi lưu, hệ thống thử đăng nhập PayPal bằng khoá vừa nhập để báo ngay nếu sai.</p>
+          </section>
+
+          <!-- ===== Thanh toán quốc tế: Stripe ===== -->
+          <section class="space-y-3 rounded-2xl bg-white p-5 ring-1 ring-slate-200">
+            <h2 class="font-extrabold">Stripe · thẻ quốc tế (Visa, Mastercard, Amex)</h2>
+            <p class="text-xs text-slate-500">
+              Stripe chưa mở cho doanh nghiệp đăng ký tại Việt Nam — cần công ty ở nước Stripe hỗ trợ (Singapore, Mỹ, EU…).
+              Lấy <b>Secret key</b> (sk_live_… / sk_test_…) ở dashboard.stripe.com → Developers → API keys.
+            </p>
+            <label class="block space-y-1">
+              <span class="text-xs font-bold text-slate-600">Secret key</span>
+              <input v-model="pay.stripe_secret" type="password" autocomplete="new-password" :placeholder="intl.stripe_secret_set ? '•••••• (đã lưu, để trống = giữ nguyên)' : 'sk_live_... hoặc sk_test_...'" class="w-full rounded-lg border border-slate-200 px-3 py-2 font-mono text-xs" />
+            </label>
+            <label class="flex items-center gap-2 text-sm font-semibold"><input v-model="pay.stripe_enabled" type="checkbox" /> Bật thanh toán thẻ quốc tế (Stripe)</label>
+            <div class="space-y-1.5 rounded-xl bg-sky-50 p-3 text-xs text-sky-900">
+              <p class="font-bold">Nên làm: thêm Webhook trong Stripe (Developers → Webhooks → Add endpoint)</p>
+              <div class="flex items-center gap-2">
+                <code class="min-w-0 flex-1 break-all rounded bg-white/70 px-2 py-1">{{ intl.stripe_webhook_url }}</code>
+                <button type="button" class="rounded p-1 hover:bg-sky-100" title="Sao chép" @click="copy(intl.stripe_webhook_url)"><Copy class="h-3.5 w-3.5" /></button>
+              </div>
+              <p>Chọn sự kiện <code>checkout.session.completed</code>, rồi dán <b>Signing secret</b> (whsec_…) vào ô dưới. Có webhook thì đơn vẫn được ghi nhận dù khách đóng trình duyệt sau khi trả tiền.</p>
+              <input v-model="pay.stripe_webhook_secret" type="password" autocomplete="new-password" :placeholder="intl.stripe_webhook_set ? '•••••• (đã lưu)' : 'whsec_...'" class="w-full rounded-lg border border-sky-200 bg-white px-3 py-2 font-mono text-xs" />
+            </div>
+          </section>
+
           <div class="lg:col-span-2">
             <button type="submit" :disabled="savingPay" class="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
               <Loader2 v-if="savingPay" class="mr-1 inline h-4 w-4 animate-spin" /> Lưu cài đặt
@@ -365,7 +436,7 @@ onMounted(loadOrders)
             <div class="flex justify-between border-t border-slate-200 pt-2 text-slate-500"><span>Phí ship</span><span>{{ formatVnd(detail.shipping_fee) }}</span></div>
             <div class="flex justify-between text-base font-extrabold"><span>Tổng</span><span>{{ formatVnd(detail.total) }}</span></div>
             <div class="flex justify-between text-xs">
-              <span>{{ detail.payment_method === 'cod' ? 'COD' : 'VNPay' }}{{ detail.vnp_transaction_no ? ' · GD ' + detail.vnp_transaction_no : '' }}</span>
+              <span>{{ payLabel(detail.payment_method) }}{{ detail.vnp_transaction_no ? ' · GD ' + detail.vnp_transaction_no : '' }}{{ detail.gateway_txn ? ' · GD ' + detail.gateway_txn : '' }}{{ fmtForeign(detail) }}</span>
               <span :class="detail.payment_status === 'paid' ? 'font-bold text-emerald-600' : 'text-slate-500'">{{ payLabels[detail.payment_status] }}</span>
             </div>
           </section>

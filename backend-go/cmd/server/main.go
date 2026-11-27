@@ -111,6 +111,8 @@ func main() {
 	r.GET("/api/v1/storefront/public/customers/orders", storefrontHandler.CustomerOrders)
 	r.GET("/api/v1/storefront/public/rates", storefrontHandler.PublicRates)
 	r.GET("/api/v1/payments/vnpay/ipn", storefrontHandler.VnpayIPN)
+	r.POST("/api/v1/payments/stripe/webhook/:site", storefrontHandler.StripeWebhook)
+	r.POST("/api/v1/storefront/public/orders/:code/confirm", storefrontHandler.ConfirmIntlPayment)
 	r.GET("/api/v1/inbox/avatar-check/:page_id/:psid", inboxHandler.CheckCustomerAvatar)
 
 	storefrontGroup := r.Group("/api/v1/storefront", middleware.JWTAuth(cfg.JWTSecret))

@@ -7,7 +7,7 @@ import { CheckCircle2, Clock, Loader2, XCircle } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
 import { loadPublicSite, localizeSite } from '../lib/publicSite'
-import { money, t } from '../lib/i18n'
+import { locale, money, t } from '../lib/i18n'
 import { useCart } from '../lib/cart'
 import type { PublicSiteData, ShopOrder } from '../types/store'
 
@@ -53,6 +53,12 @@ async function load() {
       vnpResult.value = data
     }
     await fetchOrder()
+    // Quay về từ PayPal / Stripe (hoặc đơn ngoại tệ đang chờ): nhờ máy chủ kiểm tra & ghi nhận thanh toán
+    const o = order.value
+    if (o && (o.payment_method === 'paypal' || o.payment_method === 'stripe') && o.payment_status !== 'paid') {
+      if (route.query.cancel === '1') intlCancelled.value = true
+      else await confirmIntl()
+    }
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || t('order_not_found')
   } finally {
@@ -60,10 +66,42 @@ async function load() {
   }
 }
 
+const intlCancelled = ref(false)
+const confirming = ref(false)
+async function confirmIntl() {
+  confirming.value = true
+  try {
+    const { data } = await api.post(`/storefront/public/orders/${code.value}/confirm`, null, { params: { t: token.value } })
+    if (data.payment_status === 'paid') await fetchOrder()
+  } catch (e: any) {
+    errorMsg.value = e?.response?.data?.error || ''
+  } finally {
+    confirming.value = false
+  }
+}
+
+// Số tiền khách đã/ sẽ trả bằng ngoại tệ (PayPal / Stripe)
+const foreignPaid = computed(() => {
+  const o = order.value
+  if (!o || !o.currency || !o.foreign_minor) return ''
+  try {
+    return new Intl.NumberFormat(locale.tag, { style: 'currency', currency: o.currency }).format(o.foreign_minor / Math.pow(10, o.foreign_decimals ?? 2))
+  } catch {
+    return `${o.foreign_minor / 100} ${o.currency}`
+  }
+})
+const methodLabel = computed(() => {
+  const o = order.value
+  if (!o) return ''
+  if (o.payment_method === 'cod') return t('pay_on_delivery')
+  const name = o.payment_method === 'paypal' ? 'PayPal' : o.payment_method === 'stripe' ? t('card_intl') : 'VNPay'
+  return o.payment_status === 'paid' ? t('paid_via', { method: name }) : name
+})
+
 async function retryPay() {
   retrying.value = true
   try {
-    const { data } = await api.post(`/storefront/public/orders/${code.value}/pay`, null, { params: { t: token.value, return_base: window.location.origin } })
+    const { data } = await api.post(`/storefront/public/orders/${code.value}/pay`, null, { params: { t: token.value, return_base: window.location.origin, currency: locale.currency } })
     window.location.href = data.payment_url
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || t('pay_link_failed')
@@ -75,7 +113,7 @@ const state = computed<'ok' | 'pending' | 'failed'>(() => {
   const o = order.value
   if (!o) return 'pending'
   if (o.payment_method === 'cod' || o.payment_status === 'paid') return 'ok'
-  if (o.payment_status === 'failed' || (vnpResult.value && !vnpResult.value.success)) return 'failed'
+  if (o.payment_status === 'failed' || (vnpResult.value && !vnpResult.value.success) || intlCancelled.value) return 'failed'
   return 'pending'
 })
 
@@ -106,13 +144,13 @@ onBeforeUnmount(() => pollTimer && clearTimeout(pollTimer))
             <template v-else>{{ t('auto_update') }}</template>
           </p>
           <button
-            v-if="state !== 'ok' && order.payment_method === 'vnpay'"
+            v-if="state !== 'ok' && order.payment_method !== 'cod' && !confirming"
             :disabled="retrying"
             class="mt-2 rounded-full px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
             :style="{ backgroundColor: accent }"
             @click="retryPay"
           >
-            {{ retrying ? t('redirecting') : t('retry_vnpay') }}
+            {{ retrying ? t('redirecting') : order.payment_method === 'vnpay' ? t('retry_vnpay') : t('retry_pay') }}
           </button>
         </div>
 
@@ -124,7 +162,8 @@ onBeforeUnmount(() => pollTimer && clearTimeout(pollTimer))
           <div class="space-y-1.5 border-t border-slate-200 pt-3 text-sm">
             <div class="flex justify-between"><span class="text-slate-500">{{ t('shipping_fee') }}</span><span>{{ order.shipping_fee ? money(order.shipping_fee) : t('free') }}</span></div>
             <div class="flex justify-between text-base"><span class="font-bold">{{ t('total') }}</span><span class="font-extrabold" :style="{ color: accent }">{{ money(order.total) }}</span></div>
-            <div class="flex justify-between"><span class="text-slate-500">{{ t('payment') }}</span><span>{{ order.payment_method === 'cod' ? t('pay_on_delivery') : order.payment_status === 'paid' ? t('paid_vnpay') : 'VNPay' }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-500">{{ t('payment') }}</span><span>{{ methodLabel }}</span></div>
+            <div v-if="foreignPaid" class="flex justify-between"><span class="text-slate-500">{{ t('amount_charged') }}</span><span class="font-semibold">{{ foreignPaid }}</span></div>
           </div>
           <div class="border-t border-slate-200 pt-3 text-sm text-slate-600">
             <div class="font-semibold text-slate-800">{{ order.customer_name }} · {{ order.phone }}</div>

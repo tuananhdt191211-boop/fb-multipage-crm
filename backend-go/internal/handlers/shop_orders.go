@@ -84,10 +84,16 @@ type ShopOrder struct {
 	VnpTxnRef     string          `gorm:"size:40;index" json:"-"`              // mã giao dịch gửi VNPay (đổi mỗi lần thanh toán lại)
 	VnpTransNo    string          `gorm:"size:40" json:"vnp_transaction_no"`
 	VnpBankCode   string          `gorm:"size:40" json:"vnp_bank_code"`
-	PaidAt        *time.Time      `json:"paid_at"`
-	StockApplied  bool            `json:"-"`
-	CreatedAt     time.Time       `gorm:"index" json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	// Thanh toán ngoại tệ (PayPal / Stripe): số tiền đã quy đổi tại thời điểm đặt
+	Currency     string     `gorm:"size:3" json:"currency"`
+	ForeignMinor int64      `json:"foreign_minor"` // số nhỏ nhất, vd. cent
+	FxRate       float64    `json:"fx_rate"`
+	GatewayRef   string     `gorm:"size:120;index" json:"-"` // mã đơn PayPal / mã phiên Stripe
+	GatewayTxn   string     `gorm:"size:120" json:"gateway_txn"`
+	PaidAt       *time.Time `json:"paid_at"`
+	StockApplied bool       `json:"-"`
+	CreatedAt    time.Time  `gorm:"index" json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 func (o *ShopOrder) AfterFind(tx *gorm.DB) error {
@@ -96,16 +102,24 @@ func (o *ShopOrder) AfterFind(tx *gorm.DB) error {
 }
 
 type ShopPaymentSettings struct {
-	ID               uint      `gorm:"primaryKey" json:"-"`
-	StorefrontID     uint      `gorm:"uniqueIndex;not null" json:"-"`
-	CODEnabled       bool      `json:"cod_enabled"`
-	VnpEnabled       bool      `json:"vnp_enabled"`
-	VnpTmnCode       string    `gorm:"size:20" json:"vnp_tmn_code"`
-	VnpHashSecretEnc string    `gorm:"type:text" json:"-"`
-	VnpSandbox       bool      `json:"vnp_sandbox"`
-	ShippingFee      int64     `json:"shipping_fee"`
-	FreeShipFrom     int64     `json:"free_ship_from"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               uint   `gorm:"primaryKey" json:"-"`
+	StorefrontID     uint   `gorm:"uniqueIndex;not null" json:"-"`
+	CODEnabled       bool   `json:"cod_enabled"`
+	VnpEnabled       bool   `json:"vnp_enabled"`
+	VnpTmnCode       string `gorm:"size:20" json:"vnp_tmn_code"`
+	VnpHashSecretEnc string `gorm:"type:text" json:"-"`
+	VnpSandbox       bool   `json:"vnp_sandbox"`
+	// Thanh toán quốc tế (ngoại tệ)
+	PaypalEnabled          bool      `json:"paypal_enabled"`
+	PaypalClientID         string    `gorm:"size:200" json:"paypal_client_id"`
+	PaypalSecretEnc        string    `gorm:"type:text" json:"-"`
+	PaypalSandbox          bool      `json:"paypal_sandbox"`
+	StripeEnabled          bool      `json:"stripe_enabled"`
+	StripeSecretEnc        string    `gorm:"type:text" json:"-"`
+	StripeWebhookSecretEnc string    `gorm:"type:text" json:"-"`
+	ShippingFee            int64     `json:"shipping_fee"`
+	FreeShipFrom           int64     `json:"free_ship_from"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 type SiteSubscriber struct {
@@ -275,8 +289,10 @@ func (h *StorefrontHandler) PublicCheckoutConfig(c *gin.Context) {
 	}
 	ps := h.paymentSettings(sf.ID)
 	c.JSON(http.StatusOK, gin.H{
-		"cod":            ps.CODEnabled || !ps.VnpEnabled, // luôn có ít nhất 1 cách thanh toán
+		"cod":            ps.CODEnabled || (!ps.VnpEnabled && !h.paypalReady(ps) && !h.stripeReady(ps)), // luôn có ít nhất 1 cách
 		"vnpay":          ps.VnpEnabled && ps.VnpTmnCode != "" && ps.VnpHashSecretEnc != "",
+		"paypal":         h.paypalReady(ps),
+		"stripe":         h.stripeReady(ps),
 		"shipping_fee":   ps.ShippingFee,
 		"free_ship_from": ps.FreeShipFrom,
 	})
@@ -295,6 +311,7 @@ type createOrderReq struct {
 	Note          string `json:"note"`
 	PaymentMethod string `json:"payment_method"`
 	ReturnBase    string `json:"return_base"` // origin của web công khai, để VNPay chuyển khách về
+	Currency      string `json:"currency"`    // tiền tệ khách đang xem (PayPal / Stripe)
 }
 
 func trimTo(s string, n int) string {
@@ -371,8 +388,18 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 
 	ps := h.paymentSettings(sf.ID)
 	vnpReady := ps.VnpEnabled && ps.VnpTmnCode != "" && ps.VnpHashSecretEnc != ""
-	codReady := ps.CODEnabled || !vnpReady
+	codReady := ps.CODEnabled || (!vnpReady && !h.paypalReady(ps) && !h.stripeReady(ps))
 	switch req.PaymentMethod {
+	case "paypal":
+		if !h.paypalReady(ps) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cửa hàng chưa bật thanh toán PayPal."})
+			return
+		}
+	case "stripe":
+		if !h.stripeReady(ps) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cửa hàng chưa bật thanh toán thẻ quốc tế."})
+			return
+		}
 	case "vnpay":
 		if !vnpReady {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Cửa hàng chưa bật thanh toán VNPay."})
@@ -455,7 +482,7 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 		PaymentStatus: "unpaid",
 		Status:        "new",
 	}
-	if o.PaymentMethod == "vnpay" {
+	if o.PaymentMethod == "vnpay" || o.PaymentMethod == "paypal" || o.PaymentMethod == "stripe" {
 		o.PaymentStatus = "pending"
 	}
 	if cu := h.customerFromRequest(c, sf.ID); cu != nil {
@@ -495,6 +522,16 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 			return
 		}
 		resp["payment_url"] = payURL
+	}
+	if o.PaymentMethod == "paypal" || o.PaymentMethod == "stripe" {
+		base := h.allowedReturnBase(req.ReturnBase, sf)
+		payURL, err := h.startIntlPayment(ps, sf, &o, req.Currency, h.orderReturnURL(base, sf, o.Code, o.AccessToken))
+		if err != nil {
+			// Đơn đã tạo: khách có thể bấm "Thanh toán lại" ở trang đơn hàng
+			resp["payment_error"] = err.Error()
+		} else {
+			resp["payment_url"] = payURL
+		}
 	}
 	c.JSON(http.StatusCreated, resp)
 }
@@ -537,7 +574,8 @@ func (h *StorefrontHandler) GetPublicOrder(c *gin.Context) {
 		"code": o.Code, "customer_name": o.CustomerName, "phone": o.Phone, "address": o.Address,
 		"items": o.Items, "subtotal": o.Subtotal, "shipping_fee": o.ShippingFee, "total": o.Total,
 		"payment_method": o.PaymentMethod, "payment_status": o.PaymentStatus, "status": o.Status,
-		"created_at": o.CreatedAt,
+		"created_at": o.CreatedAt, "currency": o.Currency, "foreign_minor": o.ForeignMinor,
+		"foreign_decimals": currencyDecimals(o.Currency, o.PaymentMethod),
 	}})
 }
 
@@ -547,6 +585,31 @@ func (h *StorefrontHandler) RetryVnpPayment(c *gin.Context) {
 	if h.DB.Where("code = ?", c.Param("code")).First(&o).Error != nil ||
 		!hmac.Equal([]byte(o.AccessToken), []byte(c.Query("t"))) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy đơn hàng."})
+		return
+	}
+	// PayPal / Stripe: tạo phiên thanh toán mới
+	if (o.PaymentMethod == "paypal" || o.PaymentMethod == "stripe") && o.PaymentStatus != "paid" && o.Status != "cancelled" {
+		var sf models.Storefront
+		if h.DB.First(&sf, o.StorefrontID).Error != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy cửa hàng."})
+			return
+		}
+		ps := h.paymentSettings(sf.ID)
+		if (o.PaymentMethod == "paypal" && !h.paypalReady(ps)) || (o.PaymentMethod == "stripe" && !h.stripeReady(ps)) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cửa hàng đã tắt cách thanh toán này."})
+			return
+		}
+		cur := c.Query("currency")
+		if cur == "" {
+			cur = o.Currency
+		}
+		base := h.allowedReturnBase(c.Query("return_base"), &sf)
+		payURL, err := h.startIntlPayment(ps, &sf, &o, cur, h.orderReturnURL(base, &sf, o.Code, o.AccessToken))
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"payment_url": payURL})
 		return
 	}
 	if o.PaymentMethod != "vnpay" || o.PaymentStatus == "paid" || o.Status == "cancelled" {
@@ -773,7 +836,10 @@ func (h *StorefrontHandler) GetPaymentSettings(c *gin.Context) {
 	}
 	ps := h.paymentSettings(sf.ID)
 	ipn := publicBaseURL(c) + "/api/v1/payments/vnpay/ipn"
-	c.JSON(http.StatusOK, gin.H{"settings": ps, "vnp_secret_set": ps.VnpHashSecretEnc != "", "vnp_ipn_url": ipn})
+	c.JSON(http.StatusOK, gin.H{"settings": ps, "vnp_secret_set": ps.VnpHashSecretEnc != "", "vnp_ipn_url": ipn,
+		"paypal_secret_set": ps.PaypalSecretEnc != "", "stripe_secret_set": ps.StripeSecretEnc != "",
+		"stripe_webhook_set": ps.StripeWebhookSecretEnc != "",
+		"stripe_webhook_url": fmt.Sprintf("%s/api/v1/payments/stripe/webhook/%d", publicBaseURL(c), sf.ID)})
 }
 
 // SavePaymentSettings PUT /api/v1/storefront/sites/:id/payment-settings
@@ -790,6 +856,14 @@ func (h *StorefrontHandler) SavePaymentSettings(c *gin.Context) {
 		VnpSandbox    bool   `json:"vnp_sandbox"`
 		ShippingFee   int64  `json:"shipping_fee"`
 		FreeShipFrom  int64  `json:"free_ship_from"`
+		// Quốc tế (để trống khoá bí mật = giữ khoá cũ)
+		PaypalEnabled       bool   `json:"paypal_enabled"`
+		PaypalClientID      string `json:"paypal_client_id"`
+		PaypalSecret        string `json:"paypal_secret"`
+		PaypalSandbox       bool   `json:"paypal_sandbox"`
+		StripeEnabled       bool   `json:"stripe_enabled"`
+		StripeSecret        string `json:"stripe_secret"`
+		StripeWebhookSecret string `json:"stripe_webhook_secret"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Dữ liệu không hợp lệ."})
@@ -817,7 +891,58 @@ func (h *StorefrontHandler) SavePaymentSettings(c *gin.Context) {
 		return
 	}
 	ps.VnpEnabled = req.VnpEnabled
-	if !ps.CODEnabled && !ps.VnpEnabled {
+
+	// PayPal
+	ps.PaypalClientID = strings.TrimSpace(req.PaypalClientID)
+	ps.PaypalSandbox = req.PaypalSandbox
+	if s := strings.TrimSpace(req.PaypalSecret); s != "" {
+		enc, err := security.EncryptSecret(s, h.encKey())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không mã hoá được khoá PayPal."})
+			return
+		}
+		ps.PaypalSecretEnc = enc
+	}
+	if req.PaypalEnabled && (ps.PaypalClientID == "" || ps.PaypalSecretEnc == "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần nhập Client ID và Secret để bật PayPal."})
+		return
+	}
+	ps.PaypalEnabled = req.PaypalEnabled
+	if ps.PaypalEnabled && strings.TrimSpace(req.PaypalSecret) != "" {
+		if _, err := h.paypalToken(ps); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
+	// Stripe
+	if s := strings.TrimSpace(req.StripeSecret); s != "" {
+		if !strings.HasPrefix(s, "sk_") && !strings.HasPrefix(s, "rk_") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Khoá Stripe phải là Secret key (bắt đầu bằng sk_live_ hoặc sk_test_)."})
+			return
+		}
+		enc, err := security.EncryptSecret(s, h.encKey())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không mã hoá được khoá Stripe."})
+			return
+		}
+		ps.StripeSecretEnc = enc
+	}
+	if s := strings.TrimSpace(req.StripeWebhookSecret); s != "" {
+		enc, err := security.EncryptSecret(s, h.encKey())
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Không mã hoá được khoá webhook Stripe."})
+			return
+		}
+		ps.StripeWebhookSecretEnc = enc
+	}
+	if req.StripeEnabled && ps.StripeSecretEnc == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần nhập Secret key để bật Stripe."})
+		return
+	}
+	ps.StripeEnabled = req.StripeEnabled
+
+	if !ps.CODEnabled && !ps.VnpEnabled && !ps.PaypalEnabled && !ps.StripeEnabled {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần bật ít nhất một cách thanh toán."})
 		return
 	}
@@ -831,7 +956,9 @@ func (h *StorefrontHandler) SavePaymentSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lưu cài đặt thất bại."})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"settings": ps, "vnp_secret_set": ps.VnpHashSecretEnc != ""})
+	c.JSON(http.StatusOK, gin.H{"settings": ps, "vnp_secret_set": ps.VnpHashSecretEnc != "",
+		"paypal_secret_set": ps.PaypalSecretEnc != "", "stripe_secret_set": ps.StripeSecretEnc != "",
+		"stripe_webhook_set": ps.StripeWebhookSecretEnc != ""})
 }
 
 // ListSubscribers GET /api/v1/storefront/sites/:id/subscribers
