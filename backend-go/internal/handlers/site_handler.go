@@ -1,6 +1,6 @@
 package handlers
 
-// Bước 1 – Multi-site: mỗi tài khoản có thể tạo nhiều website bán hàng.
+// Multi-site: mỗi tài khoản có thể tạo nhiều website bán hàng.
 // Dùng lại model Storefront (không cần migration mới).
 
 import (
@@ -21,6 +21,7 @@ const (
 	maxSitesPerUser = 5 // TODO: đưa vào gói dịch vụ / config
 	maxBlocks       = 50
 	maxBlocksBytes  = 512 * 1024
+	maxHTMLBytes    = 50 * 1024
 )
 
 var (
@@ -34,6 +35,8 @@ var (
 	allowedBlockTypes = map[string]bool{
 		"header": true, "hero": true, "products": true,
 		"features": true, "testimonials": true, "cta": true,
+		"richtext": true, "image": true, "gallery": true,
+		"faq": true, "contact": true, "html": true,
 	}
 )
 
@@ -163,6 +166,83 @@ func sanitizeValue(key string, v interface{}) interface{} {
 	return v
 }
 
+// normalizeStyle chỉ giữ màu hex hợp lệ và mức khoảng cách cho phép.
+func normalizeStyle(data map[string]interface{}) {
+	raw, ok := data["style"].(map[string]interface{})
+	if !ok {
+		delete(data, "style")
+		return
+	}
+	clean := map[string]interface{}{}
+	if bg, ok := raw["bg"].(string); ok && colorRe.MatchString(bg) {
+		clean["bg"] = bg
+	}
+	if pad, ok := raw["pad"].(string); ok && (pad == "sm" || pad == "md" || pad == "lg") {
+		clean["pad"] = pad
+	}
+	data["style"] = clean
+}
+
+// normalizeHeader làm sạch cấu hình section Đầu trang.
+func normalizeHeader(data map[string]interface{}) {
+	// Menu: nhận chuỗi cũ hoặc {label, link}, tối đa 12 mục
+	items := []interface{}{}
+	if arr, ok := data["nav_items"].([]interface{}); ok {
+		for _, it := range arr {
+			if len(items) >= 12 {
+				break
+			}
+			var label, link string
+			switch v := it.(type) {
+			case string:
+				label = v
+			case map[string]interface{}:
+				label, _ = v["label"].(string)
+				link, _ = v["link"].(string)
+			}
+			label = strings.TrimSpace(label)
+			if label == "" {
+				continue
+			}
+			if r := []rune(label); len(r) > 40 {
+				label = string(r[:40])
+			}
+			items = append(items, map[string]interface{}{"label": label, "link": link})
+		}
+	}
+	data["nav_items"] = items
+
+	pick := func(key, def string, allowed ...string) {
+		s, _ := data[key].(string)
+		for _, a := range allowed {
+			if s == a {
+				return
+			}
+		}
+		data[key] = def
+	}
+	pick("layout", "left", "left", "split", "center", "center_split")
+	pick("brand_size", "md", "sm", "md", "lg")
+
+	for _, k := range []string{"show_brand", "show_cta", "sticky", "border"} {
+		if _, ok := data[k].(bool); !ok {
+			delete(data, k)
+		}
+	}
+
+	h, _ := data["logo_height"].(float64)
+	if h < 20 {
+		h = 40
+	} else if h > 120 {
+		h = 120
+	}
+	data["logo_height"] = h
+
+	if tc, ok := data["text_color"].(string); !ok || !colorRe.MatchString(tc) {
+		delete(data, "text_color")
+	}
+}
+
 // sanitizeBlocksJSON kiểm tra loại block, giới hạn kích thước và lọc các link/URL nguy hiểm.
 func sanitizeBlocksJSON(raw string) (string, error) {
 	if len(raw) > maxBlocksBytes {
@@ -184,6 +264,25 @@ func sanitizeBlocksJSON(raw string) (string, error) {
 		}
 		for k, v := range blocks[i].Data {
 			blocks[i].Data[k] = sanitizeValue(k, v)
+		}
+
+		normalizeStyle(blocks[i].Data)
+
+		if blocks[i].Type == "header" {
+			normalizeHeader(blocks[i].Data)
+		}
+
+		if blocks[i].Type == "html" {
+			if s, _ := blocks[i].Data["html"].(string); len(s) > maxHTMLBytes {
+				return "", fmt.Errorf("Khối HTML tối đa %d KB.", maxHTMLBytes/1024)
+			}
+			ht, _ := blocks[i].Data["height"].(float64)
+			if ht < 80 {
+				ht = 300
+			} else if ht > 2000 {
+				ht = 2000
+			}
+			blocks[i].Data["height"] = ht
 		}
 	}
 	out, err := json.Marshal(blocks)
@@ -370,6 +469,7 @@ func (h *StorefrontHandler) DeleteSite(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Xóa sản phẩm thuộc website này trước
 	h.DB.Where("storefront_id = ?", sf.ID).Delete(&models.Product{})
 	if err := h.DB.Delete(sf).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Xóa website thất bại."})

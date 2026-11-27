@@ -1048,3 +1048,45 @@ func sendImageAttachmentToFacebook(client *http.Client, pageID, pageToken, recip
 	}
 	return mid, "", err
 }
+
+// CheckCustomerAvatar: TẠM THỜI, chỉ để chẩn đoán. Xóa sau khi xong.
+func (h *InboxHandler) CheckCustomerAvatar(c *gin.Context) {
+	pageID := strings.TrimSpace(c.Param("page_id"))
+	psid := strings.TrimSpace(c.Param("psid"))
+
+	var page models.FacebookPage
+	res := h.DB.Where("page_id = ? AND is_connected = ?", pageID, true).Limit(1).Find(&page)
+	if res.Error != nil || res.RowsAffected == 0 {
+		c.JSON(http.StatusOK, gin.H{"buoc": "tìm page", "loi": "không có page này hoặc page chưa kết nối"})
+		return
+	}
+	pageToken, err := security.DecryptSecret(page.EncryptedPageToken, h.encKey())
+	if err != nil || pageToken == "" {
+		c.JSON(http.StatusOK, gin.H{"buoc": "giải mã token", "loi": "không giải mã được Page Token"})
+		return
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	call := func(u string) gin.H {
+		r, reqErr := client.Get(u)
+		if reqErr != nil {
+			return gin.H{"loi": "lỗi mạng khi gọi Facebook"} // không in err vì có thể chứa token
+		}
+		defer r.Body.Close()
+		raw, _ := io.ReadAll(io.LimitReader(r.Body, 2048))
+		out := gin.H{"status": r.StatusCode, "content_type": r.Header.Get("Content-Type")}
+		if r.StatusCode != http.StatusOK {
+			out["facebook_tra_ve"] = string(raw)
+		}
+		return out
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"profile_pic_api": call(fmt.Sprintf(
+			"https://graph.facebook.com/v21.0/%s?fields=name,profile_pic&access_token=%s",
+			url.PathEscape(psid), url.QueryEscape(pageToken))),
+		"picture_api": call(fmt.Sprintf(
+			"https://graph.facebook.com/v21.0/%s/picture?type=normal&access_token=%s",
+			url.PathEscape(psid), url.QueryEscape(pageToken))),
+	})
+}

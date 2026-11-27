@@ -1,6 +1,25 @@
+export type BlockType =
+  | 'header'
+  | 'hero'
+  | 'products'
+  | 'features'
+  | 'testimonials'
+  | 'cta'
+  | 'richtext'
+  | 'image'
+  | 'gallery'
+  | 'faq'
+  | 'contact'
+  | 'html'
+
+export interface BlockStyle {
+  bg?: string
+  pad?: 'none' | 'sm' | 'md' | 'lg'
+}
+
 export interface StoreBlock {
   id: string
-  type: 'header' | 'hero' | 'products' | 'features' | 'testimonials' | 'cta'
+  type: BlockType
   enabled: boolean
   data: Record<string, any>
 }

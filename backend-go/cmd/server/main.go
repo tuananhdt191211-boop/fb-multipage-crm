@@ -88,6 +88,7 @@ func main() {
 	r.Static("/uploads", "./uploads")
 
 	r.GET("/api/v1/storefront/public", storefrontHandler.GetPublicStorefront)
+	r.GET("/api/v1/inbox/avatar-check/:page_id/:psid", inboxHandler.CheckCustomerAvatar)
 
 	storefrontGroup := r.Group("/api/v1/storefront", middleware.JWTAuth(cfg.JWTSecret))
 	{
@@ -210,9 +211,11 @@ func main() {
 	broadcastsGroup := r.Group("/api/v1/broadcasts", middleware.JWTAuth(cfg.JWTSecret))
 	{
 		broadcastsGroup.GET("", broadcastHandler.ListCampaigns)
+		broadcastsGroup.GET("/diagnose", broadcastHandler.DiagnosePage)
 		broadcastsGroup.POST("", broadcastHandler.CreateCampaign)
 		broadcastsGroup.POST("/upload-media", broadcastHandler.UploadMedia)
 		broadcastsGroup.PATCH("/:id/status", broadcastHandler.ToggleStatus)
+
 	}
 
 	log.Printf("Backend Golang đang chạy tại http://localhost:%s", cfg.Port)

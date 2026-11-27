@@ -6,13 +6,6 @@ import { api } from '../lib/api'
 import StoreRenderer from '../components/store/StoreRenderer.vue'
 import type { PublicProduct, StoreBlock } from '../types/store'
 
-interface PublicStorefrontResponse {
-  site_title?: string
-  primary_color?: string
-  blocks_json?: string
-  products?: PublicProduct[]
-}
-
 const route = useRoute()
 
 const loading = ref(true)
@@ -21,28 +14,7 @@ const siteTitle = ref('Cửa hàng')
 const primaryColor = ref('#059669')
 const blocks = ref<StoreBlock[]>([])
 const products = ref<PublicProduct[]>([])
-
-function extractProductsFromBlocks(blockList: StoreBlock[]): PublicProduct[] {
-  const result: PublicProduct[] = []
-  for (const blk of blockList) {
-    if (blk.type === 'products' && Array.isArray(blk.data?.items)) {
-      for (let i = 0; i < blk.data.items.length; i++) {
-        const raw = blk.data.items[i] as Record<string, any>
-        const prod: Record<string, any> = {
-          id: raw.id ?? `blk_prod_${i}`,
-          name: String(raw.name ?? ''),
-          price: raw.price ?? 0,
-          image_url: String(raw.image_url ?? raw.image ?? ''),
-          image: String(raw.image ?? raw.image_url ?? ''),
-          desc: String(raw.desc ?? raw.description ?? ''),
-          description: String(raw.description ?? raw.desc ?? '')
-        }
-        result.push(prod as PublicProduct)
-      }
-    }
-  }
-  return result
-}
+const logoUrl = ref('') // <-- MỚI
 
 async function loadPublicStore() {
   loading.value = true
@@ -61,10 +33,13 @@ async function loadPublicStore() {
           ? route.query.domain.trim()
           : window.location.hostname
 
-    const { data } = await api.get<PublicStorefrontResponse>(
-      '/storefront/public',
-      { params }
-    )
+    const { data } = await api.get<{
+      site_title?: string
+      primary_color?: string
+      logo_url?: string // <-- MỚI
+      blocks_json?: string
+      products?: PublicProduct[]
+    }>('/storefront/public', { params })
 
     if (data?.site_title) {
       siteTitle.value = data.site_title
@@ -72,12 +47,9 @@ async function loadPublicStore() {
     }
     if (data?.primary_color) primaryColor.value = data.primary_color
     const parsed: StoreBlock[] = JSON.parse(data?.blocks_json || '[]')
-    const validBlocks = Array.isArray(parsed) ? parsed : []
-    blocks.value = validBlocks
-    products.value =
-      Array.isArray(data?.products) && data.products.length > 0
-        ? data.products
-        : extractProductsFromBlocks(validBlocks)
+    blocks.value = Array.isArray(parsed) ? parsed : []
+    products.value = data?.products || []
+    logoUrl.value = data?.logo_url || '' // <-- MỚI
   } catch (err: any) {
     errorMsg.value = err?.response?.data?.error || 'Không tìm thấy trang bán hàng đã xuất bản.'
   } finally {
@@ -103,6 +75,7 @@ onMounted(loadPublicStore)
       :primary-color="primaryColor"
       :blocks="blocks"
       :products="products"
+      :logo-url="logoUrl"
     />
   </div>
 </template>

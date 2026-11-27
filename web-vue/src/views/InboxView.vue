@@ -678,11 +678,12 @@ function handleAvatarError(key: string) {
 }
 
 function getCustomerAvatarUrl(conv: ConversationItem) {
-  if (conv.customer_avatar) return conv.customer_avatar
-  if (!conv.page_id || !conv.customer_psid) return ''
-  // Ảnh lấy qua backend (dùng Page Token), tránh link Facebook hết hạn
-  const base = (api.defaults.baseURL || '').replace(/\/+$/, '')
-  return `${base}/inbox/avatar/${encodeURIComponent(conv.page_id)}/${encodeURIComponent(conv.customer_psid)}`
+  return (conv.customer_avatar || '').trim()
+  // if (conv.customer_avatar) return conv.customer_avatar
+  // if (!conv.page_id || !conv.customer_psid) return ''
+  // // Ảnh lấy qua backend (dùng Page Token), tránh link Facebook hết hạn
+  // const base = (api.defaults.baseURL || '').replace(/\/+$/, '')
+  // return `${base}/inbox/avatar/${encodeURIComponent(conv.page_id)}/${encodeURIComponent(conv.customer_psid)}`
 }
 
 function getInitials(name: string) {
