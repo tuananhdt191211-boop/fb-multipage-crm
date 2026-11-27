@@ -483,7 +483,7 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 	resp := gin.H{"code": o.Code, "token": o.AccessToken, "total": o.Total, "payment_method": o.PaymentMethod}
 	if o.PaymentMethod == "vnpay" {
 		base := h.allowedReturnBase(req.ReturnBase, sf)
-		returnURL := fmt.Sprintf("%s/s/%s/order/%s?t=%s", base, sf.Slug, o.Code, o.AccessToken)
+		returnURL := h.orderReturnURL(base, sf, o.Code, o.AccessToken)
 		payURL, err := h.buildVnpURL(ps, o, c.ClientIP(), returnURL)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -556,7 +556,7 @@ func (h *StorefrontHandler) RetryVnpPayment(c *gin.Context) {
 	// VNPay không cho trùng vnp_TxnRef -> mỗi lần thanh toán lại dùng mã giao dịch mới
 	o.VnpTxnRef = o.Code + "R" + randomDigits(6)
 	base := h.allowedReturnBase(c.Query("return_base"), &sf)
-	returnURL := fmt.Sprintf("%s/s/%s/order/%s?t=%s", base, sf.Slug, o.Code, o.AccessToken)
+	returnURL := h.orderReturnURL(base, &sf, o.Code, o.AccessToken)
 	payURL, err := h.buildVnpURL(h.paymentSettings(sf.ID), o, c.ClientIP(), returnURL)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

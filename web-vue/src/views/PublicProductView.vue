@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { currentSlug, storePath } from '../lib/storeHost'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChevronRight, Loader2, Minus, Plus, ShieldCheck, ShoppingBag, Truck } from 'lucide-vue-next'
@@ -11,7 +12,7 @@ import type { PublicSiteData } from '../types/store'
 
 const route = useRoute()
 const router = useRouter()
-const slug = computed(() => String(route.params.slug || ''))
+const slug = computed(() => currentSlug(route.params.slug))
 const site = ref<PublicSiteData | null>(null)
 const loading = ref(true)
 const errorMsg = ref('')
@@ -60,14 +61,14 @@ onMounted(load)
   <PublicShell v-else :site="site">
     <div class="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
       <nav class="mb-6 flex items-center gap-1 text-sm text-slate-500">
-        <router-link :to="`/s/${site.slug}`" class="hover:underline">Trang chủ</router-link>
+        <router-link :to="storePath(site.slug)" class="hover:underline">Trang chủ</router-link>
         <ChevronRight class="h-4 w-4" />
         <span class="truncate text-slate-800">{{ product?.name || 'Sản phẩm' }}</span>
       </nav>
 
       <div v-if="!product" class="py-20 text-center">
         <p class="font-semibold text-slate-700">Sản phẩm không tồn tại hoặc đã ngừng bán.</p>
-        <router-link :to="`/s/${site.slug}`" class="mt-4 inline-block rounded-full px-5 py-2.5 text-sm font-bold text-white" :style="{ backgroundColor: accent }">Về trang chủ</router-link>
+        <router-link :to="storePath(site.slug)" class="mt-4 inline-block rounded-full px-5 py-2.5 text-sm font-bold text-white" :style="{ backgroundColor: accent }">Về trang chủ</router-link>
       </div>
 
       <div v-else class="grid grid-cols-1 gap-10 md:grid-cols-2 md:gap-14">
@@ -117,7 +118,7 @@ onMounted(load)
       <section v-if="product && related.length" class="mt-16 space-y-6">
         <h2 class="text-xl font-extrabold text-slate-900">Có thể bạn cũng thích</h2>
         <div class="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-5">
-          <router-link v-for="p in related" :key="p.id" :to="`/s/${site.slug}/p/${p.id}`" class="group overflow-hidden rounded-2xl border border-slate-200/80 bg-white transition hover:shadow-lg">
+          <router-link v-for="p in related" :key="p.id" :to="storePath(site.slug, `/p/${p.id}`)" class="group overflow-hidden rounded-2xl border border-slate-200/80 bg-white transition hover:shadow-lg">
             <div class="aspect-square overflow-hidden bg-slate-100">
               <img v-if="safeImg(p.image_url)" :src="safeImg(p.image_url)" :alt="p.name" loading="lazy" class="h-full w-full object-cover transition group-hover:scale-105" />
             </div>

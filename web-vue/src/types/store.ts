@@ -35,6 +35,8 @@ export interface Site {
   id: number
   slug: string
   domain: string
+  domain_status?: string
+  domain_error?: string
   site_title: string
   logo_url: string
   primary_color: string

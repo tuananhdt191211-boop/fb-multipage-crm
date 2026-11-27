@@ -1,10 +1,8 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.stores'
-import BroadcastView from '../views/BroadcastView.vue'
+import { onCustomDomain } from '@/lib/storeHost'
 
-const router = createRouter({
-  history: createWebHistory(),
-  routes: [
+const appRoutes: RouteRecordRaw[] = [
     {
       path: '/login',
       name: 'login',
@@ -62,7 +60,7 @@ const router = createRouter({
 {
   path: '/broadcasts',
   name: 'broadcasts',
-  component: BroadcastView,
+  component: () => import('../views/BroadcastView.vue'),
   meta: { requiresAuth: true }
 },
 {
@@ -124,10 +122,30 @@ const router = createRouter({
   path: '/:pathMatch(.*)*',
   redirect: '/'
 }
-  ]
+]
+
+// Trên tên miền riêng của khách chỉ có cửa hàng (không có trang quản trị), đường dẫn ngắn.
+// Cùng tên route với bản /s/:slug nên router.push({ name: 'public-checkout' }) chạy ở cả hai nơi.
+const storeRoutes: RouteRecordRaw[] = [
+  { path: '/', name: 'public-site', component: () => import('../views/PublicStoreView.vue') },
+  { path: '/p/:pid', name: 'public-product', component: () => import('../views/PublicProductView.vue') },
+  { path: '/checkout', name: 'public-checkout', component: () => import('../views/PublicCheckoutView.vue') },
+  { path: '/order/:code', name: 'public-order', component: () => import('../views/PublicOrderView.vue') },
+  // link cũ dạng /s/<slug>/... vẫn mở được
+  { path: '/s/:slug', redirect: '/' },
+  { path: '/s/:slug/p/:pid', redirect: (to) => `/p/${to.params.pid}` },
+  { path: '/s/:slug/checkout', redirect: '/checkout' },
+  { path: '/s/:slug/order/:code', redirect: (to) => ({ path: `/order/${to.params.code}`, query: to.query }) },
+  { path: '/:pathMatch(.*)*', redirect: '/' }
+]
+
+const router = createRouter({
+  history: createWebHistory(),
+  routes: onCustomDomain ? storeRoutes : appRoutes
 })
 
 router.beforeEach(async (to) => {
+  if (onCustomDomain) return true
   const auth = useAuthStore()
   const storedToken = localStorage.getItem('access_token')
 

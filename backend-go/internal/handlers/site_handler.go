@@ -482,6 +482,7 @@ func (h *StorefrontHandler) DeleteSite(c *gin.Context) {
 		return
 	}
 	// Xóa sản phẩm thuộc website này trước
+	h.releaseDomainOnDelete(sf)
 	h.DB.Where("storefront_id = ?", sf.ID).Delete(&models.Product{})
 	if err := h.DB.Delete(sf).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Xóa website thất bại."})

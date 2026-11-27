@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ArrowLeft, ExternalLink, Globe, Loader2, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import { isCustomDomainHost } from '../lib/storeHost'
+import DomainDialog from '../components/store/DomainDialog.vue'
 import type { Site } from '../types/store'
 
 const router = useRouter()
@@ -25,6 +27,19 @@ const canCreate = computed(() => sites.value.length < maxSites.value)
 
 function publicUrl(s: Site) {
   return `${window.location.origin}/s/${s.slug}`
+}
+
+// Tên miền riêng (bỏ qua giá trị cũ là domain hệ thống)
+function customDomain(s: Site) {
+  return s.domain && isCustomDomainHost(s.domain) ? s.domain : ''
+}
+
+const domainSite = ref<Site | null>(null)
+function onDomainUpdated(d: { domain: string; status: string; error: string }) {
+  if (!domainSite.value) return
+  domainSite.value.domain = d.domain
+  domainSite.value.domain_status = d.status
+  domainSite.value.domain_error = d.error
 }
 
 function apiError(err: any, fallback: string) {
@@ -158,6 +173,22 @@ onMounted(loadSites)
               {{ publicUrl(s) }} <ExternalLink class="h-3 w-3" />
             </a>
             <p v-else class="mt-0.5 text-xs text-slate-400">/s/{{ s.slug }}</p>
+            <div v-if="customDomain(s)" class="mt-1 flex items-center gap-1.5 text-xs">
+              <Globe class="h-3.5 w-3.5 text-slate-400" />
+              <a
+                v-if="s.domain_status === 'active' && s.is_published"
+                :href="`https://${customDomain(s)}`"
+                target="_blank"
+                rel="noopener"
+                class="inline-flex items-center gap-1 font-semibold text-emerald-700 hover:underline"
+              >https://{{ customDomain(s) }} <ExternalLink class="h-3 w-3" /></a>
+              <span v-else class="font-semibold text-slate-600">{{ customDomain(s) }}</span>
+              <span
+                v-if="s.domain_status !== 'active'"
+                class="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                :class="s.domain_status === 'error' ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700'"
+              >{{ s.domain_status === 'error' ? 'Lỗi tên miền' : 'Chờ trỏ DNS' }}</span>
+            </div>
           </div>
 
           <div class="flex flex-wrap items-center gap-2 whitespace-nowrap">
@@ -180,6 +211,12 @@ onMounted(loadSites)
               <Pencil class="h-3.5 w-3.5" /> Chỉnh sửa
             </button>
             <button
+              class="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold hover:bg-slate-50"
+              @click="domainSite = s"
+            >
+              <Globe class="h-3.5 w-3.5" /> Tên miền
+            </button>
+            <button
               class="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold hover:bg-slate-50 disabled:opacity-50"
               :disabled="busyId === s.id"
               @click="togglePublish(s)"
@@ -197,6 +234,8 @@ onMounted(loadSites)
         </li>
       </ul>
     </div>
+
+    <DomainDialog v-if="domainSite" :site="domainSite" @close="domainSite = null" @updated="onDomainUpdated" />
 
     <div v-if="showCreate" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div class="w-full max-w-md space-y-4 rounded-2xl bg-white p-6">

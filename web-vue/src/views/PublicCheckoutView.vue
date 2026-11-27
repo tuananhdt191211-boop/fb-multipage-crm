@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { currentSlug, storePath } from '../lib/storeHost'
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { CreditCard, Loader2, Lock, Minus, Plus, Trash2, Truck } from 'lucide-vue-next'
@@ -12,7 +13,7 @@ import type { PublicSiteData } from '../types/store'
 
 const route = useRoute()
 const router = useRouter()
-const slug = computed(() => String(route.params.slug || ''))
+const slug = computed(() => currentSlug(route.params.slug))
 const cart = useCart(slug.value)
 
 const site = ref<PublicSiteData | null>(null)
@@ -114,7 +115,7 @@ onMounted(load)
 
       <div v-if="!cart.state.lines.length" class="rounded-3xl bg-slate-50 py-16 text-center">
         <p class="font-semibold text-slate-700">Giỏ hàng của bạn đang trống.</p>
-        <router-link :to="`/s/${site.slug}`" class="mt-4 inline-block rounded-full px-6 py-3 text-sm font-bold text-white" :style="{ backgroundColor: accent }">Tiếp tục mua sắm</router-link>
+        <router-link :to="storePath(site.slug)" class="mt-4 inline-block rounded-full px-6 py-3 text-sm font-bold text-white" :style="{ backgroundColor: accent }">Tiếp tục mua sắm</router-link>
       </div>
 
       <form v-else class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_420px]" @submit.prevent="submit">

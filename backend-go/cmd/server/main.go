@@ -62,7 +62,13 @@ func main() {
 		origin := c.GetHeader("Origin")
 		c.Header("Vary", "Origin")
 
-		if allowedOrigin == "*" {
+		// API công khai của website bán hàng được gọi từ tên miền riêng của khách → cho mọi origin
+		p := c.Request.URL.Path
+		isPublicStore := strings.HasPrefix(p, "/api/v1/storefront/public") || strings.HasPrefix(p, "/api/v1/storefront/media/")
+
+		if isPublicStore && origin != "" {
+			c.Header("Access-Control-Allow-Origin", strings.TrimRight(strings.TrimSpace(origin), "/"))
+		} else if allowedOrigin == "*" {
 			if origin != "" {
 				c.Header("Access-Control-Allow-Origin", origin)
 			} else {
@@ -112,6 +118,9 @@ func main() {
 		storefrontGroup.POST("/sites/:id/publish", storefrontHandler.PublishSite)
 		storefrontGroup.POST("/sites/:id/unpublish", storefrontHandler.UnpublishSite)
 		storefrontGroup.DELETE("/sites/:id", storefrontHandler.DeleteSite)
+		storefrontGroup.GET("/sites/:id/domain", storefrontHandler.GetSiteDomain)
+		storefrontGroup.PUT("/sites/:id/domain", storefrontHandler.SetSiteDomain)
+		storefrontGroup.DELETE("/sites/:id/domain", storefrontHandler.RemoveSiteDomain)
 		storefrontGroup.GET("/sites/:id/products", storefrontHandler.ListProducts)
 		storefrontGroup.POST("/sites/:id/products", storefrontHandler.CreateProduct)
 		storefrontGroup.PUT("/sites/:id/products/:pid", storefrontHandler.UpdateProduct)

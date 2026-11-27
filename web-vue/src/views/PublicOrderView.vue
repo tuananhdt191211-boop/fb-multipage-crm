@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // Trang kết quả đặt hàng (cũng là trang VNPay chuyển khách về sau khi thanh toán)
+import { currentSlug, storePath } from '../lib/storeHost'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { CheckCircle2, Clock, Loader2, XCircle } from 'lucide-vue-next'
@@ -11,7 +12,7 @@ import { formatVnd } from '../lib/format'
 import type { PublicSiteData, ShopOrder } from '../types/store'
 
 const route = useRoute()
-const slug = computed(() => String(route.params.slug || ''))
+const slug = computed(() => currentSlug(route.params.slug))
 const code = computed(() => String(route.params.code || ''))
 const token = computed(() => String(route.query.t || ''))
 
@@ -128,7 +129,7 @@ onBeforeUnmount(() => pollTimer && clearTimeout(pollTimer))
         </div>
 
         <div class="mt-8 text-center">
-          <router-link :to="`/s/${site.slug}`" class="inline-block rounded-full border-2 px-6 py-3 text-sm font-bold" :style="{ borderColor: accent, color: accent }">Tiếp tục mua sắm</router-link>
+          <router-link :to="storePath(site.slug)" class="inline-block rounded-full border-2 px-6 py-3 text-sm font-bold" :style="{ borderColor: accent, color: accent }">Tiếp tục mua sắm</router-link>
         </div>
       </template>
     </div>

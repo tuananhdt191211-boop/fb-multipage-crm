@@ -4,6 +4,7 @@
 // - Trình chỉnh sửa (editable): click chọn section, sửa chữ trực tiếp, kéo thả đổi vị trí.
 // Bố cục dùng container query (@container) nên xem trước chế độ điện thoại/máy tính bảng hiển thị đúng.
 // Nền mỗi section trải hết chiều ngang, nội dung nằm trong khung max-w-6xl ở giữa.
+import { storePath } from '../../lib/storeHost'
 import { computed, nextTick, ref } from 'vue'
 import {
   ArrowDown,
@@ -92,7 +93,7 @@ const cart = props.siteSlug && !props.editable ? useCart(props.siteSlug) : null
 const cartCount = computed(() => cart?.count.value || 0)
 
 function productLink(id: number) {
-  return props.siteSlug && !props.editable ? `/s/${props.siteSlug}/p/${id}` : undefined
+  return props.siteSlug && !props.editable ? storePath(props.siteSlug, `/p/${id}`) : undefined
 }
 
 function addToCart(p: PublicProduct) {
