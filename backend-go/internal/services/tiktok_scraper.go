@@ -62,8 +62,18 @@ func FetchAllTikTokChannelVideos(rawUsername string) ([]TikTokVideoItem, error) 
 	}
 
 	apiBase := strings.TrimSpace(os.Getenv("TIKTOK_SCRAPER_API_URL"))
+	rapidKey := strings.TrimSpace(os.Getenv("RAPIDAPI_KEY"))
+	rapidHost := strings.TrimSpace(os.Getenv("RAPIDAPI_TIKTOK_HOST"))
+	if rapidHost == "" {
+		rapidHost = "tiktok-scraper7.p.rapidapi.com"
+	}
 	if apiBase == "" {
-		apiBase = "https://www.tikwm.com/api/user/posts"
+		if rapidKey != "" {
+			// tikwm bị Cloudflare chặn -> bản chính thức trên RapidAPI (cùng định dạng)
+			apiBase = "https://" + rapidHost + "/user/posts"
+		} else {
+			apiBase = "https://www.tikwm.com/api/user/posts"
+		}
 	}
 
 	maxPages := 10
@@ -98,6 +108,10 @@ func FetchAllTikTokChannelVideos(rawUsername string) ([]TikTokVideoItem, error) 
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 		req.Header.Set("Accept", "application/json")
+		if rapidKey != "" && strings.Contains(apiBase, rapidHost) {
+			req.Header.Set("X-RapidAPI-Key", rapidKey)
+			req.Header.Set("X-RapidAPI-Host", rapidHost)
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {

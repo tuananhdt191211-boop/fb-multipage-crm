@@ -45,6 +45,12 @@ interface ExploreItem {
   shares: number
   duration: number
   published_at: number
+  embed_url?: string
+}
+
+// Chỉ nhúng trình phát chính thức của TikTok
+function safeEmbed(u?: string) {
+  return u && /^https:\/\/www\.tiktok\.com\/player\/v1\/\d+/.test(u) ? u : ''
 }
 
 interface ExploreChannel {
@@ -190,7 +196,12 @@ async function runSearch(override?: { q: string; platform?: Platform; mode?: Mod
     } catch (err: any) {
       const fb = err.response?.data?.fallback as TikTokTarget | undefined
       if (!fb) throw err
-      data = (await exploreTikTokInBrowser(fb)) as ExploreResult
+      try {
+        data = (await exploreTikTokInBrowser(fb)) as ExploreResult
+      } catch {
+        // Trình duyệt cũng bị chặn: hiện thông báo rõ ràng của máy chủ
+        throw err
+      }
       browserTarget.value = fb
     }
     lastRequest.value = req
@@ -591,8 +602,18 @@ const modeLabel = computed(() => {
             class="group flex min-w-0 flex-col overflow-hidden rounded-2xl border bg-white shadow-2xs transition"
             :class="selected[keyOf(it)] ? 'border-emerald-500 ring-2 ring-emerald-100' : 'border-slate-200 hover:border-emerald-300'"
           >
-            <div class="relative overflow-hidden bg-slate-100" :class="thumbRatio(it)">
-              <a :href="safeHref(it.url)" target="_blank" rel="noopener noreferrer" class="block h-full w-full">
+            <div class="relative overflow-hidden bg-slate-100" :class="safeEmbed(it.embed_url) && !safeImg(it.thumbnail) ? 'aspect-[9/16]' : thumbRatio(it)">
+              <iframe
+                v-if="safeEmbed(it.embed_url) && !safeImg(it.thumbnail)"
+                :src="safeEmbed(it.embed_url)"
+                class="h-full w-full border-0"
+                allow="encrypted-media; fullscreen; picture-in-picture"
+                allowfullscreen
+                loading="lazy"
+                referrerpolicy="strict-origin-when-cross-origin"
+                :title="it.title"
+              />
+              <a v-else :href="safeHref(it.url)" target="_blank" rel="noopener noreferrer" class="block h-full w-full">
                 <img
                   v-if="safeImg(it.thumbnail) && !brokenImg[keyOf(it)]"
                   :src="safeImg(it.thumbnail)"

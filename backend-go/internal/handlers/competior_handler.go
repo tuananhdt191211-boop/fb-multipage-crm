@@ -529,6 +529,19 @@ func (h *CompetitorHandler) fetchTikTokChannelVideosPaginated(comp *models.Compe
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 		req.Header.Set("Accept", "application/json")
+		if strings.TrimSpace(os.Getenv("TIKTOK_SCRAPER_API_URL")) == "" && rapidAPIKey() != "" {
+			// tikwm bị Cloudflare chặn -> dùng bản RapidAPI (cùng định dạng)
+			rURL, hdrs, _ := tikwmRequest("/api/user/posts", url.Values{
+				"unique_id": {username}, "count": {"30"}, "cursor": {cursor},
+			})
+			if r2, e2 := http.NewRequest(http.MethodGet, rURL, nil); e2 == nil {
+				r2.Header = req.Header.Clone()
+				for k, v := range hdrs {
+					r2.Header.Set(k, v)
+				}
+				req = r2
+			}
+		}
 
 		resp, err := h.HTTPClient.Do(req)
 		if err != nil {
@@ -1157,8 +1170,14 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 	// 2. Tìm trên TikTok qua API tìm kiếm công khai (TikWM) + fallback HTML/oEmbed
 	if platform == "all" || platform == "tiktok" {
 		ttAdded := 0
-		apiURL := fmt.Sprintf("https://www.tikwm.com/api/feed/search?keywords=%s&count=10&cursor=0", url.QueryEscape(keyword))
-		if resp, err := h.HTTPClient.Get(apiURL); err == nil {
+		apiURL, ttHeaders, _ := tikwmRequest("/api/feed/search", url.Values{
+			"keywords": {keyword}, "count": {"10"}, "cursor": {"0"},
+		})
+		ttReq, _ := http.NewRequest(http.MethodGet, apiURL, nil)
+		for k, v := range ttHeaders {
+			ttReq.Header.Set(k, v)
+		}
+		if resp, err := h.HTTPClient.Do(ttReq); err == nil {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 

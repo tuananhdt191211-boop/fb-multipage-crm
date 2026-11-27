@@ -51,6 +51,7 @@ type exploreItem struct {
 	Shares       int64  `json:"shares"`
 	Duration     int64  `json:"duration"`
 	PublishedAt  int64  `json:"published_at"`
+	EmbedURL     string `json:"embed_url,omitempty"` // trình phát nhúng chính thức (khi không có ảnh bìa)
 }
 
 type exploreChannel struct {
@@ -412,9 +413,35 @@ func tikwmAbs(u string) string {
 	return u
 }
 
-// tikwmGet gọi tikwm, tự giãn cách ~1.1s giữa các lần gọi và thử lại khi bị giới hạn tần suất
+// rapidAPIKey: khi có RAPIDAPI_KEY, gọi bản chính thức của tikwm trên RapidAPI
+// (tiktok-scraper7) — cùng định dạng dữ liệu, dùng API key nên không bị Cloudflare chặn.
+func rapidAPIKey() string { return strings.TrimSpace(os.Getenv("RAPIDAPI_KEY")) }
+
+func rapidAPITikTokHost() string {
+	if h := strings.TrimSpace(os.Getenv("RAPIDAPI_TIKTOK_HOST")); h != "" {
+		return h
+	}
+	return "tiktok-scraper7.p.rapidapi.com"
+}
+
+// tikwmRequest trả URL + header cho một đường dẫn kiểu tikwm ("/api/user/posts").
+func tikwmRequest(path string, params url.Values) (string, map[string]string, bool) {
+	if key := rapidAPIKey(); key != "" {
+		host := rapidAPITikTokHost()
+		p := strings.TrimPrefix(path, "/api")
+		if p == "" {
+			p = "/"
+		}
+		return "https://" + host + p + "?" + params.Encode(),
+			map[string]string{"X-RapidAPI-Key": key, "X-RapidAPI-Host": host}, true
+	}
+	return tikwmBase() + path + "?" + params.Encode(),
+		map[string]string{"Referer": "https://www.tikwm.com/"}, false
+}
+
+// tikwmGet gọi tikwm (hoặc RapidAPI), tự giãn cách ~1.1s giữa các lần gọi và thử lại khi bị giới hạn tần suất
 func (h *CompetitorHandler) tikwmGet(path string, params url.Values) (json.RawMessage, error) {
-	full := tikwmBase() + path + "?" + params.Encode()
+	full, headers, viaRapid := tikwmRequest(path, params)
 	var lastMsg string
 	for attempt := 0; attempt < 3; attempt++ {
 		tikwmMu.Lock()
@@ -424,7 +451,19 @@ func (h *CompetitorHandler) tikwmGet(path string, params url.Values) (json.RawMe
 		tikwmLast = time.Now()
 		tikwmMu.Unlock()
 
-		body, status, err := h.getJSON(full, map[string]string{"Referer": "https://www.tikwm.com/"})
+		body, status, err := h.getJSON(full, headers)
+		if err == nil && viaRapid {
+			switch status {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				return nil, upstream("RapidAPI từ chối khoá RAPIDAPI_KEY (HTTP " + strconv.Itoa(status) + "). Kiểm tra lại key và đảm bảo đã Subscribe gói của API TikTok Scraper (tiktok-scraper7).")
+			case http.StatusTooManyRequests:
+				if attempt < 2 && !strings.Contains(strings.ToLower(string(body)), "quota") {
+					time.Sleep(1500 * time.Millisecond)
+					continue
+				}
+				return nil, upstream("Đã hết lượt gọi TikTok của gói RapidAPI trong tháng (hoặc gọi quá nhanh). Đợi sang kỳ mới hoặc nâng gói.")
+			}
+		}
 		if err != nil {
 			return nil, upstream("Không kết nối được máy chủ dữ liệu TikTok (tikwm): " + err.Error())
 		}
@@ -438,7 +477,10 @@ func (h *CompetitorHandler) tikwmGet(path string, params url.Values) (json.RawMe
 				time.Sleep(1500 * time.Millisecond)
 				continue
 			}
-			return nil, upstream(fmt.Sprintf("Máy chủ dữ liệu TikTok (tikwm) từ chối yêu cầu từ server (HTTP %d). Thử lại sau ít phút, hoặc cấu hình OUTBOUND_PROXY_URL.", status))
+			if status == http.StatusForbidden && !viaRapid {
+				return nil, upstream("Nguồn dữ liệu TikTok miễn phí (tikwm) đang chặn truy cập tự động bằng Cloudflare. Thêm biến RAPIDAPI_KEY (gói Basic miễn phí của TikTok Scraper – tiktok-scraper7 trên RapidAPI) trên Render để quét kênh / từ khoá. Hiện vẫn dán được link 1 video TikTok để xem.")
+			}
+			return nil, upstream(fmt.Sprintf("Máy chủ dữ liệu TikTok (tikwm) từ chối yêu cầu (HTTP %d). Thử lại sau ít phút.", status))
 		}
 		if env.Code == 0 {
 			return env.Data, nil
@@ -547,6 +589,12 @@ func (h *CompetitorHandler) exploreTikTok(t exploreTarget, cursor string, res *e
 	case "single":
 		data, err := h.tikwmGet("/api/", url.Values{"url": {t.Value}, "hd": {"0"}})
 		if err != nil {
+			// tikwm chặn bằng Cloudflare -> dùng oEmbed chính thức của TikTok (chỉ có trình phát nhúng)
+			if item, ok := h.tiktokOEmbed(t.Value); ok {
+				res.Items = append(res.Items, item)
+				res.Notice = "Nguồn dữ liệu TikTok đang bị chặn nên chỉ xem được video qua trình phát nhúng của TikTok (không có lượt xem, lượt thích)."
+				return nil
+			}
 			return err
 		}
 		var v tikwmVideo
@@ -1066,6 +1114,49 @@ func (h *CompetitorHandler) exploreYouTube(t exploreTarget, cursor string, res *
 }
 
 // ytOEmbed lấy tiêu đề + tên kênh của 1 video khi không có API key
+var reTikTokHandle = regexp.MustCompile(`/@([A-Za-z0-9._]+)`)
+
+// tiktokOEmbed dùng API nhúng chính thức của TikTok cho 1 link video
+func (h *CompetitorHandler) tiktokOEmbed(link string) (exploreItem, bool) {
+	body, status, err := h.getJSON("https://www.tiktok.com/oembed?url="+url.QueryEscape(link), nil)
+	if err != nil || status != http.StatusOK {
+		return exploreItem{}, false
+	}
+	var o struct {
+		Title        string `json:"title"`
+		AuthorName   string `json:"author_name"`
+		AuthorURL    string `json:"author_url"`
+		ThumbnailURL string `json:"thumbnail_url"`
+		ProductID    string `json:"embed_product_id"`
+	}
+	if json.Unmarshal(body, &o) != nil || !regexp.MustCompile(`^\d{6,25}$`).MatchString(o.ProductID) {
+		return exploreItem{}, false
+	}
+	handle := ""
+	if m := reTikTokHandle.FindStringSubmatch(link); m != nil {
+		handle = m[1]
+	} else if m := reTikTokHandle.FindStringSubmatch(o.AuthorURL); m != nil {
+		handle = m[1]
+	}
+	title := strings.TrimSpace(o.Title)
+	if title == "" {
+		title = "Video TikTok"
+		if handle != "" {
+			title += " của @" + handle
+		}
+	}
+	videoURL := link
+	if handle != "" {
+		videoURL = "https://www.tiktok.com/@" + handle + "/video/" + o.ProductID
+	}
+	return exploreItem{
+		ID: o.ProductID, Platform: "tiktok", Kind: "video", Title: title,
+		Thumbnail: o.ThumbnailURL, URL: videoURL,
+		AuthorName: o.AuthorName, AuthorHandle: handle,
+		EmbedURL: "https://www.tiktok.com/player/v1/" + o.ProductID + "?music_info=1&description=1",
+	}, true
+}
+
 func (h *CompetitorHandler) ytOEmbed(videoID string) (exploreItem, bool) {
 	link := "https://www.youtube.com/watch?v=" + videoID
 	body, status, err := h.getJSON("https://www.youtube.com/oembed?format=json&url="+url.QueryEscape(link), nil)
