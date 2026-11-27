@@ -5,7 +5,7 @@
 // Bố cục dùng container query (@container) nên xem trước chế độ điện thoại/máy tính bảng hiển thị đúng.
 // Nền mỗi section trải hết chiều ngang, nội dung nằm trong khung max-w-6xl ở giữa.
 import { storePath } from '../../lib/storeHost'
-import { computed, nextTick, ref, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, ref, watchEffect } from 'vue'
 import {
   ArrowDown,
   ArrowUp,
@@ -16,7 +16,9 @@ import {
   Eye,
   EyeOff,
   GripVertical,
+  LogOut,
   Mail,
+  Package,
   MapPin,
   Menu,
   MessageCircle,
@@ -25,12 +27,14 @@ import {
   Search,
   ShoppingBag,
   Trash2,
+  User,
   X
 } from 'lucide-vue-next'
 import { safeHref, safeImg } from '../../lib/safeUrl'
 import { formatVnd } from '../../lib/format'
 import { blockLabels } from '../../lib/blockFactory'
 import { useCart } from '../../lib/cart'
+import { customerState, useCustomer } from '../../lib/customer'
 import EditableText from './EditableText.vue'
 import BannerSlider from './BannerSlider.vue'
 import NewsletterForm from './NewsletterForm.vue'
@@ -123,6 +127,22 @@ function addToCart(p: PublicProduct) {
 function openCart() {
   if (cart) cart.state.open = true
 }
+
+// ----- Tài khoản khách (chỉ trên web công khai) -----
+const cust = props.siteSlug && !props.editable ? useCustomer(props.siteSlug) : null
+const accountOpen = ref(false)
+const customerName = computed(() => (cust ? customerState.customer?.name || '' : ''))
+// Tên gọi (từ cuối của họ tên Việt Nam), vd. "Nguyễn Thu Trang" -> "Trang"
+const firstName = computed(() => customerName.value.trim().split(/\s+/).pop() || '')
+const accountPath = computed(() => (props.siteSlug ? storePath(props.siteSlug, '/account') : '/'))
+function openAuth(mode: 'login' | 'register') {
+  if (cust) customerState.dialog = mode
+}
+function logoutCustomer() {
+  cust?.logout()
+  accountOpen.value = false
+}
+onMounted(() => cust?.refresh())
 
 function discount(p: { price: number; compare_price: number }) {
   return p.compare_price > p.price ? Math.round((1 - p.price / p.compare_price) * 100) : 0
@@ -435,7 +455,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 
               <!-- Nút -->
               <a
-                v-if="blk.data.show_cta !== false"
+                v-if="blk.data.show_cta !== false && blk.data.right_mode !== 'account'"
                 :href="safeHref(blk.data.cta_link, '#products')"
                 class="hidden rounded-full px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-110 @xl:inline-block"
                 :class="headerLayout(blk.data.layout).cta"
@@ -449,7 +469,16 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 <button v-if="blk.data.show_search" type="button" class="rounded-full p-2 hover:bg-black/5" aria-label="Tìm kiếm" @click.stop="toggleSearch(blk.id)">
                   <Search class="h-5 w-5" />
                 </button>
-                <button v-if="blk.data.show_cart" type="button" class="relative rounded-full p-2 hover:bg-black/5" aria-label="Giỏ hàng" @click.stop="openCart">
+                <!-- Điện thoại: biểu tượng tài khoản -->
+                <template v-if="blk.data.right_mode === 'account'">
+                  <router-link v-if="customerName" :to="accountPath" class="rounded-full p-1.5 @xl:hidden" aria-label="Tài khoản">
+                    <span class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white" :style="{ backgroundColor: accent }">{{ initial(customerName) }}</span>
+                  </router-link>
+                  <button v-else type="button" class="rounded-full p-2 hover:bg-black/5 @xl:hidden" aria-label="Đăng nhập" @click.stop="openAuth('login')">
+                    <User class="h-5 w-5" />
+                  </button>
+                </template>
+                <button v-if="blk.data.show_cart || blk.data.right_mode === 'account'" type="button" class="relative rounded-full p-2 hover:bg-black/5" aria-label="Giỏ hàng" @click.stop="openCart">
                   <ShoppingBag class="h-5 w-5" />
                   <span
                     v-if="cartCount > 0"
@@ -459,6 +488,36 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     {{ cartCount > 99 ? '99+' : cartCount }}
                   </span>
                 </button>
+                <!-- Tài khoản khách: Đăng nhập / Đăng ký, hoặc tên + menu khi đã đăng nhập -->
+                <div v-if="blk.data.right_mode === 'account'" class="ml-1.5 hidden items-center gap-1.5 @xl:flex">
+                  <div v-if="customerName" class="relative">
+                    <button
+                      type="button"
+                      class="flex items-center gap-2 rounded-full border border-slate-200/80 py-1 pl-1 pr-3 text-sm font-semibold transition hover:bg-black/5"
+                      @click.stop="accountOpen = !accountOpen"
+                    >
+                      <span class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white" :style="{ backgroundColor: accent }">{{ initial(customerName) }}</span>
+                      <span class="max-w-[120px] truncate">{{ firstName }}</span>
+                      <ChevronDown class="h-3.5 w-3.5 opacity-60" />
+                    </button>
+                    <template v-if="accountOpen">
+                      <div class="fixed inset-0 z-30" @click.stop="accountOpen = false" />
+                      <div class="absolute right-0 top-full z-40 mt-2 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white py-1.5 text-sm text-slate-700 shadow-xl">
+                        <div class="border-b border-slate-100 px-4 pb-2 pt-1">
+                          <div class="truncate font-bold text-slate-900">{{ customerName }}</div>
+                          <div class="truncate text-xs text-slate-500">{{ customerState.customer?.phone }}</div>
+                        </div>
+                        <router-link :to="accountPath" class="flex items-center gap-2.5 px-4 py-2.5 hover:bg-slate-50" @click="accountOpen = false"><Package class="h-4 w-4 text-slate-400" /> Đơn hàng của tôi</router-link>
+                        <router-link :to="accountPath" class="flex items-center gap-2.5 px-4 py-2.5 hover:bg-slate-50" @click="accountOpen = false"><User class="h-4 w-4 text-slate-400" /> Thông tin tài khoản</router-link>
+                        <button type="button" class="flex w-full items-center gap-2.5 border-t border-slate-100 px-4 py-2.5 text-left text-rose-600 hover:bg-rose-50" @click="logoutCustomer"><LogOut class="h-4 w-4" /> Đăng xuất</button>
+                      </div>
+                    </template>
+                  </div>
+                  <template v-else>
+                    <button type="button" class="rounded-full px-3.5 py-2 text-sm font-semibold transition hover:bg-black/5" @click.stop="openAuth('login')">Đăng nhập</button>
+                    <button type="button" class="rounded-full px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-110" :style="{ backgroundColor: accent }" @click.stop="openAuth('register')">Đăng ký</button>
+                  </template>
+                </div>
                 <button
                   v-if="navItems(blk).length"
                   type="button"
@@ -507,7 +566,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 {{ item.label }}
               </a>
               <a
-                v-if="blk.data.show_cta !== false"
+                v-if="blk.data.show_cta !== false && blk.data.right_mode !== 'account'"
                 :href="safeHref(blk.data.cta_link, '#products')"
                 class="mt-2 block rounded-xl px-4 py-3 text-center text-sm font-bold text-white"
                 :style="{ backgroundColor: accent }"
@@ -515,6 +574,21 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               >
                 {{ blk.data.cta_label || 'Đặt mua ngay' }}
               </a>
+              <!-- Tài khoản trong menu điện thoại -->
+              <div v-if="blk.data.right_mode === 'account'" class="mt-2 border-t border-slate-100 pt-3">
+                <template v-if="customerName">
+                  <router-link :to="accountPath" class="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-base font-semibold hover:bg-slate-50" @click="openMenus[blk.id] = false">
+                    <Package class="h-4 w-4 opacity-60" /> Đơn hàng của tôi
+                  </router-link>
+                  <button type="button" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-base font-semibold text-rose-600 hover:bg-rose-50" @click="logoutCustomer(); openMenus[blk.id] = false">
+                    <LogOut class="h-4 w-4" /> Đăng xuất
+                  </button>
+                </template>
+                <div v-else class="grid grid-cols-2 gap-2">
+                  <button type="button" class="rounded-xl border border-slate-300 py-3 text-sm font-bold" @click="openAuth('login'); openMenus[blk.id] = false">Đăng nhập</button>
+                  <button type="button" class="rounded-xl py-3 text-sm font-bold text-white" :style="{ backgroundColor: accent }" @click="openAuth('register'); openMenus[blk.id] = false">Đăng ký</button>
+                </div>
+              </div>
             </div>
           </div>
         </header>

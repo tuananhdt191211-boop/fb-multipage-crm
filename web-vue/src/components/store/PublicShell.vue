@@ -3,6 +3,7 @@
 import { computed, watchEffect } from 'vue'
 import StoreRenderer from './StoreRenderer.vue'
 import CartDrawer from './CartDrawer.vue'
+import CustomerAuthDialog from './CustomerAuthDialog.vue'
 import { shellBlocks } from '../../lib/publicSite'
 import { themeCss, usedFonts } from '../../lib/theme'
 import { ensureFonts } from '../../lib/fonts'
@@ -42,5 +43,6 @@ watchEffect(() => ensureFonts(usedFonts(props.site.theme, [])))
       :site-slug="site.slug"
     />
     <CartDrawer :slug="site.slug" :accent="site.primary_color" />
+    <CustomerAuthDialog :slug="site.slug" :accent="site.primary_color" :site-title="site.site_title" />
   </div>
 </template>

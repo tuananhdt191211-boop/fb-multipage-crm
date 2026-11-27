@@ -119,6 +119,11 @@ const appRoutes: RouteRecordRaw[] = [
   component: () => import('../views/PublicOrderView.vue')
 },
 {
+  path: '/s/:slug/account',
+  name: 'public-account',
+  component: () => import('../views/PublicAccountView.vue')
+},
+{
   path: '/:pathMatch(.*)*',
   redirect: '/'
 }
@@ -131,7 +136,9 @@ const storeRoutes: RouteRecordRaw[] = [
   { path: '/p/:pid', name: 'public-product', component: () => import('../views/PublicProductView.vue') },
   { path: '/checkout', name: 'public-checkout', component: () => import('../views/PublicCheckoutView.vue') },
   { path: '/order/:code', name: 'public-order', component: () => import('../views/PublicOrderView.vue') },
+  { path: '/account', name: 'public-account', component: () => import('../views/PublicAccountView.vue') },
   // link cũ dạng /s/<slug>/... vẫn mở được
+  { path: '/s/:slug/account', redirect: '/account' },
   { path: '/s/:slug', redirect: '/' },
   { path: '/s/:slug/p/:pid', redirect: (to) => `/p/${to.params.pid}` },
   { path: '/s/:slug/checkout', redirect: '/checkout' },

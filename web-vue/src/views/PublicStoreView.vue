@@ -4,6 +4,7 @@ import { useRoute } from 'vue-router'
 import { Loader2 } from 'lucide-vue-next'
 import StoreRenderer from '../components/store/StoreRenderer.vue'
 import CartDrawer from '../components/store/CartDrawer.vue'
+import CustomerAuthDialog from '../components/store/CustomerAuthDialog.vue'
 import { loadPublicSite } from '../lib/publicSite'
 import { useCart } from '../lib/cart'
 import type { PublicSiteData } from '../types/store'
@@ -56,6 +57,7 @@ onMounted(load)
         :site-slug="site.slug"
       />
       <CartDrawer :slug="site.slug" :accent="site.primary_color" />
+      <CustomerAuthDialog :slug="site.slug" :accent="site.primary_color" :site-title="site.site_title" />
     </template>
   </div>
 </template>

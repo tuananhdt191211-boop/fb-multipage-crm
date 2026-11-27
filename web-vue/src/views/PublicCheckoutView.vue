@@ -7,6 +7,7 @@ import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
 import { loadPublicSite } from '../lib/publicSite'
 import { useCart } from '../lib/cart'
+import { customerHeaders, useCustomer } from '../lib/customer'
 import { formatVnd } from '../lib/format'
 import { safeImg } from '../lib/safeUrl'
 import type { PublicSiteData } from '../types/store'
@@ -62,6 +63,14 @@ async function load() {
     config.value = data
     form.value.payment_method = data.cod ? 'cod' : 'vnpay'
     restoreInfo()
+    // Đã đăng nhập: điền thông tin tài khoản vào ô còn trống
+    const c = useCustomer(slug.value).state.customer
+    if (c) {
+      if (!form.value.customer_name) form.value.customer_name = c.name
+      if (!form.value.phone) form.value.phone = c.phone
+      if (!form.value.email) form.value.email = c.email
+      if (!form.value.address) form.value.address = c.address
+    }
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || 'Không tải được trang thanh toán.'
   } finally {
@@ -87,7 +96,7 @@ async function submit() {
       items: cart.state.lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
       ...f,
       return_base: window.location.origin
-    })
+    }, { headers: customerHeaders(slug.value) })
     rememberInfo()
     if (data.payment_url) {
       // Giữ giỏ hàng tới khi VNPay báo thành công (khách có thể quay lại)

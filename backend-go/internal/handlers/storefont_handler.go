@@ -24,6 +24,7 @@ func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
 	_ = db.AutoMigrate(&models.Storefront{}, &models.Product{})
 	migrateSiteMedia(db)
 	migrateShopTables(db)
+	migrateSiteCustomers(db)
 	return &StorefrontHandler{
 		DB:  db,
 		Cfg: cfg,

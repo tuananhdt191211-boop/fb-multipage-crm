@@ -65,6 +65,7 @@ type ShopOrder struct {
 	ID            uint            `gorm:"primaryKey" json:"id"`
 	StorefrontID  uint            `gorm:"index;not null" json:"storefront_id"`
 	UserID        uint            `gorm:"index;not null" json:"-"`
+	CustomerID    *uint           `gorm:"index" json:"-"` // tài khoản khách (nếu đặt khi đã đăng nhập)
 	Code          string          `gorm:"size:32;uniqueIndex;not null" json:"code"`
 	AccessToken   string          `gorm:"size:64;not null" json:"-"`
 	CustomerName  string          `gorm:"size:120" json:"customer_name"`
@@ -456,6 +457,10 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 	}
 	if o.PaymentMethod == "vnpay" {
 		o.PaymentStatus = "pending"
+	}
+	if cu := h.customerFromRequest(c, sf.ID); cu != nil {
+		cid := cu.ID
+		o.CustomerID = &cid
 	}
 
 	err := h.DB.Transaction(func(tx *gorm.DB) error {

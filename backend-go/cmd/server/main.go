@@ -81,7 +81,7 @@ func main() {
 		}
 
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin, X-Customer-Token")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 
 		if c.Request.Method == http.MethodOptions {
@@ -102,6 +102,12 @@ func main() {
 	r.POST("/api/v1/storefront/public/orders/:code/pay", storefrontHandler.RetryVnpPayment)
 	r.GET("/api/v1/storefront/public/vnpay-return", storefrontHandler.VnpayReturnCheck)
 	r.POST("/api/v1/storefront/public/subscribe", storefrontHandler.PublicSubscribe)
+	// Tài khoản khách hàng của từng website
+	r.POST("/api/v1/storefront/public/customers/register", storefrontHandler.CustomerRegister)
+	r.POST("/api/v1/storefront/public/customers/login", storefrontHandler.CustomerLogin)
+	r.GET("/api/v1/storefront/public/customers/me", storefrontHandler.CustomerMe)
+	r.PUT("/api/v1/storefront/public/customers/me", storefrontHandler.CustomerUpdate)
+	r.GET("/api/v1/storefront/public/customers/orders", storefrontHandler.CustomerOrders)
 	r.GET("/api/v1/payments/vnpay/ipn", storefrontHandler.VnpayIPN)
 	r.GET("/api/v1/inbox/avatar-check/:page_id/:psid", inboxHandler.CheckCustomerAvatar)
 

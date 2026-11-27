@@ -163,17 +163,37 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         </button>
       </div>
 
-      <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-        <input type="checkbox" :checked="block.data.show_cta !== false" @change="block.data.show_cta = ($event.target as HTMLInputElement).checked" />
-        Hiện nút
-      </label>
-      <label v-if="block.data.show_cta !== false" class="space-y-1">
-        <span :class="lbl">Liên kết nút</span>
-        <input v-model="block.data.cta_link" placeholder="#products" :class="inp" />
-      </label>
+      <div class="space-y-1">
+        <span :class="lbl">Góc phải đầu trang</span>
+        <div class="grid grid-cols-2 gap-1">
+          <button
+            v-for="m in [{ v: 'account', t: 'Giỏ hàng + Tài khoản' }, { v: 'cta', t: 'Nút đặt mua' }]"
+            :key="m.v"
+            type="button"
+            class="rounded-lg border px-1 py-1.5 text-[11px] font-bold"
+            :class="(block.data.right_mode || 'cta') === m.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'"
+            @click="block.data.right_mode = m.v"
+          >
+            {{ m.t }}
+          </button>
+        </div>
+        <p v-if="block.data.right_mode === 'account'" class="text-[10px] leading-snug text-slate-400">
+          Khách thấy giỏ hàng, nút Đăng nhập / Đăng ký; đã đăng nhập thì thấy tên mình, “Đơn hàng của tôi” và Đăng xuất.
+        </p>
+      </div>
+      <template v-if="block.data.right_mode !== 'account'">
+        <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+          <input type="checkbox" :checked="block.data.show_cta !== false" @change="block.data.show_cta = ($event.target as HTMLInputElement).checked" />
+          Hiện nút
+        </label>
+        <label v-if="block.data.show_cta !== false" class="space-y-1">
+          <span :class="lbl">Liên kết nút</span>
+          <input v-model="block.data.cta_link" placeholder="#products" :class="inp" />
+        </label>
+      </template>
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-xs font-bold text-slate-600"><input v-model="block.data.show_search" type="checkbox" /> Ô tìm kiếm</label>
-        <label class="flex items-center gap-2 text-xs font-bold text-slate-600"><input v-model="block.data.show_cart" type="checkbox" /> Giỏ hàng</label>
+        <label v-if="block.data.right_mode !== 'account'" class="flex items-center gap-2 text-xs font-bold text-slate-600"><input v-model="block.data.show_cart" type="checkbox" /> Giỏ hàng</label>
       </div>
       <div class="flex flex-wrap items-center gap-4">
         <label class="flex items-center gap-2 text-xs font-bold text-slate-600"><input v-model="block.data.sticky" type="checkbox" /> Ghim khi cuộn</label>
