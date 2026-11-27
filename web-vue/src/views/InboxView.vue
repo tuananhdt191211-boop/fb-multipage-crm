@@ -1794,6 +1794,15 @@ onUnmounted(() => {
                       />
                     </a>
 
+                    <video
+                      v-else-if="msg.attachment_url && msg.attachment_type === 'video'"
+                      :src="resolveMediaUrl(msg.attachment_url)"
+                      controls
+                      preload="metadata"
+                      class="max-h-60 w-auto rounded-xl"
+                      @click.stop
+                    />
+
                     <a
                       v-else-if="msg.attachment_url"
                       :href="resolveMediaUrl(msg.attachment_url)"

@@ -6,8 +6,9 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
-  LayoutDashboard,
   MessageSquare,
+  Film,
+  ImagePlus,
   Pause,
   Play,
   Plus,
@@ -17,7 +18,8 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
-  Users
+  Users,
+  X
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
 
@@ -27,6 +29,13 @@ interface PageItem {
   name?: string
   page_name?: string
   is_connected?: boolean
+}
+
+interface MediaAttachment {
+  type: 'image' | 'video'
+  url: string
+  name?: string
+  previewUrl?: string
 }
 
 interface Campaign {
@@ -41,7 +50,12 @@ interface Campaign {
   sent_count: number
   failed_count: number
   created_at: string
+  attachments?: MediaAttachment[]
 }
+
+const MAX_ATTACHMENTS = 5
+const MAX_IMAGE_MB = 8
+const MAX_VIDEO_MB = 25
 
 const router = useRouter()
 
@@ -54,6 +68,10 @@ const showAdvanced = ref(false)
 const message = ref('')
 const error = ref('')
 let pollTimer: ReturnType<typeof setInterval> | null = null
+
+const attachments = ref<MediaAttachment[]>([])
+const uploadingMedia = ref(false)
+const mediaInput = ref<HTMLInputElement | null>(null)
 
 const form = ref({
   page_id: '',
@@ -114,6 +132,84 @@ function getProgressPercent(c: Campaign): number {
   return Math.min(100, Math.round((done / c.total_recipients) * 100))
 }
 
+function openMediaPicker() {
+  mediaInput.value?.click()
+}
+
+async function handleMediaSelected(e: Event) {
+  const input = e.target as HTMLInputElement
+  const picked = Array.from(input.files || [])
+  input.value = ''
+  if (picked.length === 0) return
+
+  error.value = ''
+  const room = MAX_ATTACHMENTS - attachments.value.length
+  if (room <= 0) {
+    error.value = `Tối đa ${MAX_ATTACHMENTS} ảnh/video cho mỗi chiến dịch`
+    return
+  }
+
+  const valid: File[] = []
+  const rejected: string[] = []
+  for (const f of picked.slice(0, room)) {
+    const isImage = f.type.startsWith('image/')
+    const isVideo = f.type.startsWith('video/')
+    const limitMB = isVideo ? MAX_VIDEO_MB : MAX_IMAGE_MB
+    if (!isImage && !isVideo) {
+      rejected.push(`${f.name} (không phải ảnh/video)`)
+    } else if (f.size > limitMB * 1024 * 1024) {
+      rejected.push(`${f.name} (vượt ${limitMB}MB)`)
+    } else {
+      valid.push(f)
+    }
+  }
+  if (picked.length > room) {
+    rejected.push(`chỉ nhận thêm ${room} file`)
+  }
+  if (valid.length === 0) {
+    error.value = 'Không có file hợp lệ: ' + rejected.join(', ')
+    return
+  }
+
+  uploadingMedia.value = true
+  try {
+    const fd = new FormData()
+    valid.forEach((f) => fd.append('files', f))
+    const { data } = await api.post<{ files: MediaAttachment[]; rejected?: string[] }>(
+      '/broadcasts/upload-media',
+      fd,
+      { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 300000 }
+    )
+    const uploaded = data?.files || []
+    uploaded.forEach((att) => {
+      const local = valid.find((f) => f.name === att.name)
+      attachments.value.push({ ...att, previewUrl: local ? URL.createObjectURL(local) : undefined })
+    })
+    const allRejected = [...rejected, ...(data?.rejected || [])]
+    if (allRejected.length > 0) {
+      error.value = 'Một số file bị bỏ qua: ' + allRejected.join(', ')
+    }
+  } catch (e: any) {
+    error.value = e?.response?.data?.error || 'Tải ảnh/video lên thất bại'
+  } finally {
+    uploadingMedia.value = false
+  }
+}
+
+function removeAttachment(idx: number) {
+  const [removed] = attachments.value.splice(idx, 1)
+  if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl)
+}
+
+function clearAttachments() {
+  attachments.value.forEach((a) => a.previewUrl && URL.revokeObjectURL(a.previewUrl))
+  attachments.value = []
+}
+
+function countMedia(c: Campaign, type: 'image' | 'video'): number {
+  return (c.attachments || []).filter((a) => a.type === type).length
+}
+
 async function fetchData(silent = false) {
   if (!silent) loading.value = true
   try {
@@ -159,12 +255,26 @@ async function syncCustomerData() {
 async function createCampaign() {
   error.value = ''
   message.value = ''
+  const hasText = form.value.templates.some((t) => t.trim() !== '')
+  if (!hasText && attachments.value.length === 0) {
+    error.value = 'Hãy nhập ít nhất 1 mẫu nội dung hoặc đính kèm ảnh/video'
+    return
+  }
+  if (uploadingMedia.value) {
+    error.value = 'Đang tải ảnh/video lên, vui lòng đợi xong rồi bấm gửi'
+    return
+  }
   submitting.value = true
   try {
-    const res = await api.post('/broadcasts', form.value)
+    const res = await api.post('/broadcasts', {
+      ...form.value,
+      templates: form.value.templates.filter((t) => t.trim() !== ''),
+      attachments: attachments.value.map(({ type, url, name }) => ({ type, url, name }))
+    })
     const total = res.data?.total_recipients ?? 0
     message.value = `Đã khởi chạy chiến dịch cho ${total} khách hàng!`
     form.value.name = ''
+    clearAttachments()
     await fetchData()
   } catch (e: any) {
     error.value = e?.response?.data?.error || 'Tạo chiến dịch thất bại'
@@ -195,6 +305,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (pollTimer) clearInterval(pollTimer)
+  clearAttachments()
 })
 </script>
 
@@ -402,7 +513,6 @@ onUnmounted(() => {
                   <textarea
                     v-model="form.templates[idx]"
                     rows="2"
-                    required
                     class="w-full rounded-xl border border-slate-200 bg-slate-50/40 p-3 text-sm leading-relaxed !text-slate-900 placeholder:text-slate-400 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
                     :placeholder="`Nhập nội dung mẫu #${idx + 1} (dùng {{full_name}} để chèn tên khách)...`"
                   />
@@ -418,6 +528,89 @@ onUnmounted(() => {
                 </button>
               </div>
             </div>
+          </div>
+
+          <!-- Ảnh / Video đính kèm -->
+          <div class="space-y-2.5">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <label class="text-xs font-bold !text-slate-700">Ảnh / Video đính kèm</label>
+                <p class="text-[11px] text-slate-400">
+                  Gửi sau nội dung chữ. Tối đa {{ MAX_ATTACHMENTS }} file • Ảnh ≤ {{ MAX_IMAGE_MB }}MB • Video MP4/MOV ≤ {{ MAX_VIDEO_MB }}MB
+                </p>
+              </div>
+              <button
+                type="button"
+                @click="openMediaPicker"
+                :disabled="uploadingMedia || attachments.length >= MAX_ATTACHMENTS"
+                class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-50 cursor-pointer"
+              >
+                <RefreshCw v-if="uploadingMedia" class="h-3.5 w-3.5 animate-spin" />
+                <ImagePlus v-else class="h-3.5 w-3.5" />
+                <span>{{ uploadingMedia ? 'Đang tải lên...' : 'Thêm ảnh / video' }}</span>
+              </button>
+              <input
+                ref="mediaInput"
+                type="file"
+                multiple
+                accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime,video/webm,.m4v"
+                class="hidden"
+                @change="handleMediaSelected"
+              />
+            </div>
+
+            <div v-if="attachments.length > 0" class="grid grid-cols-3 gap-2.5 sm:grid-cols-5">
+              <div
+                v-for="(att, idx) in attachments"
+                :key="att.url"
+                class="group relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100"
+              >
+                <img
+                  v-if="att.type === 'image' && att.previewUrl"
+                  :src="att.previewUrl"
+                  :alt="att.name"
+                  class="h-full w-full object-cover"
+                />
+                <video
+                  v-else-if="att.type === 'video' && att.previewUrl"
+                  :src="att.previewUrl"
+                  muted
+                  preload="metadata"
+                  class="h-full w-full object-cover"
+                />
+                <div v-else class="flex h-full w-full items-center justify-center text-slate-400">
+                  <Film v-if="att.type === 'video'" class="h-6 w-6" />
+                  <ImagePlus v-else class="h-6 w-6" />
+                </div>
+
+                <span
+                  v-if="att.type === 'video'"
+                  class="absolute bottom-1 left-1 inline-flex items-center gap-1 rounded-md bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white"
+                >
+                  <Film class="h-3 w-3" /> Video
+                </span>
+
+                <button
+                  type="button"
+                  @click="removeAttachment(idx)"
+                  title="Bỏ file này"
+                  class="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white transition hover:bg-rose-600 cursor-pointer"
+                >
+                  <X class="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <button
+              v-else
+              type="button"
+              @click="openMediaPicker"
+              :disabled="uploadingMedia"
+              class="flex w-full flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-slate-200 bg-slate-50/40 py-5 text-xs text-slate-400 transition hover:border-emerald-300 hover:bg-emerald-50/40 hover:text-emerald-700 cursor-pointer"
+            >
+              <ImagePlus class="h-5 w-5" />
+              <span>Bấm để chọn ảnh hoặc video gửi kèm (không bắt buộc)</span>
+            </button>
           </div>
 
           <!-- Cấu hình nâng cao (Thu gọn mặc định cho thoáng) -->
@@ -482,7 +675,7 @@ onUnmounted(() => {
 
             <button
               type="submit"
-              :disabled="submitting || pages.length === 0"
+              :disabled="submitting || uploadingMedia || pages.length === 0"
               class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white shadow-xs transition hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
             >
               <Send class="h-4 w-4" />
@@ -548,6 +741,14 @@ onUnmounted(() => {
                   </div>
                   <p class="truncate text-xs font-medium text-emerald-700">
                     {{ getPageNameById(c.page_id) }}
+                  </p>
+                  <p v-if="c.attachments && c.attachments.length > 0" class="flex items-center gap-2 text-[11px] text-slate-500">
+                    <span v-if="countMedia(c, 'image') > 0" class="inline-flex items-center gap-1">
+                      <ImagePlus class="h-3 w-3" /> {{ countMedia(c, 'image') }} ảnh
+                    </span>
+                    <span v-if="countMedia(c, 'video') > 0" class="inline-flex items-center gap-1">
+                      <Film class="h-3 w-3" /> {{ countMedia(c, 'video') }} video
+                    </span>
                   </p>
                 </div>
 
