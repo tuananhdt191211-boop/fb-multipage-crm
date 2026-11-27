@@ -88,6 +88,7 @@ func main() {
 	r.Static("/uploads", "./uploads")
 
 	r.GET("/api/v1/storefront/public", storefrontHandler.GetPublicStorefront)
+	r.GET("/api/v1/storefront/media/:mid", storefrontHandler.ServeSiteMedia)
 	r.GET("/api/v1/inbox/avatar-check/:page_id/:psid", inboxHandler.CheckCustomerAvatar)
 
 	storefrontGroup := r.Group("/api/v1/storefront", middleware.JWTAuth(cfg.JWTSecret))
@@ -107,6 +108,10 @@ func main() {
 		storefrontGroup.POST("/sites/:id/products", storefrontHandler.CreateProduct)
 		storefrontGroup.PUT("/sites/:id/products/:pid", storefrontHandler.UpdateProduct)
 		storefrontGroup.DELETE("/sites/:id/products/:pid", storefrontHandler.DeleteProduct)
+		// Thư viện ảnh của website (lưu trong DB)
+		storefrontGroup.GET("/sites/:id/media", storefrontHandler.ListSiteMedia)
+		storefrontGroup.POST("/sites/:id/media", storefrontHandler.UploadSiteMedia)
+		storefrontGroup.DELETE("/sites/:id/media/:mid", storefrontHandler.DeleteSiteMedia)
 	}
 
 	// Route trả ảnh đại diện khách hàng từ Graph API

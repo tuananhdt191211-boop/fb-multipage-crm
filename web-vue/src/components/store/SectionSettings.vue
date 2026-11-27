@@ -1,0 +1,378 @@
+<script setup lang="ts">
+// Bảng cài đặt cho section đang chọn (cột phải của trình chỉnh sửa)
+import { ref } from 'vue'
+import { GripVertical, Plus, Trash2 } from 'lucide-vue-next'
+import ImageField from './ImageField.vue'
+import type { StoreBlock } from '../../types/store'
+
+const props = defineProps<{ block: StoreBlock; siteId: number | string }>()
+
+const inp = 'w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none'
+const lbl = 'block text-xs font-bold text-slate-600'
+
+const d = () => props.block.data
+
+function list(key: string): any[] {
+  if (!Array.isArray(d()[key])) d()[key] = []
+  return d()[key]
+}
+function addTo(key: string, item: any) {
+  list(key).push(typeof item === 'object' ? { ...item } : item)
+}
+function removeFrom(key: string, i: number) {
+  list(key).splice(i, 1)
+}
+
+// Kéo thả để đổi thứ tự phần tử trong danh sách
+const dragKey = ref<string | null>(null)
+const dragFrom = ref<number | null>(null)
+const dragOver = ref<number | null>(null)
+function itemDragStart(key: string, i: number, e: DragEvent) {
+  dragKey.value = key
+  dragFrom.value = i
+  e.dataTransfer?.setData('text/x-pp-item', String(i))
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+}
+function itemDragOver(key: string, i: number, e: DragEvent) {
+  if (dragKey.value !== key) return
+  e.preventDefault()
+  dragOver.value = i
+}
+function itemDrop(key: string, i: number) {
+  const from = dragFrom.value
+  if (dragKey.value === key && from !== null && from !== i) {
+    const arr = list(key)
+    const [it] = arr.splice(from, 1)
+    arr.splice(i, 0, it)
+  }
+  itemDragEnd()
+}
+function itemDragEnd() {
+  dragKey.value = null
+  dragFrom.value = null
+  dragOver.value = null
+}
+function rowClass(key: string, i: number) {
+  return [
+    'rounded-xl border bg-slate-50 p-2.5 transition',
+    dragKey.value === key && dragOver.value === i && dragFrom.value !== i ? 'border-indigo-500 ring-2 ring-indigo-100' : 'border-slate-200',
+    dragKey.value === key && dragFrom.value === i ? 'opacity-40' : ''
+  ]
+}
+
+function setStyle(key: 'bg' | 'pad', val: string) {
+  const st: Record<string, string> = { ...(d().style || {}) }
+  if (!val || (key === 'pad' && val === 'none')) delete st[key]
+  else st[key] = val
+  d().style = st
+}
+</script>
+
+<template>
+  <div class="space-y-4 text-left">
+    <!-- ===== Đầu trang ===== -->
+    <template v-if="block.type === 'header'">
+      <ImageField v-model="block.data.logo_url" :site-id="siteId" label="Logo" compact />
+      <label class="flex items-center gap-3 text-xs font-bold text-slate-600">
+        Cao logo
+        <input v-model.number="block.data.logo_height" type="range" min="20" max="120" step="2" class="flex-1 accent-indigo-600" />
+        <span class="w-10 text-right font-normal text-slate-500">{{ block.data.logo_height || 40 }}px</span>
+      </label>
+      <label class="space-y-1">
+        <span :class="lbl">Tên thương hiệu</span>
+        <input v-model="block.data.brand_name" :class="inp" />
+      </label>
+      <div class="flex flex-wrap items-center gap-4">
+        <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+          <input type="checkbox" :checked="block.data.show_brand !== false" @change="block.data.show_brand = ($event.target as HTMLInputElement).checked" />
+          Hiện tên chữ
+        </label>
+        <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+          Cỡ chữ
+          <select v-model="block.data.brand_size" class="rounded-lg border border-slate-200 px-2 py-1 text-sm">
+            <option value="sm">Nhỏ</option>
+            <option value="md">Vừa</option>
+            <option value="lg">Lớn</option>
+          </select>
+        </label>
+      </div>
+      <label class="space-y-1">
+        <span :class="lbl">Bố cục</span>
+        <select v-model="block.data.layout" :class="inp">
+          <option value="left">Logo trái · Menu và nút bên phải</option>
+          <option value="split">Logo trái · Menu giữa · Nút phải</option>
+          <option value="center">Logo giữa · Menu bên dưới</option>
+          <option value="center_split">Menu trái · Logo giữa · Nút phải</option>
+        </select>
+      </label>
+
+      <div class="space-y-2">
+        <span :class="lbl">Menu (kéo để đổi thứ tự)</span>
+        <div
+          v-for="(n, ni) in list('nav_items')"
+          :key="ni"
+          :class="rowClass('nav_items', ni)"
+          @dragover="itemDragOver('nav_items', ni, $event)"
+          @drop.prevent="itemDrop('nav_items', ni)"
+        >
+          <div class="flex items-center gap-1.5">
+            <span class="cursor-grab text-slate-400" draggable="true" @dragstart="itemDragStart('nav_items', ni, $event)" @dragend="itemDragEnd">
+              <GripVertical class="h-4 w-4" />
+            </span>
+            <input v-model="n.label" placeholder="Chữ" class="w-2/5 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+            <input v-model="n.link" placeholder="#products, https://..." class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+            <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('nav_items', ni)"><Trash2 class="h-3.5 w-3.5" /></button>
+          </div>
+        </div>
+        <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('nav_items', { label: 'Mục mới', link: '' })">
+          <Plus class="h-3.5 w-3.5" /> Thêm mục menu
+        </button>
+      </div>
+
+      <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+        <input type="checkbox" :checked="block.data.show_cta !== false" @change="block.data.show_cta = ($event.target as HTMLInputElement).checked" />
+        Hiện nút
+      </label>
+      <label v-if="block.data.show_cta !== false" class="space-y-1">
+        <span :class="lbl">Liên kết nút</span>
+        <input v-model="block.data.cta_link" placeholder="#products" :class="inp" />
+      </label>
+      <div class="flex flex-wrap items-center gap-4">
+        <label class="flex items-center gap-2 text-xs font-bold text-slate-600"><input v-model="block.data.sticky" type="checkbox" /> Ghim khi cuộn</label>
+        <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+          <input type="checkbox" :checked="block.data.border !== false" @change="block.data.border = ($event.target as HTMLInputElement).checked" />
+          Viền dưới
+        </label>
+        <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+          Màu chữ
+          <input type="color" :value="block.data.text_color || '#0f172a'" class="h-7 w-9 rounded border border-slate-200" @input="block.data.text_color = ($event.target as HTMLInputElement).value" />
+        </label>
+        <button v-if="block.data.text_color" type="button" class="text-xs text-slate-500 underline" @click="block.data.text_color = ''">Mặc định</button>
+      </div>
+    </template>
+
+    <!-- ===== Banner ===== -->
+    <template v-else-if="block.type === 'hero'">
+      <ImageField v-model="block.data.image_url" :site-id="siteId" label="Ảnh banner" />
+      <label class="space-y-1"><span :class="lbl">Nhãn nhỏ</span><input v-model="block.data.badge" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Tiêu đề</span><input v-model="block.data.title" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Mô tả</span><textarea v-model="block.data.subtitle" rows="3" :class="inp" /></label>
+      <div class="grid grid-cols-2 gap-2">
+        <label class="space-y-1"><span :class="lbl">Chữ trên nút</span><input v-model="block.data.cta_label" :class="inp" /></label>
+        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.cta_link" :class="inp" /></label>
+      </div>
+    </template>
+
+    <!-- ===== Sản phẩm ===== -->
+    <template v-else-if="block.type === 'products'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề mục</span><input v-model="block.data.heading" :class="inp" /></label>
+      <label class="space-y-1">
+        <span :class="lbl">Nguồn sản phẩm</span>
+        <select v-model="block.data.source" :class="inp">
+          <option value="catalog">Danh sách sản phẩm của shop</option>
+          <option value="manual">Nhập tay trong section này</option>
+        </select>
+      </label>
+      <p v-if="block.data.source === 'catalog'" class="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        Sản phẩm, giá và tồn kho quản lý ở trang
+        <router-link :to="{ name: 'site-products', params: { id: siteId } }" class="font-bold text-indigo-700 hover:underline">Quản lý sản phẩm</router-link>.
+      </p>
+      <template v-else>
+        <div
+          v-for="(p, pi) in list('items')"
+          :key="p.id || pi"
+          :class="rowClass('items', pi)"
+          class="space-y-2"
+          @dragover="itemDragOver('items', pi, $event)"
+          @drop.prevent="itemDrop('items', pi)"
+        >
+          <div class="flex items-center gap-1.5">
+            <span class="cursor-grab text-slate-400" draggable="true" @dragstart="itemDragStart('items', pi, $event)" @dragend="itemDragEnd"><GripVertical class="h-4 w-4" /></span>
+            <input v-model="p.name" placeholder="Tên sản phẩm" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+            <input v-model="p.price" placeholder="Giá" class="w-24 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+            <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('items', pi)"><Trash2 class="h-3.5 w-3.5" /></button>
+          </div>
+          <ImageField v-model="p.image_url" :site-id="siteId" compact />
+          <textarea v-model="p.desc" rows="2" placeholder="Mô tả" class="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+        </div>
+        <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('items', { id: 'p' + Date.now(), name: 'Sản phẩm mới', price: '0đ', image_url: '', desc: '' })">
+          <Plus class="h-3.5 w-3.5" /> Thêm sản phẩm
+        </button>
+      </template>
+    </template>
+
+    <!-- ===== Cam kết ===== -->
+    <template v-else-if="block.type === 'features'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề mục</span><input v-model="block.data.heading" :class="inp" /></label>
+      <span :class="lbl">Các cam kết</span>
+      <div
+        v-for="(_, fi) in list('items')"
+        :key="fi"
+        :class="rowClass('items', fi)"
+        @dragover="itemDragOver('items', fi, $event)"
+        @drop.prevent="itemDrop('items', fi)"
+      >
+        <div class="flex items-center gap-1.5">
+          <span class="cursor-grab text-slate-400" draggable="true" @dragstart="itemDragStart('items', fi, $event)" @dragend="itemDragEnd"><GripVertical class="h-4 w-4" /></span>
+          <input v-model="block.data.items[fi]" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+          <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('items', fi)"><Trash2 class="h-3.5 w-3.5" /></button>
+        </div>
+      </div>
+      <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('items', 'Cam kết mới')">
+        <Plus class="h-3.5 w-3.5" /> Thêm cam kết
+      </button>
+    </template>
+
+    <!-- ===== Đánh giá ===== -->
+    <template v-else-if="block.type === 'testimonials'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề mục</span><input v-model="block.data.heading" :class="inp" /></label>
+      <div
+        v-for="(t, ti) in list('items')"
+        :key="ti"
+        :class="rowClass('items', ti)"
+        class="space-y-2"
+        @dragover="itemDragOver('items', ti, $event)"
+        @drop.prevent="itemDrop('items', ti)"
+      >
+        <div class="flex items-center gap-1.5">
+          <span class="cursor-grab text-slate-400" draggable="true" @dragstart="itemDragStart('items', ti, $event)" @dragend="itemDragEnd"><GripVertical class="h-4 w-4" /></span>
+          <input v-model="t.name" placeholder="Tên khách" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+          <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('items', ti)"><Trash2 class="h-3.5 w-3.5" /></button>
+        </div>
+        <textarea v-model="t.quote" rows="2" placeholder="Nội dung đánh giá" class="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+      </div>
+      <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('items', { name: '', quote: '' })">
+        <Plus class="h-3.5 w-3.5" /> Thêm đánh giá
+      </button>
+    </template>
+
+    <!-- ===== Kêu gọi hành động ===== -->
+    <template v-else-if="block.type === 'cta'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề</span><input v-model="block.data.title" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Mô tả</span><textarea v-model="block.data.subtitle" rows="2" :class="inp" /></label>
+      <div class="grid grid-cols-2 gap-2">
+        <label class="space-y-1"><span :class="lbl">Chữ trên nút</span><input v-model="block.data.button_text" :class="inp" /></label>
+        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.button_link" placeholder="tel:, https://..." :class="inp" /></label>
+      </div>
+      <label class="space-y-1"><span :class="lbl">Ghi chú chân trang</span><input v-model="block.data.footer_note" :class="inp" /></label>
+    </template>
+
+    <!-- ===== Văn bản ===== -->
+    <template v-else-if="block.type === 'richtext'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề</span><input v-model="block.data.heading" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Nội dung</span><textarea v-model="block.data.body" rows="7" :class="inp" /></label>
+      <div class="flex gap-1">
+        <button
+          v-for="a in [{ v: 'left', t: 'Trái' }, { v: 'center', t: 'Giữa' }, { v: 'right', t: 'Phải' }]"
+          :key="a.v"
+          type="button"
+          class="flex-1 rounded-lg border px-2 py-1.5 text-xs font-bold"
+          :class="(block.data.align || 'left') === a.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600'"
+          @click="block.data.align = a.v"
+        >
+          {{ a.t }}
+        </button>
+      </div>
+    </template>
+
+    <!-- ===== Ảnh lớn ===== -->
+    <template v-else-if="block.type === 'image'">
+      <ImageField v-model="block.data.image_url" :site-id="siteId" label="Ảnh" />
+      <label class="space-y-1"><span :class="lbl">Mô tả ảnh (SEO)</span><input v-model="block.data.alt" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Liên kết khi bấm ảnh</span><input v-model="block.data.link" placeholder="https://..." :class="inp" /></label>
+    </template>
+
+    <!-- ===== Thư viện ảnh ===== -->
+    <template v-else-if="block.type === 'gallery'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề mục</span><input v-model="block.data.heading" :class="inp" /></label>
+      <div
+        v-for="(g, gi) in list('items')"
+        :key="gi"
+        :class="rowClass('items', gi)"
+        class="space-y-2"
+        @dragover="itemDragOver('items', gi, $event)"
+        @drop.prevent="itemDrop('items', gi)"
+      >
+        <div class="flex items-center gap-1.5">
+          <span class="cursor-grab text-slate-400" draggable="true" @dragstart="itemDragStart('items', gi, $event)" @dragend="itemDragEnd"><GripVertical class="h-4 w-4" /></span>
+          <span class="flex-1 text-xs font-semibold text-slate-500">Ảnh {{ gi + 1 }}</span>
+          <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('items', gi)"><Trash2 class="h-3.5 w-3.5" /></button>
+        </div>
+        <ImageField v-model="g.image_url" :site-id="siteId" compact />
+        <input v-model="g.caption" placeholder="Chú thích" class="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+      </div>
+      <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('items', { image_url: '', caption: '' })">
+        <Plus class="h-3.5 w-3.5" /> Thêm ảnh
+      </button>
+    </template>
+
+    <!-- ===== FAQ ===== -->
+    <template v-else-if="block.type === 'faq'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề mục</span><input v-model="block.data.heading" :class="inp" /></label>
+      <div
+        v-for="(f, fi) in list('items')"
+        :key="fi"
+        :class="rowClass('items', fi)"
+        class="space-y-2"
+        @dragover="itemDragOver('items', fi, $event)"
+        @drop.prevent="itemDrop('items', fi)"
+      >
+        <div class="flex items-center gap-1.5">
+          <span class="cursor-grab text-slate-400" draggable="true" @dragstart="itemDragStart('items', fi, $event)" @dragend="itemDragEnd"><GripVertical class="h-4 w-4" /></span>
+          <input v-model="f.q" placeholder="Câu hỏi" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+          <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('items', fi)"><Trash2 class="h-3.5 w-3.5" /></button>
+        </div>
+        <textarea v-model="f.a" rows="2" placeholder="Câu trả lời" class="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+      </div>
+      <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('items', { q: '', a: '' })">
+        <Plus class="h-3.5 w-3.5" /> Thêm câu hỏi
+      </button>
+    </template>
+
+    <!-- ===== Liên hệ ===== -->
+    <template v-else-if="block.type === 'contact'">
+      <label class="space-y-1"><span :class="lbl">Tiêu đề mục</span><input v-model="block.data.heading" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Số điện thoại</span><input v-model="block.data.phone" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Email</span><input v-model="block.data.email" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Địa chỉ</span><input v-model="block.data.address" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Link Zalo</span><input v-model="block.data.zalo_link" placeholder="https://zalo.me/..." :class="inp" /></label>
+    </template>
+
+    <!-- ===== HTML ===== -->
+    <template v-else-if="block.type === 'html'">
+      <textarea v-model="block.data.html" rows="12" spellcheck="false" class="w-full rounded-lg border border-slate-200 px-2.5 py-2 font-mono text-xs" />
+      <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+        Chiều cao (px)
+        <input v-model.number="block.data.height" type="number" min="80" max="2000" class="w-24 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+      </label>
+      <p class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        Mã chạy trong khung cách ly: không đọc được dữ liệu đăng nhập hay điều hướng trang chính.
+      </p>
+    </template>
+
+    <!-- ===== Nền & khoảng cách (mọi section) ===== -->
+    <div class="space-y-3 border-t border-slate-100 pt-4">
+      <span class="block text-[11px] font-extrabold uppercase tracking-wide text-slate-400">Giao diện section</span>
+      <div class="flex items-center gap-3">
+        <span class="text-xs font-bold text-slate-600">Màu nền</span>
+        <input type="color" :value="block.data.style?.bg || '#ffffff'" class="h-7 w-9 rounded border border-slate-200" @input="setStyle('bg', ($event.target as HTMLInputElement).value)" />
+        <button v-if="block.data.style?.bg" type="button" class="text-xs text-slate-500 underline" @click="setStyle('bg', '')">Bỏ màu</button>
+      </div>
+      <div class="space-y-1">
+        <span class="text-xs font-bold text-slate-600">Khoảng cách trên/dưới</span>
+        <div class="flex gap-1">
+          <button
+            v-for="p in [{ v: 'none', t: 'Mặc định' }, { v: 'sm', t: 'Nhỏ' }, { v: 'md', t: 'Vừa' }, { v: 'lg', t: 'Lớn' }]"
+            :key="p.v"
+            type="button"
+            class="flex-1 rounded-lg border px-1 py-1.5 text-[11px] font-bold"
+            :class="(block.data.style?.pad || 'none') === p.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600'"
+            @click="setStyle('pad', p.v)"
+          >
+            {{ p.t }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

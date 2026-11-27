@@ -1,61 +1,87 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+// Trình chỉnh sửa website kéo thả (kiểu Shopify):
+// - Cột trái: thư viện section (kéo thả vào trang) / danh sách section / cài đặt chung
+// - Giữa: trang thật, click để chọn, gõ chữ trực tiếp, kéo để đổi vị trí
+// - Cột phải: cài đặt chi tiết của section đang chọn
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
-  ArrowDown,
   ArrowLeft,
-  ArrowUp,
-  ChevronDown,
-  ChevronUp,
   Copy,
   ExternalLink,
   Eye,
   EyeOff,
   GripVertical,
+  LayoutList,
   Loader2,
+  Monitor,
+  Palette,
   Plus,
+  Redo2,
+  Smartphone,
+  Tablet,
   Trash2,
+  Undo2,
   X
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
 import { blockCatalog, blockLabels, newBlock } from '../lib/blockFactory'
 import StoreRenderer from '../components/store/StoreRenderer.vue'
+import SectionSettings from '../components/store/SectionSettings.vue'
+import ImageField from '../components/store/ImageField.vue'
 import type { AdminProduct, BlockType, PublicProduct, Site, StoreBlock } from '../types/store'
 
 const route = useRoute()
 const router = useRouter()
 const siteId = computed(() => String(route.params.id || ''))
 
-const inp = 'w-full rounded-xl border border-slate-200 px-3 py-2 text-sm'
-const inpSm = 'w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm'
-
 const loading = ref(true)
 const saving = ref(false)
 const publishing = ref(false)
 const errorMsg = ref('')
-const okMsg = ref('')
+const toast = ref<{ text: string; undo?: boolean } | null>(null)
+let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 const site = ref<Site | null>(null)
 const blocks = ref<StoreBlock[]>([])
 const products = ref<PublicProduct[]>([])
+const selectedId = ref<string | null>(null)
+const leftTab = ref<'add' | 'sections' | 'theme'>('sections')
+const device = ref<'desktop' | 'tablet' | 'mobile'>('desktop')
 
-const expandedId = ref<string | null>(null)
-const showPicker = ref(false)
+const deviceWidth = computed(() => (device.value === 'mobile' ? '390px' : device.value === 'tablet' ? '768px' : '100%'))
+const selectedBlock = computed(() => blocks.value.find((b) => b.id === selectedId.value) || null)
+const publicUrl = computed(() => (site.value ? `${window.location.origin}/s/${site.value.slug}` : ''))
 
-// "Chưa lưu" = khác với bản đã tải/lưu gần nhất
-const baseline = ref('')
-function snapshot() {
-  return JSON.stringify([site.value?.site_title, site.value?.logo_url, site.value?.primary_color, blocks.value])
+const colorPresets = ['#059669', '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#ca8a04', '#0f172a']
+
+function showToast(text: string, undo = false) {
+  toast.value = { text, undo }
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (toast.value = null), undo ? 6000 : 2500)
 }
-const dirty = computed(() => !!site.value && snapshot() !== baseline.value)
 
 function apiError(err: any, fallback: string) {
   return err?.response?.data?.error || fallback
 }
 
+// ---------------------------------------------------------------- Lưu / tải
+function snapshot(): string {
+  return JSON.stringify({
+    t: site.value?.site_title,
+    l: site.value?.logo_url,
+    c: site.value?.primary_color,
+    b: blocks.value
+  })
+}
+const savedSnapshot = ref('')
+const dirty = computed(() => !!site.value && currentSnap.value !== savedSnapshot.value)
+const currentSnap = ref('')
+
 // Menu kiểu cũ (mảng chuỗi) -> {label, link}
 function upgradeBlocks(arr: StoreBlock[]) {
   for (const b of arr) {
+    if (!b.data) b.data = {}
     if (b.type === 'header' && Array.isArray(b.data.nav_items)) {
       b.data.nav_items = b.data.nav_items.map((x: any) => (typeof x === 'string' ? { label: x, link: '' } : x))
     }
@@ -64,15 +90,18 @@ function upgradeBlocks(arr: StoreBlock[]) {
 
 function applySite(s: Site) {
   site.value = s
+  let parsed: StoreBlock[] = []
   try {
-    const parsed = JSON.parse(s.draft_blocks_json || '[]')
-    blocks.value = Array.isArray(parsed) ? parsed : []
+    const v = JSON.parse(s.draft_blocks_json || '[]')
+    parsed = Array.isArray(v) ? v : []
   } catch {
-     const parsed = JSON.parse(s.draft_blocks_json || '[]')
-    blocks.value = Array.isArray(parsed) ? parsed : []
-    upgradeBlocks(blocks.value)
+    parsed = []
   }
-  baseline.value = snapshot()
+  upgradeBlocks(parsed)
+  blocks.value = parsed
+  const snap = snapshot()
+  savedSnapshot.value = snap
+  currentSnap.value = snap
 }
 
 async function loadProducts() {
@@ -100,6 +129,7 @@ async function load() {
   try {
     const { data } = await api.get<{ site: Site }>(`/storefront/sites/${siteId.value}`)
     applySite(data.site)
+    resetHistory()
     await loadProducts()
   } catch (err) {
     errorMsg.value = apiError(err, 'Không tải được website.')
@@ -111,20 +141,21 @@ async function load() {
 function cleanBlocks(): StoreBlock[] {
   const copy: StoreBlock[] = JSON.parse(JSON.stringify(blocks.value))
   for (const b of copy) {
-        if (Array.isArray(b.data.nav_items)) b.data.nav_items = b.data.nav_items.map((x: string) => x.trim()).filter(Boolean)
-
+    if (b.type === 'header' && Array.isArray(b.data.nav_items)) {
+      b.data.nav_items = b.data.nav_items.filter((x: any) => String(x?.label || '').trim())
+    }
     if (b.type === 'features' && Array.isArray(b.data.items)) {
-      b.data.items = b.data.items.map((x: string) => x.trim()).filter(Boolean)
+      b.data.items = b.data.items.map((x: any) => String(x).trim()).filter(Boolean)
     }
   }
   return copy
 }
 
-async function saveDraft(): Promise<boolean> {
-  if (!site.value) return false
+async function saveDraft(silent = false): Promise<boolean> {
+  if (!site.value || saving.value) return false
   saving.value = true
   errorMsg.value = ''
-  okMsg.value = ''
+  const selected = selectedId.value
   try {
     const { data } = await api.put<{ site: Site }>(`/storefront/sites/${site.value.id}/draft`, {
       site_title: site.value.site_title,
@@ -133,7 +164,9 @@ async function saveDraft(): Promise<boolean> {
       draft_blocks_json: JSON.stringify(cleanBlocks())
     })
     applySite(data.site)
-    okMsg.value = 'Đã lưu bản nháp.'
+    resetHistory()
+    selectedId.value = blocks.value.some((b) => b.id === selected) ? selected : null
+    if (!silent) showToast('Đã lưu bản nháp')
     return true
   } catch (err) {
     errorMsg.value = apiError(err, 'Lưu bản nháp thất bại.')
@@ -147,10 +180,13 @@ async function publish() {
   if (!site.value) return
   publishing.value = true
   try {
-    if (!(await saveDraft())) return
+    if (!(await saveDraft(true))) return
     const { data } = await api.post<{ site: Site }>(`/storefront/sites/${site.value.id}/publish`)
+    const selected = selectedId.value
     applySite(data.site)
-    okMsg.value = 'Đã xuất bản. Khách hàng sẽ thấy bản mới ngay.'
+    resetHistory()
+    selectedId.value = selected
+    showToast('Đã xuất bản. Khách hàng thấy bản mới ngay.')
   } catch (err) {
     errorMsg.value = apiError(err, 'Xuất bản thất bại.')
   } finally {
@@ -158,543 +194,544 @@ async function publish() {
   }
 }
 
-// ---------- Quản lý section ----------
-function summaryOf(b: StoreBlock): string {
-  return String(b.data.title || b.data.heading || b.data.brand_name || '').slice(0, 40)
+// ---------------------------------------------------------------- Hoàn tác / làm lại
+const undoStack = ref<string[]>([])
+const redoStack = ref<string[]>([])
+let applyingHistory = false
+let historyTimer: ReturnType<typeof setTimeout> | null = null
+
+function resetHistory() {
+  undoStack.value = [snapshot()]
+  redoStack.value = []
 }
 
-function toggleExpand(id: string) {
-  expandedId.value = expandedId.value === id ? null : id
+function restore(snap: string) {
+  applyingHistory = true
+  const s = JSON.parse(snap)
+  if (site.value) {
+    site.value.site_title = s.t
+    site.value.logo_url = s.l
+    site.value.primary_color = s.c
+  }
+  blocks.value = s.b
+  if (selectedId.value && !blocks.value.some((b) => b.id === selectedId.value)) selectedId.value = null
+  currentSnap.value = snap
+  nextTick(() => (applyingHistory = false))
 }
 
-function addBlock(type: BlockType) {
-  const b = newBlock(type)
-  blocks.value.push(b)
-  expandedId.value = b.id
-  showPicker.value = false
-}
+watch(
+  [blocks, () => site.value?.site_title, () => site.value?.logo_url, () => site.value?.primary_color],
+  () => {
+    if (!site.value) return
+    currentSnap.value = snapshot()
+    if (applyingHistory) return
+    if (historyTimer) clearTimeout(historyTimer)
+    historyTimer = setTimeout(() => {
+      const snap = snapshot()
+      if (undoStack.value[undoStack.value.length - 1] !== snap) {
+        undoStack.value.push(snap)
+        if (undoStack.value.length > 100) undoStack.value.shift()
+        redoStack.value = []
+      }
+    }, 350)
+  },
+  { deep: true }
+)
 
-function duplicateBlock(i: number) {
-  const src = blocks.value[i]
-  if (!src) return
-  const copy: StoreBlock = JSON.parse(JSON.stringify(src))
-  copy.id = `${src.type}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
-  blocks.value.splice(i + 1, 0, copy)
-  expandedId.value = copy.id
-}
-
-function removeBlock(i: number) {
-  const b = blocks.value[i]
-  if (!b) return
-  if (!window.confirm(`Xóa section "${blockLabels[b.type] || b.type}"?`)) return
-  blocks.value.splice(i, 1)
-}
-
-function move(i: number, dir: -1 | 1) {
-  const j = i + dir
-  if (j < 0 || j >= blocks.value.length) return
-  const arr = blocks.value
-  ;[arr[i], arr[j]] = [arr[j]!, arr[i]!]
-}
-
-// ---------- Kéo-thả (HTML5 native) ----------
-const dragIndex = ref<number | null>(null)
-const overIndex = ref<number | null>(null)
-
-function onDragStart(i: number, ev: DragEvent) {
-  dragIndex.value = i
-  if (ev.dataTransfer) {
-    ev.dataTransfer.effectAllowed = 'move'
-    ev.dataTransfer.setData('text/plain', String(i))
+function flushHistory() {
+  if (!historyTimer) return
+  clearTimeout(historyTimer)
+  historyTimer = null
+  const snap = snapshot()
+  if (undoStack.value[undoStack.value.length - 1] !== snap) {
+    undoStack.value.push(snap)
+    redoStack.value = []
   }
 }
-function onDragOver(i: number, ev: DragEvent) {
-  if (dragIndex.value === null) return
-  ev.preventDefault()
-  overIndex.value = i
+
+function undo() {
+  flushHistory()
+  if (undoStack.value.length < 2) return
+  redoStack.value.push(undoStack.value.pop()!)
+  restore(undoStack.value[undoStack.value.length - 1]!)
 }
-function onDrop(i: number) {
-  const from = dragIndex.value
-  dragIndex.value = null
-  overIndex.value = null
-  if (from === null || from === i) return
+
+function redo() {
+  if (!redoStack.value.length) return
+  const snap = redoStack.value.pop()!
+  undoStack.value.push(snap)
+  restore(snap)
+}
+
+// ---------------------------------------------------------------- Thao tác section
+function insertBlock(type: BlockType, index: number) {
+  const b = newBlock(type)
+  blocks.value.splice(Math.max(0, Math.min(index, blocks.value.length)), 0, b)
+  selectedId.value = b.id
+  nextTick(() => scrollToBlock(b.id))
+}
+
+function scrollToBlock(id: string) {
+  const el = document.querySelector(`[data-block-id="${id}"]`)
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+function selectBlock(id: string | null) {
+  selectedId.value = id
+}
+
+function selectFromList(id: string) {
+  selectedId.value = id
+  scrollToBlock(id)
+}
+
+function onSectionAction(kind: 'up' | 'down' | 'duplicate' | 'hide' | 'delete', index: number) {
+  const arr = blocks.value
+  const b = arr[index]
+  if (!b) return
+  switch (kind) {
+    case 'up':
+    case 'down': {
+      const j = kind === 'up' ? index - 1 : index + 1
+      if (j < 0 || j >= arr.length) return
+      ;[arr[index], arr[j]] = [arr[j]!, arr[index]!]
+      nextTick(() => scrollToBlock(b.id))
+      break
+    }
+    case 'duplicate': {
+      const copy: StoreBlock = JSON.parse(JSON.stringify(b))
+      copy.id = `${b.type}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
+      arr.splice(index + 1, 0, copy)
+      selectedId.value = copy.id
+      break
+    }
+    case 'hide':
+      b.enabled = !b.enabled
+      showToast(b.enabled ? 'Đã hiện section' : 'Đã ẩn section (khách sẽ không thấy)')
+      break
+    case 'delete':
+      arr.splice(index, 1)
+      if (selectedId.value === b.id) selectedId.value = null
+      showToast(`Đã xoá "${blockLabels[b.type] || b.type}"`, true)
+      break
+  }
+}
+
+// Sửa chữ trực tiếp trên trang
+function onInlineEdit(id: string, path: (string | number)[], value: string) {
+  const b = blocks.value.find((x) => x.id === id)
+  if (!b) return
+  let target: any = b.data
+  for (let i = 0; i < path.length - 1; i++) {
+    const k = path[i]!
+    if (target[k] === undefined || target[k] === null) target[k] = typeof path[i + 1] === 'number' ? [] : {}
+    if (typeof target[k] === 'string' && i === path.length - 2) target[k] = { label: target[k] }
+    target = target[k]
+  }
+  target[path[path.length - 1]!] = value
+}
+
+// ---------------------------------------------------------------- Kéo thả
+type DragPayload = { kind: 'new'; type: BlockType } | { kind: 'move'; index: number }
+const drag = ref<DragPayload | null>(null)
+const dragActive = computed(() => drag.value !== null)
+
+function startNewDrag(type: BlockType, e: DragEvent) {
+  drag.value = { kind: 'new', type }
+  e.dataTransfer?.setData('text/plain', 'pp-section')
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copyMove'
+}
+
+function startMoveDrag(index: number, e: DragEvent) {
+  drag.value = { kind: 'move', index }
+  e.dataTransfer?.setData('text/plain', 'pp-section')
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move'
+  const el = document.querySelector(`[data-block-id="${blocks.value[index]?.id}"]`) as HTMLElement | null
+  if (el && e.dataTransfer) e.dataTransfer.setDragImage(el, 20, 20)
+}
+
+function endDrag() {
+  drag.value = null
+  listDropIndex.value = null
+}
+
+function dropAt(index: number) {
+  const p = drag.value
+  endDrag()
+  if (!p) return
+  if (p.kind === 'new') {
+    insertBlock(p.type, index)
+    return
+  }
+  const from = p.index
+  let to = index
+  if (to > from) to--
+  if (to === from) return
   const [item] = blocks.value.splice(from, 1)
-  if (item) blocks.value.splice(i, 0, item)
-}
-function onDragEnd() {
-  dragIndex.value = null
-  overIndex.value = null
-}
-
-// ---------- Danh sách con (items) ----------
-function addItem(b: StoreBlock, tpl: Record<string, any> | string) {
-  if (!Array.isArray(b.data.items)) b.data.items = []
-  b.data.items.push(typeof tpl === 'string' ? tpl : { ...tpl })
-}
-function removeAt(b: StoreBlock, idx: number) {
-  b.data.items.splice(idx, 1)
+  if (item) {
+    blocks.value.splice(to, 0, item)
+    selectedId.value = item.id
+  }
 }
 
-function addNavItem(b: StoreBlock) {
-  if (!Array.isArray(b.data.nav_items)) b.data.nav_items = []
-  b.data.nav_items.push({ label: 'Mục mới', link: '' })
+// Danh sách section ở cột trái cũng kéo thả được
+const listDropIndex = ref<number | null>(null)
+function onListDragOver(i: number, e: DragEvent) {
+  if (!drag.value) return
+  e.preventDefault()
+  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  listDropIndex.value = e.clientY < rect.top + rect.height / 2 ? i : i + 1
 }
-function moveItem(b: StoreBlock, idx: number, dir: -1 | 1) {
-  const arr = b.data.nav_items
-  const j = idx + dir
-  if (!Array.isArray(arr) || j < 0 || j >= arr.length) return
-  ;[arr[idx], arr[j]] = [arr[j], arr[idx]]
-}
-
-function addManualProduct(b: StoreBlock) {
-  addItem(b, { id: `p${Date.now()}`, name: 'Sản phẩm mới', price: '0đ', image_url: '', desc: '' })
+function onListDrop() {
+  if (listDropIndex.value !== null) dropAt(listDropIndex.value)
 }
 
-function linesOf(arr: unknown): string {
-  return Array.isArray(arr) ? arr.join('\n') : ''
+// ---------------------------------------------------------------- Cửa sổ chọn section
+const pickerAt = ref<number | null>(null)
+function openPicker(index: number) {
+  pickerAt.value = index
 }
-function setLines(b: StoreBlock, key: string, ev: Event) {
-  b.data[key] = (ev.target as HTMLTextAreaElement).value.split('\n')
-}
-
-// ---------- Nền & khoảng cách của section ----------
-function setStyle(b: StoreBlock, key: 'bg' | 'pad', val: string) {
-  const st: Record<string, string> = { ...(b.data.style || {}) }
-  if (!val || (key === 'pad' && val === 'none')) delete st[key]
-  else st[key] = val
-  b.data.style = st
+function pickType(type: BlockType) {
+  const at = pickerAt.value ?? blocks.value.length
+  pickerAt.value = null
+  insertBlock(type, at)
 }
 
-const publicUrl = computed(() => (site.value ? `${window.location.origin}/s/${site.value.slug}` : ''))
+// ---------------------------------------------------------------- Phím tắt & rời trang
+function isTyping(t: EventTarget | null) {
+  const el = t as HTMLElement | null
+  return !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName))
+}
 
-onMounted(load)
+function onKeydown(e: KeyboardEvent) {
+  const mod = e.ctrlKey || e.metaKey
+  if (mod && e.key.toLowerCase() === 's') {
+    e.preventDefault()
+    saveDraft()
+    return
+  }
+  if (isTyping(e.target)) return
+  if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+    e.preventDefault()
+    undo()
+  } else if (mod && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) {
+    e.preventDefault()
+    redo()
+  } else if (e.key === 'Escape') {
+    selectedId.value = null
+  }
+}
+
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (dirty.value) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
+onBeforeRouteLeave(() => {
+  if (dirty.value && !window.confirm('Bạn có thay đổi chưa lưu. Rời trang và bỏ các thay đổi?')) return false
+})
+
+onMounted(() => {
+  load()
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('beforeunload', onBeforeUnload)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('beforeunload', onBeforeUnload)
+})
+
+// Chọn section thì tự mở bảng cài đặt; trên trang danh sách thì hiện "Section"
+watch(selectedId, (id) => {
+  if (id && leftTab.value === 'add') leftTab.value = 'sections'
+})
 </script>
 
 <template>
-  <div class="min-h-screen bg-slate-50 text-slate-900">
-    <div v-if="loading" class="flex items-center justify-center gap-2 py-24 text-sm text-slate-500">
-      <Loader2 class="h-5 w-5 animate-spin text-emerald-600" /> Đang tải...
+  <div class="flex h-screen flex-col bg-slate-100 text-slate-900">
+    <div v-if="loading" class="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
+      <Loader2 class="h-5 w-5 animate-spin text-indigo-600" /> Đang tải trình chỉnh sửa...
     </div>
 
     <div v-else-if="!site" class="mx-auto max-w-lg py-24 text-center">
       <p class="text-sm font-semibold text-rose-600">{{ errorMsg || 'Không tìm thấy website.' }}</p>
-      <button class="mt-4 rounded-xl border px-4 py-2 text-sm font-bold" @click="router.push('/sites')">Về danh sách</button>
+      <button class="mt-4 rounded-xl border bg-white px-4 py-2 text-sm font-bold" @click="router.push('/sites')">Về danh sách</button>
     </div>
 
     <template v-else>
-      <!-- Thanh trên cùng -->
-      <div class="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3">
-        <div class="flex items-center gap-3">
-          <button class="rounded-xl border border-slate-200 p-2 hover:bg-slate-100" @click="router.push('/sites')">
+      <!-- ================= Thanh trên cùng ================= -->
+      <header class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 py-2">
+        <div class="flex min-w-0 items-center gap-2">
+          <button class="rounded-lg border border-slate-200 p-1.5 hover:bg-slate-100" title="Về danh sách website" @click="router.push('/sites')">
             <ArrowLeft class="h-4 w-4" />
           </button>
-          <div class="text-sm font-extrabold">{{ site.site_title }}</div>
-          <span v-if="dirty" class="text-xs font-semibold text-amber-600">Chưa lưu</span>
+          <div class="min-w-0">
+            <div class="truncate text-sm font-extrabold">{{ site.site_title }}</div>
+            <div class="text-[11px]" :class="dirty ? 'text-amber-600' : 'text-slate-400'">
+              {{ saving ? 'Đang lưu...' : dirty ? 'Có thay đổi chưa lưu' : 'Đã lưu' }}
+            </div>
+          </div>
         </div>
-        <div class="flex items-center gap-2">
+
+        <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
+          <button
+            v-for="d in [{ v: 'desktop', i: Monitor, t: 'Máy tính' }, { v: 'tablet', i: Tablet, t: 'Máy tính bảng' }, { v: 'mobile', i: Smartphone, t: 'Điện thoại' }] as const"
+            :key="d.v"
+            class="rounded-lg p-1.5"
+            :class="device === d.v ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'"
+            :title="d.t"
+            @click="device = d.v"
+          >
+            <component :is="d.i" class="h-4 w-4" />
+          </button>
+        </div>
+
+        <div class="flex items-center gap-1.5">
+          <button class="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 disabled:opacity-30" :disabled="undoStack.length < 2" title="Hoàn tác (Ctrl+Z)" @click="undo">
+            <Undo2 class="h-4 w-4" />
+          </button>
+          <button class="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100 disabled:opacity-30" :disabled="!redoStack.length" title="Làm lại (Ctrl+Y)" @click="redo">
+            <Redo2 class="h-4 w-4" />
+          </button>
           <a
             v-if="site.is_published"
             :href="publicUrl"
             target="_blank"
             rel="noopener"
-            class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700 hover:underline"
+            class="hidden items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 sm:inline-flex"
           >
             Xem trang <ExternalLink class="h-3 w-3" />
           </a>
           <button
-            class="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold hover:bg-slate-50 disabled:opacity-50"
-            :disabled="saving || publishing"
-            @click="saveDraft"
+            class="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold hover:bg-slate-50 disabled:opacity-50"
+            :disabled="saving || publishing || !dirty"
+            title="Lưu nháp (Ctrl+S)"
+            @click="saveDraft()"
           >
-            <Loader2 v-if="saving" class="mr-1 inline h-3.5 w-3.5 animate-spin" /> Lưu nháp
+            <Loader2 v-if="saving && !publishing" class="mr-1 inline h-3.5 w-3.5 animate-spin" /> Lưu nháp
           </button>
           <button
-            class="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+            class="rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
             :disabled="saving || publishing"
             @click="publish"
           >
             <Loader2 v-if="publishing" class="mr-1 inline h-3.5 w-3.5 animate-spin" /> Xuất bản
           </button>
         </div>
-      </div>
+      </header>
 
-      <p v-if="errorMsg" class="mx-4 mt-3 rounded-xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-600">{{ errorMsg }}</p>
-      <p v-if="okMsg" class="mx-4 mt-3 rounded-xl bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700">{{ okMsg }}</p>
+      <p v-if="errorMsg" class="flex items-center justify-between gap-2 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-700">
+        {{ errorMsg }} <button class="rounded p-0.5 hover:bg-rose-100" @click="errorMsg = ''"><X class="h-3.5 w-3.5" /></button>
+      </p>
 
-      <div class="grid grid-cols-1 gap-4 p-4 lg:grid-cols-[440px_1fr]">
-        <!-- ===== Cột chỉnh sửa ===== -->
-        <div class="space-y-3">
-          <section class="space-y-3 rounded-2xl border border-slate-200 bg-white p-4">
-            <h2 class="text-sm font-extrabold">Thông tin chung</h2>
-            <label class="block space-y-1">
-              <span class="text-xs font-bold text-slate-600">Tên website</span>
-              <input v-model="site.site_title" :class="inp" />
-            </label>
-            <label class="block space-y-1">
-              <span class="text-xs font-bold text-slate-600">Logo (URL ảnh)</span>
-              <input v-model="site.logo_url" :class="inp" />
-            </label>
-            <label class="flex items-center gap-3">
-              <span class="text-xs font-bold text-slate-600">Màu chủ đạo</span>
-              <input v-model="site.primary_color" type="color" class="h-8 w-12 rounded border border-slate-200" />
-              <span class="text-xs text-slate-400">{{ site.primary_color }}</span>
-            </label>
-          </section>
-
-          <div class="flex items-center justify-between pt-1">
-            <h2 class="text-sm font-extrabold">Các section ({{ blocks.length }})</h2>
+      <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <!-- ================= Cột trái ================= -->
+        <aside class="flex max-h-[40vh] w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:max-h-none lg:w-72 lg:border-b-0 lg:border-r">
+          <div class="flex shrink-0 border-b border-slate-100 p-1.5">
             <button
-              class="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-700"
-              @click="showPicker = true"
+              v-for="t in [{ v: 'sections', i: LayoutList, t: 'Section' }, { v: 'add', i: Plus, t: 'Thêm' }, { v: 'theme', i: Palette, t: 'Giao diện' }] as const"
+              :key="t.v"
+              class="flex flex-1 items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold"
+              :class="leftTab === t.v ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'"
+              @click="leftTab = t.v"
             >
-              <Plus class="h-3.5 w-3.5" /> Thêm section
+              <component :is="t.i" class="h-3.5 w-3.5" /> {{ t.t }}
             </button>
           </div>
 
-          <p v-if="!blocks.length" class="rounded-2xl border border-dashed border-slate-300 bg-white py-8 text-center text-sm text-slate-500">
-            Trang đang trống. Bấm “Thêm section” để bắt đầu.
-          </p>
-
-          <section
-            v-for="(b, i) in blocks"
-            :key="b.id"
-            class="rounded-2xl border bg-white transition-colors"
-            :class="[
-              overIndex === i && dragIndex !== null && dragIndex !== i ? 'border-emerald-500 ring-2 ring-emerald-200' : 'border-slate-200',
-              dragIndex === i ? 'opacity-50' : '',
-              !b.enabled ? 'opacity-70' : ''
-            ]"
-            @dragover="onDragOver(i, $event)"
-            @drop.prevent="onDrop(i)"
-          >
-            <!-- Hàng tiêu đề (kéo bằng tay nắm) -->
-            <div
-              class="flex items-center gap-1 px-2 py-2"
-              draggable="true"
-              @dragstart="onDragStart(i, $event)"
-              @dragend="onDragEnd"
-            >
-              <span class="cursor-grab rounded-lg p-1 text-slate-400 hover:bg-slate-100" title="Kéo để đổi vị trí">
-                <GripVertical class="h-4 w-4" />
-              </span>
-              <button class="flex min-w-0 flex-1 items-center gap-2 text-left" @click="toggleExpand(b.id)">
-                <span class="text-sm font-extrabold">{{ blockLabels[b.type] || b.type }}</span>
-                <span class="truncate text-xs text-slate-400">{{ summaryOf(b) }}</span>
-                <component :is="expandedId === b.id ? ChevronUp : ChevronDown" class="ml-auto h-4 w-4 shrink-0 text-slate-400" />
-              </button>
-              <button class="rounded-lg p-1 hover:bg-slate-100 disabled:opacity-30" :disabled="i === 0" title="Lên" @click="move(i, -1)">
-                <ArrowUp class="h-4 w-4" />
-              </button>
-              <button class="rounded-lg p-1 hover:bg-slate-100 disabled:opacity-30" :disabled="i === blocks.length - 1" title="Xuống" @click="move(i, 1)">
-                <ArrowDown class="h-4 w-4" />
-              </button>
-              <button class="rounded-lg p-1 hover:bg-slate-100" :title="b.enabled ? 'Ẩn' : 'Hiện'" @click="b.enabled = !b.enabled">
-                <component :is="b.enabled ? Eye : EyeOff" class="h-4 w-4" />
-              </button>
-              <button class="rounded-lg p-1 hover:bg-slate-100" title="Nhân đôi" @click="duplicateBlock(i)">
-                <Copy class="h-4 w-4" />
-              </button>
-              <button class="rounded-lg p-1 text-rose-600 hover:bg-rose-50" title="Xóa" @click="removeBlock(i)">
-                <Trash2 class="h-4 w-4" />
-              </button>
-            </div>
-
-            <!-- Nội dung chỉnh sửa -->
-            <div v-if="expandedId === b.id" class="space-y-3 border-t border-slate-100 p-4">
-              <!-- header -->
-                           <template v-if="b.type === 'header'">
-                <!-- Logo -->
-                <div class="space-y-2">
-                  <span class="text-xs font-bold text-slate-600">Logo</span>
-                  <input v-model="b.data.logo_url" placeholder="URL ảnh logo (để trống = dùng logo ở Thông tin chung)" :class="inp" />
-                  <label class="flex items-center gap-3 text-xs font-bold text-slate-600">
-                    Chiều cao logo
-                    <input v-model.number="b.data.logo_height" type="range" min="20" max="120" step="2" class="flex-1" />
-                    <span class="w-12 text-right font-normal text-slate-500">{{ b.data.logo_height || 40 }}px</span>
-                  </label>
-                </div>
-
-                <!-- Tên chữ -->
-                <input v-model="b.data.brand_name" placeholder="Tên thương hiệu (chữ)" :class="inp" />
-                <div class="flex flex-wrap items-center gap-4">
-                  <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                    <input type="checkbox" :checked="b.data.show_brand !== false" @change="b.data.show_brand = ($event.target as HTMLInputElement).checked" />
-                    Hiện tên chữ
-                  </label>
-                  <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                    Cỡ chữ
-                    <select v-model="b.data.brand_size" class="rounded-lg border border-slate-200 px-2 py-1 text-sm">
-                      <option value="sm">Nhỏ</option>
-                      <option value="md">Vừa</option>
-                      <option value="lg">Lớn</option>
-                    </select>
-                  </label>
-                </div>
-
-                <!-- Bố cục -->
-                <label class="block space-y-1">
-                  <span class="text-xs font-bold text-slate-600">Bố cục</span>
-                  <select v-model="b.data.layout" :class="inp">
-                    <option value="left">Logo trái · Menu và nút bên phải</option>
-                    <option value="split">Logo trái · Menu giữa · Nút phải</option>
-                    <option value="center">Logo giữa · Menu bên dưới</option>
-                    <option value="center_split">Menu trái · Logo giữa · Nút phải</option>
-                  </select>
-                </label>
-
-                <!-- Menu -->
-                <div class="space-y-2">
-                  <span class="text-xs font-bold text-slate-600">Menu</span>
-                  <div v-for="(n, ni) in b.data.nav_items || []" :key="ni" class="flex items-center gap-1">
-                    <input v-model="n.label" placeholder="Chữ" class="w-1/3 rounded-lg border border-slate-200 px-2 py-1.5 text-sm" />
-                    <input v-model="n.link" placeholder="#products, /s/..., https://..." class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-sm" />
-                    <button class="rounded-lg p-1 hover:bg-slate-100 disabled:opacity-30" :disabled="ni === 0" @click="moveItem(b, Number(ni), -1)"><ArrowUp class="h-4 w-4" /></button>
-                    <button class="rounded-lg p-1 hover:bg-slate-100 disabled:opacity-30" :disabled="ni === (b.data.nav_items || []).length - 1" @click="moveItem(b, Number(ni), 1)"><ArrowDown class="h-4 w-4" /></button>
-                    <button class="rounded-lg p-1 text-rose-600 hover:bg-rose-50" @click="removeAt(b, Number(ni))"><Trash2 class="h-4 w-4" /></button>
-                  </div>
-                  <button class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700" @click="addNavItem(b)">
-                    <Plus class="h-3.5 w-3.5" /> Thêm mục menu
-                  </button>
-                </div>
-
-                <!-- Nút -->
-                <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                  <input type="checkbox" :checked="b.data.show_cta !== false" @change="b.data.show_cta = ($event.target as HTMLInputElement).checked" />
-                  Hiện nút
-                </label>
-                <div v-if="b.data.show_cta !== false" class="grid grid-cols-2 gap-2">
-                  <input v-model="b.data.cta_label" placeholder="Chữ trên nút" :class="inp" />
-                  <input v-model="b.data.cta_link" placeholder="Liên kết nút" :class="inp" />
-                </div>
-
-                <!-- Hiển thị -->
-                <div class="flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
-                  <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                    <input v-model="b.data.sticky" type="checkbox" /> Ghim khi cuộn
-                  </label>
-                  <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                    <input type="checkbox" :checked="b.data.border !== false" @change="b.data.border = ($event.target as HTMLInputElement).checked" />
-                    Đường viền dưới
-                  </label>
-                  <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                    Màu chữ
-                    <input
-                      type="color"
-                      :value="b.data.text_color || '#0f172a'"
-                      class="h-7 w-10 rounded border border-slate-200"
-                      @input="b.data.text_color = ($event.target as HTMLInputElement).value"
-                    />
-                  </label>
-                  <button v-if="b.data.text_color" class="text-xs text-slate-500 underline" @click="b.data.text_color = ''">Màu mặc định</button>
-                </div>
-              </template>
-
-              <!-- hero -->
-              <template v-else-if="b.type === 'hero'">
-                <input v-model="b.data.badge" placeholder="Nhãn nhỏ" :class="inp" />
-                <input v-model="b.data.title" placeholder="Tiêu đề" :class="inp" />
-                <textarea v-model="b.data.subtitle" rows="3" placeholder="Mô tả ngắn" :class="inp" />
-                <input v-model="b.data.image_url" placeholder="URL ảnh banner" :class="inp" />
-                <div class="grid grid-cols-2 gap-2">
-                  <input v-model="b.data.cta_label" placeholder="Chữ trên nút" :class="inp" />
-                  <input v-model="b.data.cta_link" placeholder="Liên kết nút" :class="inp" />
-                </div>
-              </template>
-
-              <!-- products -->
-              <template v-else-if="b.type === 'products'">
-                <input v-model="b.data.heading" placeholder="Tiêu đề mục" :class="inp" />
-                <label class="block space-y-1">
-                  <span class="text-xs font-bold text-slate-600">Nguồn sản phẩm</span>
-                  <select v-model="b.data.source" :class="inp">
-                    <option value="catalog">Lấy từ danh sách sản phẩm của shop</option>
-                    <option value="manual">Nhập tay trong khối này</option>
-                  </select>
-                </label>
-                <p v-if="b.data.source === 'catalog'" class="text-xs text-slate-500">
-                  Sản phẩm được quản lý ở trang riêng.
-                  <router-link :to="{ name: 'site-products', params: { id: site.id } }" class="font-bold text-emerald-700 hover:underline">
-                    Quản lý sản phẩm
-                  </router-link>
-                </p>
-                <template v-else>
-                  <div v-for="(p, pi) in b.data.items || []" :key="p.id || pi" class="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                    <div class="flex gap-2">
-                      <input v-model="p.name" placeholder="Tên sản phẩm" :class="inpSm" />
-                      <input v-model="p.price" placeholder="Giá" class="w-28 rounded-lg border border-slate-200 px-2 py-1.5 text-sm" />
-                      <button class="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50" @click="removeAt(b, Number(pi))"><Trash2 class="h-4 w-4" /></button>
-                    </div>
-                    <input v-model="p.image_url" placeholder="URL ảnh" :class="inpSm" />
-                    <textarea v-model="p.desc" rows="2" placeholder="Mô tả" :class="inpSm" />
-                  </div>
-                  <button class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700" @click="addManualProduct(b)">
-                    <Plus class="h-3.5 w-3.5" /> Thêm sản phẩm
-                  </button>
-                </template>
-              </template>
-
-              <!-- features -->
-              <template v-else-if="b.type === 'features'">
-                <input v-model="b.data.heading" placeholder="Tiêu đề mục" :class="inp" />
-                <textarea :value="linesOf(b.data.items)" rows="4" placeholder="Mỗi dòng một cam kết" :class="inp" @input="setLines(b, 'items', $event)" />
-              </template>
-
-              <!-- testimonials -->
-              <template v-else-if="b.type === 'testimonials'">
-                <input v-model="b.data.heading" placeholder="Tiêu đề mục" :class="inp" />
-                <div v-for="(t, ti) in b.data.items || []" :key="ti" class="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                  <div class="flex gap-2">
-                    <input v-model="t.name" placeholder="Tên khách" :class="inpSm" />
-                    <button class="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50" @click="removeAt(b, Number(ti))"><Trash2 class="h-4 w-4" /></button>
-                  </div>
-                  <textarea v-model="t.quote" rows="2" placeholder="Nội dung đánh giá" :class="inpSm" />
-                </div>
-                <button class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700" @click="addItem(b, { name: '', quote: '' })">
-                  <Plus class="h-3.5 w-3.5" /> Thêm đánh giá
-                </button>
-              </template>
-
-              <!-- cta -->
-              <template v-else-if="b.type === 'cta'">
-                <input v-model="b.data.title" placeholder="Tiêu đề" :class="inp" />
-                <textarea v-model="b.data.subtitle" rows="2" placeholder="Mô tả" :class="inp" />
-                <div class="grid grid-cols-2 gap-2">
-                  <input v-model="b.data.button_text" placeholder="Chữ trên nút" :class="inp" />
-                  <input v-model="b.data.button_link" placeholder="Liên kết (tel:, mailto:, https://...)" :class="inp" />
-                </div>
-                <input v-model="b.data.footer_note" placeholder="Ghi chú chân trang" :class="inp" />
-              </template>
-
-              <!-- richtext -->
-              <template v-else-if="b.type === 'richtext'">
-                <input v-model="b.data.heading" placeholder="Tiêu đề (tùy chọn)" :class="inp" />
-                <textarea v-model="b.data.body" rows="6" placeholder="Nội dung (xuống dòng để tách đoạn)" :class="inp" />
-                <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                  Căn lề
-                  <select v-model="b.data.align" class="rounded-lg border border-slate-200 px-2 py-1 text-sm">
-                    <option value="left">Trái</option>
-                    <option value="center">Giữa</option>
-                    <option value="right">Phải</option>
-                  </select>
-                </label>
-              </template>
-
-              <!-- image -->
-              <template v-else-if="b.type === 'image'">
-                <input v-model="b.data.image_url" placeholder="URL ảnh" :class="inp" />
-                <input v-model="b.data.alt" placeholder="Mô tả ảnh (cho người khiếm thị và SEO)" :class="inp" />
-                <input v-model="b.data.link" placeholder="Liên kết khi bấm vào ảnh (tùy chọn)" :class="inp" />
-              </template>
-
-              <!-- gallery -->
-              <template v-else-if="b.type === 'gallery'">
-                <input v-model="b.data.heading" placeholder="Tiêu đề mục" :class="inp" />
-                <div v-for="(g, gi) in b.data.items || []" :key="gi" class="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                  <div class="flex gap-2">
-                    <input v-model="g.image_url" placeholder="URL ảnh" :class="inpSm" />
-                    <button class="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50" @click="removeAt(b, Number(gi))"><Trash2 class="h-4 w-4" /></button>
-                  </div>
-                  <input v-model="g.caption" placeholder="Chú thích (tùy chọn)" :class="inpSm" />
-                </div>
-                <button class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700" @click="addItem(b, { image_url: '', caption: '' })">
-                  <Plus class="h-3.5 w-3.5" /> Thêm ảnh
-                </button>
-              </template>
-
-              <!-- faq -->
-              <template v-else-if="b.type === 'faq'">
-                <input v-model="b.data.heading" placeholder="Tiêu đề mục" :class="inp" />
-                <div v-for="(f, fi) in b.data.items || []" :key="fi" class="space-y-2 rounded-xl border border-slate-100 bg-slate-50 p-3">
-                  <div class="flex gap-2">
-                    <input v-model="f.q" placeholder="Câu hỏi" :class="inpSm" />
-                    <button class="rounded-lg p-1.5 text-rose-600 hover:bg-rose-50" @click="removeAt(b, Number(fi))"><Trash2 class="h-4 w-4" /></button>
-                  </div>
-                  <textarea v-model="f.a" rows="2" placeholder="Câu trả lời" :class="inpSm" />
-                </div>
-                <button class="inline-flex items-center gap-1 text-xs font-bold text-emerald-700" @click="addItem(b, { q: '', a: '' })">
-                  <Plus class="h-3.5 w-3.5" /> Thêm câu hỏi
-                </button>
-              </template>
-
-              <!-- contact -->
-              <template v-else-if="b.type === 'contact'">
-                <input v-model="b.data.heading" placeholder="Tiêu đề mục" :class="inp" />
-                <input v-model="b.data.phone" placeholder="Số điện thoại" :class="inp" />
-                <input v-model="b.data.email" placeholder="Email" :class="inp" />
-                <input v-model="b.data.address" placeholder="Địa chỉ" :class="inp" />
-                <input v-model="b.data.zalo_link" placeholder="Link Zalo (https://zalo.me/...)" :class="inp" />
-              </template>
-
-              <!-- html -->
-              <template v-else-if="b.type === 'html'">
-                <textarea v-model="b.data.html" rows="10" spellcheck="false" placeholder="<div>...</div>" class="w-full rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs" />
-                <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                  Chiều cao (px)
-                  <input v-model.number="b.data.height" type="number" min="80" max="2000" class="w-24 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
-                </label>
-                <p class="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  Mã chạy trong khung cách ly: không đọc được dữ liệu đăng nhập hay chuyển hướng trang chính.
-                  Không đưa thông tin nhạy cảm của khách vào khối này.
-                </p>
-              </template>
-
-              <!-- Nền & khoảng cách -->
-              <div class="flex flex-wrap items-center gap-4 border-t border-slate-100 pt-3">
-                <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                  Màu nền
-                  <input
-                    type="color"
-                    :value="b.data.style?.bg || '#ffffff'"
-                    class="h-7 w-10 rounded border border-slate-200"
-                    @input="setStyle(b, 'bg', ($event.target as HTMLInputElement).value)"
-                  />
-                </label>
-                <button v-if="b.data.style?.bg" class="text-xs text-slate-500 underline" @click="setStyle(b, 'bg', '')">Bỏ màu nền</button>
-                <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
-                  Khoảng cách thêm
-                  <select
-                    :value="b.data.style?.pad || 'none'"
-                    class="rounded-lg border border-slate-200 px-2 py-1 text-sm"
-                    @change="setStyle(b, 'pad', ($event.target as HTMLSelectElement).value)"
+          <div class="min-h-0 flex-1 overflow-y-auto p-3">
+            <!-- Danh sách section -->
+            <template v-if="leftTab === 'sections'">
+              <p v-if="!blocks.length" class="rounded-xl border border-dashed border-slate-300 p-4 text-center text-xs text-slate-500">
+                Trang trống. Mở tab <b>Thêm</b> và kéo section vào trang.
+              </p>
+              <div class="space-y-1" @drop.prevent="onListDrop">
+                <div
+                  v-for="(b, i) in blocks"
+                  :key="b.id"
+                  class="relative"
+                  @dragover="onListDragOver(i, $event)"
+                >
+                  <div v-if="dragActive && listDropIndex === i" class="absolute inset-x-0 -top-0.5 h-1 rounded bg-indigo-500" />
+                  <div
+                    class="group flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-2 text-xs"
+                    :class="[
+                      selectedId === b.id ? 'border-indigo-500 bg-indigo-50' : 'border-transparent hover:bg-slate-50',
+                      drag?.kind === 'move' && drag.index === i ? 'opacity-40' : '',
+                      !b.enabled ? 'text-slate-400' : ''
+                    ]"
+                    @click="selectFromList(b.id)"
                   >
-                    <option value="none">Mặc định</option>
-                    <option value="sm">Nhỏ</option>
-                    <option value="md">Vừa</option>
-                    <option value="lg">Lớn</option>
-                  </select>
-                </label>
+                    <span class="cursor-grab text-slate-300 group-hover:text-slate-500" draggable="true" @dragstart="startMoveDrag(i, $event)" @dragend="endDrag">
+                      <GripVertical class="h-4 w-4" />
+                    </span>
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate font-bold">{{ blockLabels[b.type] || b.type }}</span>
+                      <span class="block truncate text-[11px] text-slate-400">{{ b.data.title || b.data.heading || b.data.brand_name || '' }}</span>
+                    </span>
+                    <button class="rounded p-1 opacity-0 hover:bg-slate-200 group-hover:opacity-100" :title="b.enabled ? 'Ẩn' : 'Hiện'" @click.stop="onSectionAction('hide', i)">
+                      <component :is="b.enabled ? Eye : EyeOff" class="h-3.5 w-3.5" />
+                    </button>
+                    <button class="rounded p-1 opacity-0 hover:bg-slate-200 group-hover:opacity-100" title="Nhân đôi" @click.stop="onSectionAction('duplicate', i)">
+                      <Copy class="h-3.5 w-3.5" />
+                    </button>
+                    <button class="rounded p-1 text-rose-600 opacity-0 hover:bg-rose-50 group-hover:opacity-100" title="Xoá" @click.stop="onSectionAction('delete', i)">
+                      <Trash2 class="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div v-if="dragActive && listDropIndex === i + 1 && i === blocks.length - 1" class="absolute inset-x-0 -bottom-0.5 h-1 rounded bg-indigo-500" />
+                </div>
               </div>
-            </div>
-          </section>
+              <button
+                class="mt-3 flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-slate-300 py-2 text-xs font-bold text-slate-600 hover:border-indigo-400 hover:text-indigo-700"
+                @click="leftTab = 'add'"
+              >
+                <Plus class="h-3.5 w-3.5" /> Thêm section
+              </button>
+            </template>
+
+            <!-- Thư viện section: kéo thả vào trang -->
+            <template v-else-if="leftTab === 'add'">
+              <p class="mb-2 text-[11px] text-slate-500">Kéo section thả vào vị trí bất kỳ trên trang, hoặc bấm để thêm vào cuối.</p>
+              <div class="space-y-1.5">
+                <div
+                  v-for="m in blockCatalog"
+                  :key="m.type"
+                  draggable="true"
+                  class="cursor-grab rounded-xl border border-slate-200 bg-white p-2.5 transition hover:border-indigo-400 hover:shadow-sm active:cursor-grabbing"
+                  @dragstart="startNewDrag(m.type, $event)"
+                  @dragend="endDrag"
+                  @click="insertBlock(m.type, blocks.length)"
+                >
+                  <div class="flex items-center gap-1.5 text-xs font-extrabold">
+                    <GripVertical class="h-3.5 w-3.5 text-slate-300" /> {{ m.label }}
+                  </div>
+                  <div class="mt-0.5 pl-5 text-[11px] text-slate-500">{{ m.desc }}</div>
+                </div>
+              </div>
+            </template>
+
+            <!-- Cài đặt chung -->
+            <template v-else>
+              <div class="space-y-4">
+                <label class="block space-y-1">
+                  <span class="text-xs font-bold text-slate-600">Tên website</span>
+                  <input v-model="site.site_title" class="w-full rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm" />
+                </label>
+                <ImageField v-model="site.logo_url" :site-id="site.id" label="Logo mặc định" compact />
+                <div class="space-y-1.5">
+                  <span class="block text-xs font-bold text-slate-600">Màu chủ đạo (nút, giá, nhãn)</span>
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <button
+                      v-for="c in colorPresets"
+                      :key="c"
+                      class="h-7 w-7 rounded-full ring-offset-2"
+                      :class="site.primary_color?.toLowerCase() === c ? 'ring-2 ring-indigo-500' : ''"
+                      :style="{ backgroundColor: c }"
+                      :title="c"
+                      @click="site.primary_color = c"
+                    />
+                    <input v-model="site.primary_color" type="color" class="h-7 w-9 rounded border border-slate-200" title="Màu khác" />
+                  </div>
+                </div>
+                <div class="space-y-1 rounded-xl bg-slate-50 p-3 text-xs">
+                  <div class="font-bold text-slate-600">Địa chỉ trang</div>
+                  <a :href="publicUrl" target="_blank" rel="noopener" class="break-all text-indigo-700 hover:underline">{{ publicUrl }}</a>
+                  <div class="text-slate-400">{{ site.is_published ? 'Đang xuất bản' : 'Chưa xuất bản' }}</div>
+                </div>
+                <router-link
+                  :to="{ name: 'site-products', params: { id: site.id } }"
+                  class="block rounded-xl border border-slate-200 px-3 py-2 text-center text-xs font-bold text-slate-700 hover:border-indigo-400 hover:text-indigo-700"
+                >
+                  Quản lý sản phẩm
+                </router-link>
+              </div>
+            </template>
+          </div>
+        </aside>
+
+        <!-- ================= Khung xem trước / chỉnh sửa ================= -->
+        <div class="min-h-0 flex-1 overflow-auto p-3 sm:p-5" @click.self="selectBlock(null)">
+          <div
+            class="mx-auto min-h-full overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200 transition-[max-width] duration-300"
+            :style="{ maxWidth: deviceWidth === '100%' ? '1200px' : deviceWidth }"
+          >
+            <StoreRenderer
+              :site-title="site.site_title"
+              :primary-color="site.primary_color"
+              :logo-url="site.logo_url"
+              :blocks="blocks"
+              :products="products"
+              editable
+              :selected-id="selectedId"
+              :drag-active="dragActive"
+              @select="selectBlock"
+              @edit="onInlineEdit"
+              @action="onSectionAction"
+              @drop="dropAt"
+              @section-dragstart="startMoveDrag"
+              @section-dragend="endDrag"
+              @add-at="openPicker"
+            />
+          </div>
         </div>
 
-        <!-- ===== Xem trước ===== -->
-        <div class="lg:sticky lg:top-20 lg:h-[calc(100vh-6rem)] overflow-auto rounded-2xl border border-slate-200 bg-white">
-          <div class="border-b border-slate-100 px-4 py-2 text-xs font-bold text-slate-400">Xem trước (bản nháp)</div>
-          <StoreRenderer :site-title="site.site_title" :primary-color="site.primary_color" :blocks="blocks" :products="products" />
-        </div>
+        <!-- ================= Cột phải: cài đặt section ================= -->
+        <aside class="w-full shrink-0 overflow-y-auto border-t border-slate-200 bg-white lg:w-80 lg:border-l lg:border-t-0">
+          <template v-if="selectedBlock">
+            <div class="sticky top-0 z-10 flex items-center justify-between border-b border-slate-100 bg-white px-4 py-3">
+              <div>
+                <div class="text-sm font-extrabold">{{ blockLabels[selectedBlock.type] || selectedBlock.type }}</div>
+                <div class="text-[11px] text-slate-400">Bấm vào chữ trên trang để sửa trực tiếp</div>
+              </div>
+              <button class="rounded-lg p-1 hover:bg-slate-100" title="Bỏ chọn (Esc)" @click="selectBlock(null)"><X class="h-4 w-4" /></button>
+            </div>
+            <div class="p-4">
+              <SectionSettings :key="selectedBlock.id" :block="selectedBlock" :site-id="site.id" />
+            </div>
+          </template>
+          <div v-else class="space-y-3 p-5 text-center text-xs text-slate-500">
+            <div class="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-indigo-50 text-indigo-600">
+              <LayoutList class="h-5 w-5" />
+            </div>
+            <p class="font-bold text-slate-700">Chọn một section để chỉnh</p>
+            <p>Bấm vào bất kỳ phần nào trên trang. Gõ chữ trực tiếp, kéo tay nắm <GripVertical class="inline h-3 w-3" /> để đổi vị trí.</p>
+            <p class="text-[11px] text-slate-400">Phím tắt: Ctrl+S lưu · Ctrl+Z hoàn tác · Ctrl+Y làm lại · Esc bỏ chọn</p>
+          </div>
+        </aside>
       </div>
     </template>
 
-    <!-- Cửa sổ chọn loại section -->
-    <div v-if="showPicker" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="showPicker = false">
-      <div class="w-full max-w-2xl space-y-4 rounded-2xl bg-white p-6">
+    <!-- Cửa sổ chọn loại section (khi bấm "+ Thêm" trên trang) -->
+    <div v-if="pickerAt !== null" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" @click.self="pickerAt = null">
+      <div class="w-full max-w-2xl space-y-4 rounded-2xl bg-white p-5">
         <div class="flex items-center justify-between">
           <h2 class="text-base font-extrabold">Thêm section</h2>
-          <button class="rounded-lg p-1 hover:bg-slate-100" @click="showPicker = false"><X class="h-4 w-4" /></button>
+          <button class="rounded-lg p-1 hover:bg-slate-100" @click="pickerAt = null"><X class="h-4 w-4" /></button>
         </div>
-        <div class="grid max-h-[60vh] grid-cols-1 gap-3 overflow-auto sm:grid-cols-2">
+        <div class="grid max-h-[60vh] grid-cols-1 gap-2.5 overflow-auto sm:grid-cols-2">
           <button
             v-for="m in blockCatalog"
             :key="m.type"
-            class="rounded-xl border border-slate-200 p-3 text-left hover:border-emerald-500 hover:bg-emerald-50"
-            @click="addBlock(m.type)"
+            class="rounded-xl border border-slate-200 p-3 text-left hover:border-indigo-500 hover:bg-indigo-50"
+            @click="pickType(m.type)"
           >
             <div class="text-sm font-extrabold">{{ m.label }}</div>
             <div class="mt-0.5 text-xs text-slate-500">{{ m.desc }}</div>
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- Thông báo nhỏ -->
+    <div
+      v-if="toast"
+      class="fixed bottom-5 left-1/2 z-[80] flex -translate-x-1/2 items-center gap-3 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-semibold text-white shadow-xl"
+    >
+      {{ toast.text }}
+      <button v-if="toast.undo" class="font-bold text-indigo-300 hover:text-indigo-200" @click="undo(); toast = null">Hoàn tác</button>
     </div>
   </div>
 </template>

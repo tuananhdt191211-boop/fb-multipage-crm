@@ -22,6 +22,7 @@ type StorefrontHandler struct {
 
 func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
 	_ = db.AutoMigrate(&models.Storefront{}, &models.Product{})
+	migrateSiteMedia(db)
 	return &StorefrontHandler{
 		DB:  db,
 		Cfg: cfg,
