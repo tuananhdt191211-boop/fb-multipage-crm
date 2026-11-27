@@ -264,7 +264,7 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 			}
 
 			var conv models.Conversation
-			res := h.DB.Where("thread_id = ? OR (page_id = ? AND customer_psid = ?)", threadID, page.PageID, customerPSID).Limit(1).Find(&conv)
+			res := h.DB.Where("thread_id = ? OR (page_id = ? AND customer_ps_id = ?)", threadID, page.PageID, customerPSID).Limit(1).Find(&conv)
 			if res.RowsAffected > 0 {
 				conv.PageName = page.Name
 				conv.CustomerPSID = customerPSID
@@ -659,7 +659,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 
 	// Bước 2: Lấy TẤT CẢ khách hàng thuộc Page đó có CustomerPSID hợp lệ
 	q := h.DB.Model(&models.Conversation{}).
-		Where("page_id = ? AND COALESCE(TRIM(customer_psid), '') <> ''", req.PageID)
+		Where("page_id = ? AND COALESCE(TRIM(customer_ps_id), '') <> ''", req.PageID)
 
 	switch req.TargetMode {
 	case "within_24h":

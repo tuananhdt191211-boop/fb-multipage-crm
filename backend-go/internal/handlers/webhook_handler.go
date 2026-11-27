@@ -150,7 +150,7 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 					text := strings.TrimSpace(event.Message.Text)
 					if customerPSID != "" && text != "" {
 						var conv models.Conversation
-						if h.DB.Where("page_id = ? AND customer_psid = ?", pageID, customerPSID).First(&conv).Error == nil {
+						if h.DB.Where("page_id = ? AND customer_ps_id = ?", pageID, customerPSID).First(&conv).Error == nil {
 							now := time.Now()
 							_ = h.DB.Create(&models.Message{
 								ConversationID: conv.ID,
@@ -216,7 +216,7 @@ func (h *WebhookHandler) handleCustomerInteraction(
 ) {
 	now := time.Now()
 	var conv models.Conversation
-	if h.DB.Where("page_id = ? AND customer_psid = ?", page.PageID, customerPSID).First(&conv).Error != nil {
+	if h.DB.Where("page_id = ? AND customer_ps_id = ?", page.PageID, customerPSID).First(&conv).Error != nil {
 		suffix := customerPSID
 		if len(customerPSID) > 4 {
 			suffix = customerPSID[len(customerPSID)-4:]

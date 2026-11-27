@@ -133,7 +133,7 @@ func UpsertMarketingOptin(db *gorm.DB, pageID, psid string, o MarketingOptinEven
 	if token != "" {
 		scope = scope.Where("token = ?", token)
 	} else {
-		scope = scope.Where("recipient_psid = ?", psid)
+		scope = scope.Where("recipient_ps_id = ?", psid)
 	}
 
 	switch status {
@@ -155,7 +155,7 @@ func UpsertMarketingOptin(db *gorm.DB, pageID, psid string, o MarketingOptinEven
 	}
 
 	var conv models.Conversation
-	_ = db.Where("page_id = ? AND customer_psid = ?", pageID, psid).Limit(1).Find(&conv).Error
+	_ = db.Where("page_id = ? AND customer_ps_id = ?", pageID, psid).Limit(1).Find(&conv).Error
 
 	var sub MarketingSubscription
 	res := db.Where("token = ?", token).Limit(1).Find(&sub)
@@ -190,7 +190,7 @@ func UpsertMarketingOptin(db *gorm.DB, pageID, psid string, o MarketingOptinEven
 // StopMarketingForCustomer được gọi khi khách nhắn "ngừng nhận tin" / "stop"
 func StopMarketingForCustomer(db *gorm.DB, pageID, psid string) {
 	_ = db.Model(&MarketingSubscription{}).
-		Where("page_id = ? AND recipient_psid = ?", pageID, psid).
+		Where("page_id = ? AND recipient_ps_id = ?", pageID, psid).
 		Update("status", "stopped").Error
 	cancelPendingMarketing(db, pageID, psid, "")
 }
@@ -201,7 +201,7 @@ func cancelPendingMarketing(db *gorm.DB, pageID, psid, token string) {
 	if token != "" {
 		q = q.Where("subscription_token = ?", token)
 	} else {
-		q = q.Where("recipient_psid = ?", psid)
+		q = q.Where("recipient_ps_id = ?", psid)
 	}
 	_ = q.Updates(map[string]any{"status": "cancelled", "error_message": "Khách đã dừng nhận tin marketing"}).Error
 }
@@ -648,10 +648,10 @@ func (h *BroadcastHandler) SendOptinRequests(c *gin.Context) {
 
 	windowStart := time.Now().Add(-customerWindow)
 	q := h.DB.Model(&models.Conversation{}).
-		Where("page_id = ? AND COALESCE(TRIM(customer_psid), '') <> ''", req.PageID).
+		Where("page_id = ? AND COALESCE(TRIM(customer_ps_id), '') <> ''", req.PageID).
 		Where("EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = conversations.id AND m.sender_type = 'customer' AND m.sent_at >= ?)", windowStart).
-		Where("customer_psid NOT IN (?)", h.DB.Model(&MarketingSubscription{}).Select("recipient_psid").Where("page_id = ? AND status = ? AND recipient_psid IS NOT NULL", req.PageID, "active")).
-		Where("customer_psid NOT IN (?)", h.DB.Model(&MarketingOptinRequest{}).Select("recipient_psid").Where("page_id = ? AND title = ? AND status = ? AND created_at >= ? AND recipient_psid IS NOT NULL", req.PageID, title, "sent", time.Now().Add(-optinResendCooldown)))
+		Where("customer_ps_id NOT IN (?)", h.DB.Model(&MarketingSubscription{}).Select("recipient_ps_id").Where("page_id = ? AND status = ? AND recipient_ps_id IS NOT NULL", req.PageID, "active")).
+		Where("customer_ps_id NOT IN (?)", h.DB.Model(&MarketingOptinRequest{}).Select("recipient_ps_id").Where("page_id = ? AND title = ? AND status = ? AND created_at >= ? AND recipient_ps_id IS NOT NULL", req.PageID, title, "sent", time.Now().Add(-optinResendCooldown)))
 	if len(req.ConversationIDs) > 0 {
 		q = q.Where("id IN ?", req.ConversationIDs)
 	}
@@ -814,7 +814,7 @@ func (h *BroadcastHandler) SyncSubscribers(c *gin.Context) {
 			if psid := strings.TrimSpace(t.Recipient); psid != "" {
 				sub.RecipientPSID = psid
 				var conv models.Conversation
-				if h.DB.Where("page_id = ? AND customer_psid = ?", pageID, psid).Limit(1).Find(&conv).RowsAffected > 0 {
+				if h.DB.Where("page_id = ? AND customer_ps_id = ?", pageID, psid).Limit(1).Find(&conv).RowsAffected > 0 {
 					sub.ConversationID = conv.ID
 					sub.RecipientName = conv.CustomerName
 				}

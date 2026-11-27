@@ -36,7 +36,7 @@ func (h *BroadcastHandler) DiagnosePage(c *gin.Context) {
 
 	var inDB, withPSID int64
 	h.DB.Model(&models.Conversation{}).Where("page_id = ?", pageID).Count(&inDB)
-	h.DB.Model(&models.Conversation{}).Where("page_id = ? AND COALESCE(TRIM(customer_psid),'') <> ''", pageID).Count(&withPSID)
+	h.DB.Model(&models.Conversation{}).Where("page_id = ? AND COALESCE(TRIM(customer_ps_id),'') <> ''", pageID).Count(&withPSID)
 
 	out := gin.H{
 		"page":               page.Name,

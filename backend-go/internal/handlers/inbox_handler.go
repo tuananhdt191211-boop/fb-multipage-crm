@@ -381,7 +381,7 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 		}
 
 		var conv models.Conversation
-		convRes := h.DB.Where("thread_id = ? OR (page_id = ? AND customer_psid = ?)", thread.ID, page.PageID, customerID).Limit(1).Find(&conv)
+		convRes := h.DB.Where("thread_id = ? OR (page_id = ? AND customer_ps_id = ?)", thread.ID, page.PageID, customerID).Limit(1).Find(&conv)
 		if convRes.RowsAffected > 0 {
 			conv.PageName = page.Name
 			conv.CustomerPSID = customerID
