@@ -104,7 +104,7 @@ onMounted(loadSites)
     <div class="mx-auto max-w-5xl px-4 py-8 space-y-6">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div class="flex items-center gap-3">
-          <button class="rounded-xl border border-slate-200 bg-white p-2 hover:bg-slate-100" @click="router.push('/')">
+          <button class="rounded-xl border border-slate-200 bg-white p-2 hover:bg-slate-100 lg:hidden" @click="router.push('/')">
             <ArrowLeft class="h-4 w-4" />
           </button>
           <div>
@@ -160,7 +160,7 @@ onMounted(loadSites)
             <p v-else class="mt-0.5 text-xs text-slate-400">/s/{{ s.slug }}</p>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2 whitespace-nowrap">
                         <button
               class="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold hover:bg-slate-50"
               @click="router.push({ name: 'site-products', params: { id: s.id } })"

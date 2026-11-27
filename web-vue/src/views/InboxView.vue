@@ -1322,13 +1322,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="fixed inset-0 flex flex-col bg-slate-100 text-slate-900">
+  <div class="fixed inset-0 flex flex-col bg-slate-100 text-slate-900 lg:relative lg:inset-auto lg:h-dvh">
     <!-- Top Header gọn gàng, tương thích Mobile & Desktop -->
     <header class="flex h-13 shrink-0 items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 sm:px-5">
       <div class="flex items-center gap-2 sm:gap-3 min-w-0">
         <button
           @click="router.push('/')"
-          class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+          class="lg:hidden inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
           title="Về trang chủ"
         >
           <ArrowLeft class="h-3.5 w-3.5" />
@@ -1623,7 +1623,7 @@ onUnmounted(() => {
 
       <!-- CỘT 2: Khung chat trực tiếp (Chiếm toàn bộ phần giữa, mở full-screen trên Mobile) -->
       <section
-        class="flex min-h-0 flex-1 min-w-0 flex-col bg-[#f4f7f6]"
+        class="flex min-h-0 flex-1 min-w-0 flex-col bg-slate-50"
         :class="selectedConv ? 'flex' : 'hidden md:flex'"
       >
         <div v-if="!selectedConv" class="flex flex-1 flex-col items-center justify-center p-8 text-center">

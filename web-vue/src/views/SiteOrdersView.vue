@@ -21,7 +21,7 @@ const statusLabels: Record<string, string> = {
 }
 const statusClass: Record<string, string> = {
   new: 'bg-sky-50 text-sky-700 ring-sky-200',
-  confirmed: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  confirmed: 'bg-violet-50 text-violet-700 ring-violet-200',
   shipping: 'bg-amber-50 text-amber-700 ring-amber-200',
   completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   cancelled: 'bg-slate-100 text-slate-500 ring-slate-200'
@@ -167,7 +167,7 @@ onMounted(loadOrders)
             v-for="t in [{ v: 'orders', l: 'Đơn hàng' }, { v: 'payment', l: 'Thanh toán & ship' }, { v: 'subscribers', l: 'Email đăng ký' }] as const"
             :key="t.v"
             class="rounded-lg px-3 py-1.5 text-xs font-bold"
-            :class="tab === t.v ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-50'"
+            :class="tab === t.v ? 'bg-emerald-600 text-white' : 'text-slate-600 hover:bg-slate-50'"
             @click="tab = t.v"
           >
             {{ t.l }}
@@ -205,7 +205,27 @@ onMounted(loadOrders)
             <p class="font-semibold">Chưa có đơn hàng</p>
             <p class="text-xs">Đơn khách đặt trên website sẽ hiện ở đây.</p>
           </div>
-          <div v-else class="overflow-x-auto">
+          <!-- Điện thoại: dạng thẻ -->
+          <ul v-if="orders.length" class="divide-y divide-slate-100 md:hidden">
+            <li v-for="o in orders" :key="'m' + o.id" class="cursor-pointer space-y-1.5 px-4 py-3.5 active:bg-slate-50" @click="detail = { ...o }">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-sm font-bold">{{ o.code }}</span>
+                <span class="rounded-full px-2 py-0.5 text-[11px] font-bold ring-1" :class="statusClass[o.status]">{{ statusLabels[o.status] }}</span>
+              </div>
+              <div class="flex items-center justify-between gap-2 text-sm">
+                <span class="min-w-0 truncate">{{ o.customer_name }} · <span class="text-slate-500">{{ o.phone }}</span></span>
+                <span class="shrink-0 font-bold">{{ formatVnd(o.total) }}</span>
+              </div>
+              <div class="flex items-center justify-between text-xs text-slate-500">
+                <span>
+                  {{ o.payment_method === 'cod' ? 'COD' : 'VNPay' }} ·
+                  <span :class="o.payment_status === 'paid' ? 'text-emerald-600' : o.payment_status === 'failed' ? 'text-rose-600' : ''">{{ payLabels[o.payment_status] }}</span>
+                </span>
+                <span>{{ fmtTime(o.created_at) }}</span>
+              </div>
+            </li>
+          </ul>
+          <div v-if="orders.length" class="hidden overflow-x-auto md:block">
             <table class="w-full min-w-[760px] text-sm">
               <thead class="bg-slate-50 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
                 <tr>
@@ -292,7 +312,7 @@ onMounted(loadOrders)
           </section>
 
           <div class="lg:col-span-2">
-            <button type="submit" :disabled="savingPay" class="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-50">
+            <button type="submit" :disabled="savingPay" class="rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-700 disabled:opacity-50">
               <Loader2 v-if="savingPay" class="mr-1 inline h-4 w-4 animate-spin" /> Lưu cài đặt
             </button>
           </div>
@@ -304,7 +324,7 @@ onMounted(loadOrders)
         <div class="rounded-2xl bg-white ring-1 ring-slate-200">
           <div class="flex items-center justify-between border-b border-slate-100 px-5 py-3">
             <span class="text-sm font-bold">{{ subscribers.length }} email</span>
-            <button v-if="subscribers.length" class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-indigo-700 hover:bg-indigo-50" @click="copy(subscribers.map((s) => s.email).join('\n'))">
+            <button v-if="subscribers.length" class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-50" @click="copy(subscribers.map((s) => s.email).join('\n'))">
               <Copy class="h-3.5 w-3.5" /> Sao chép tất cả
             </button>
           </div>
@@ -332,7 +352,7 @@ onMounted(loadOrders)
         <div class="space-y-5 p-5">
           <section class="space-y-1 text-sm">
             <div class="font-bold">{{ detail.customer_name }}</div>
-            <a :href="`tel:${detail.phone}`" class="inline-flex items-center gap-1 font-semibold text-indigo-700"><Phone class="h-3.5 w-3.5" /> {{ detail.phone }}</a>
+            <a :href="`tel:${detail.phone}`" class="inline-flex items-center gap-1 font-semibold text-emerald-700"><Phone class="h-3.5 w-3.5" /> {{ detail.phone }}</a>
             <div v-if="detail.email" class="text-slate-600">{{ detail.email }}</div>
             <div class="text-slate-700">{{ detail.address }}</div>
             <div v-if="detail.note" class="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">Ghi chú: {{ detail.note }}</div>

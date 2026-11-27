@@ -159,7 +159,7 @@ onMounted(fetchPages)
 </script>
 
 <template>
-  <div translate="no" class="notranslate min-h-screen bg-[#f4f7f6] text-slate-900">
+  <div translate="no" class="notranslate min-h-screen bg-slate-50 text-slate-900">
     <!-- Top Header -->
     <header class="sticky top-0 z-20 border-b border-slate-200 bg-white">
       <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
@@ -167,13 +167,13 @@ onMounted(fetchPages)
           <button
             type="button"
             @click="router.push('/')"
-            class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+            class="lg:hidden inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
           >
             <ArrowLeft class="h-3.5 w-3.5" />
             <span>Trang chủ</span>
           </button>
 
-          <div class="flex min-w-0 items-center gap-2.5 border-l border-slate-200 pl-3">
+          <div class="flex min-w-0 items-center gap-2.5 border-l border-slate-200 pl-3 lg:border-l-0 lg:pl-0">
             <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
               <Layers class="h-4 w-4" />
             </div>

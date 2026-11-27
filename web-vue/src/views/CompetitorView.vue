@@ -371,13 +371,13 @@ onMounted(loadData)
       <div class="flex items-center gap-3 min-w-0">
         <button
           @click="router.push('/')"
-          class="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
+          class="lg:hidden inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
         >
           <ArrowLeft class="h-3.5 w-3.5" />
           <span>Trang chủ</span>
         </button>
 
-        <div class="h-5 w-px shrink-0 bg-slate-200" />
+        <div class="h-5 w-px shrink-0 bg-slate-200 lg:hidden" />
 
         <div class="flex items-center gap-2.5 min-w-0">
           <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-2xs">

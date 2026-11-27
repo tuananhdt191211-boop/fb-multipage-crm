@@ -75,7 +75,7 @@ const router = createRouter({
   path: '/sites/:id/edit',
   name: 'site-edit',
   component: () => import('../views/StoreBuilderView.vue'),
-  meta: { requiresAuth: true }
+  meta: { requiresAuth: true, noShell: true }
 },
 {
   path: '/sites/:id/products',

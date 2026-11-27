@@ -71,7 +71,6 @@ const navItems = computed(() => {
     { label: 'Phân tích đối thủ', path: '/competitors', icon: TrendingUp, active: false, badge: 0 },
     { label: 'Lên lịch đăng bài', path: '/posts', icon: CalendarClock, active: false, badge: 0 },
     { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0 },
-        { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0 },
     { label: 'Website bán hàng', path: '/sites', icon: Globe, active: false, badge: 0 }
   ]
   if (canManageRoles.value) {
@@ -204,7 +203,7 @@ onMounted(fetchOverviewData)
 </script>
 
 <template>
-  <div class="min-h-screen bg-[#f4f7f6] text-slate-900 antialiased flex">
+  <div class="min-h-screen bg-slate-50 text-slate-900 antialiased flex">
     <!-- Backdrop mobile -->
     <div
       v-if="mobileMenuOpen"
@@ -214,7 +213,7 @@ onMounted(fetchOverviewData)
 
     <!-- Left Sidebar Navigation (Cố định bên trái, rõ ràng, không bao giờ cắt chữ) -->
     <aside
-      class="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-slate-200/80 bg-white transition-transform duration-200 lg:static lg:translate-x-0"
+      class="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-slate-200/80 bg-white transition-transform duration-200 lg:hidden"
       :class="mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'"
     >
       <!-- Brand Header -->

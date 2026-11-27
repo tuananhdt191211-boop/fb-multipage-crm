@@ -801,11 +801,11 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <!-- ===================== ẢNH + CHỮ ===================== -->
         <section v-else-if="blk.type === 'image_text'">
           <div :class="inner" class="grid grid-cols-1 items-center gap-10 py-16 @3xl:grid-cols-2 @3xl:gap-16 @3xl:py-20">
-            <div class="overflow-hidden rounded-3xl bg-slate-100" :class="blk.data.image_side === 'right' ? '@3xl:order-2' : ''">
+            <div v-if="safeImg(blk.data.image_url) || editable" class="overflow-hidden rounded-3xl bg-slate-100" :class="blk.data.image_side === 'right' ? '@3xl:order-2' : ''">
               <img v-if="safeImg(blk.data.image_url)" :src="safeImg(blk.data.image_url)" :alt="blk.data.heading || ''" loading="lazy" class="aspect-[4/5] h-full w-full object-cover @3xl:aspect-square" />
               <div v-else class="flex aspect-[4/3] items-center justify-center text-xs text-slate-400" :style="{ background: tint(10) }">{{ editable ? 'Chọn ảnh ở bảng bên phải' : '' }}</div>
             </div>
-            <div class="space-y-5">
+            <div class="space-y-5" :class="safeImg(blk.data.image_url) || editable ? '' : '@3xl:col-span-2 mx-auto max-w-3xl'">
               <EditableText v-if="blk.data.eyebrow || editable" tag="p" :model-value="blk.data.eyebrow" :editable="editable" placeholder="Dòng chữ nhỏ phía trên" class="block text-xs font-bold uppercase tracking-[0.18em]" :style="{ color: accent }" @update:model-value="set(blk, ['eyebrow'], $event)" />
               <EditableText tag="h2" :model-value="blk.data.heading" :editable="editable" placeholder="Tiêu đề" class="block text-3xl font-extrabold leading-tight tracking-tight text-slate-900 @3xl:text-4xl" @update:model-value="set(blk, ['heading'], $event)" />
               <EditableText tag="p" multiline :model-value="blk.data.body" :editable="editable" placeholder="Nội dung" class="block whitespace-pre-line text-base leading-relaxed text-slate-600 @3xl:text-[17px]" @update:model-value="set(blk, ['body'], $event)" />
