@@ -69,6 +69,11 @@ func (h *InboxHandler) startAutoSyncWorker() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		// Chỉ đồng bộ khi có người đang mở hộp thư (tin mới vẫn về tức thì qua webhook).
+		// Không ai dùng thì không hỏi database -> Neon được nghỉ, không hết hạn mức.
+		if !within(&lastInboxUse, 5*time.Minute) {
+			continue
+		}
 		var pages []models.FacebookPage
 		if err := h.DB.Where("is_connected = ?", true).Find(&pages).Error; err != nil || len(pages) == 0 {
 			continue
@@ -97,6 +102,7 @@ func sanitizeAvatarURL(raw string) string {
 
 // ListConversations trả về danh sách hội thoại đã gộp từ tất cả Page đang bật (kèm trạng thái chăm sóc khách)
 func (h *InboxHandler) ListConversations(c *gin.Context) {
+	markInboxUse() // đang có người xem hộp thư -> bật đồng bộ nền
 	pageID := strings.TrimSpace(c.Query("page_id"))
 	search := strings.TrimSpace(c.Query("q"))
 
@@ -530,6 +536,7 @@ func (h *InboxHandler) SyncMessages(c *gin.Context) {
 
 // GetMessages lấy lịch sử tin nhắn của một hội thoại và đánh dấu đã đọc
 func (h *InboxHandler) GetMessages(c *gin.Context) {
+	markInboxUse()
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID hội thoại không hợp lệ"})

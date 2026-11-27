@@ -53,18 +53,19 @@ type pagePublishResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// startSchedulerWorker chạy ngầm mỗi 20 giây để tự động đăng các bài viết đã đến giờ hẹn
+// startSchedulerWorker tự động đăng các bài viết đã đến giờ hẹn.
+// Không hỏi database liên tục: ngủ tới đúng giờ bài kế tiếp (tối đa idleSleep),
+// và được đánh thức ngay khi có bài hẹn giờ mới (schedulerWake) -> database Neon được nghỉ khi rảnh.
 func (h *PostHandler) startSchedulerWorker() {
-	ticker := time.NewTicker(20 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
+	time.Sleep(20 * time.Second)
+	for {
 		var duePosts []models.ScheduledPost
 		now := time.Now()
 		if err := h.DB.Where("status = ? AND scheduled_at <= ?", "pending", now).
 			Order("scheduled_at ASC").
 			Limit(10).
 			Find(&duePosts).Error; err != nil {
+			schedulerWake.Sleep(time.Minute)
 			continue
 		}
 
@@ -77,6 +78,22 @@ func (h *PostHandler) startSchedulerWorker() {
 			}
 			h.executePublishPost(post.ID)
 		}
+		if len(duePosts) == 10 {
+			continue // còn bài đến hạn
+		}
+
+		// Ngủ tới giờ của bài kế tiếp
+		wait := idleSleep
+		var next models.ScheduledPost
+		if h.DB.Where("status = ?", "pending").Order("scheduled_at ASC").Limit(1).Find(&next).RowsAffected > 0 {
+			if d := time.Until(next.ScheduledAt); d < wait {
+				wait = d
+			}
+		}
+		if wait < 5*time.Second {
+			wait = 5 * time.Second
+		}
+		schedulerWake.Sleep(wait)
 	}
 }
 
@@ -457,6 +474,8 @@ func (h *PostHandler) CreateScheduledPost(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể lưu lịch đăng bài"})
 		return
 	}
+	// Có bài hẹn giờ mới -> đánh thức bộ lập lịch để tính lại giờ đăng kế tiếp
+	schedulerWake.Wake()
 
 	if req.PublishNow {
 		h.executePublishPost(post.ID)

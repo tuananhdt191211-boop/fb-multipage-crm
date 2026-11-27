@@ -66,6 +66,7 @@ func (h *WebhookHandler) VerifyWebhook(c *gin.Context) {
 
 // HandleWebhook nhận sự kiện tin nhắn Messenger thời gian thực
 func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
+	markWebhookMsg() // có sự kiện từ Facebook -> bật quét tự trả lời trong 15 phút
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		c.Status(http.StatusBadRequest)
@@ -455,6 +456,11 @@ func (h *WebhookHandler) startDelayedAutoReplyWorker() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		// Chỉ quét khi vừa có tin nhắn khách gửi tới (webhook) trong 15 phút gần đây;
+		// không có tin thì không hỏi database -> Neon được nghỉ.
+		if !within(&lastWebhookMsg, 15*time.Minute) {
+			continue
+		}
 		var settings []models.PageAISetting
 		if err := h.DB.Where("auto_reply = ?", true).Find(&settings).Error; err != nil || len(settings) == 0 {
 			continue

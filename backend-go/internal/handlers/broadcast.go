@@ -331,7 +331,13 @@ func (h *BroadcastHandler) startWorker() {
 			Where("status = ?", "running").
 			Pluck("id", &runningCampaignIDs).Error; err != nil || len(runningCampaignIDs) == 0 {
 			sentInBatch = 0
-			time.Sleep(5 * time.Second)
+			if err != nil {
+				broadcastWake.Sleep(time.Minute)
+			} else {
+				// Không có chiến dịch nào đang chạy: ngủ dài cho database được nghỉ,
+				// tạo / chạy lại chiến dịch sẽ đánh thức ngay (broadcastWake)
+				broadcastWake.Sleep(idleSleep)
+			}
 			continue
 		}
 
@@ -340,7 +346,7 @@ func (h *BroadcastHandler) startWorker() {
 			Order("id ASC").
 			Limit(1).
 			Find(&msgs).Error; err != nil {
-			time.Sleep(5 * time.Second)
+			broadcastWake.Sleep(30 * time.Second)
 			continue
 		}
 
@@ -358,7 +364,8 @@ func (h *BroadcastHandler) startWorker() {
 				}
 			}
 			sentInBatch = 0
-			time.Sleep(5 * time.Second)
+			// Chiến dịch đang nạp danh sách người nhận (chạy nền) -> hỏi lại sau ít giây
+			broadcastWake.Sleep(20 * time.Second)
 			continue
 		}
 
@@ -745,6 +752,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	defer broadcastWake.Wake() // đánh thức bộ gửi tin đang ngủ
 
 	var msgs []BroadcastMessage
 	for _, cv := range validConvs {
@@ -811,5 +819,8 @@ func (h *BroadcastHandler) ToggleStatus(c *gin.Context) {
 		updates["pause_reason"] = ""
 	}
 	_ = h.DB.Model(&BroadcastCampaign{}).Where("id = ?", id).Updates(updates).Error
+	if body.Status == "running" {
+		broadcastWake.Wake()
+	}
 	c.JSON(http.StatusOK, gin.H{"status": body.Status})
 }

@@ -571,6 +571,7 @@ func (h *BroadcastHandler) createMarketingCampaign(c *gin.Context, in marketingC
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	defer broadcastWake.Wake() // đánh thức bộ gửi tin đang ngủ
 
 	msgs := make([]BroadcastMessage, 0, len(subs))
 	for _, s := range subs {
