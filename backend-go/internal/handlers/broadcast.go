@@ -662,7 +662,18 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	var page models.FacebookPage
 	if err := h.DB.Where("page_id = ?", req.PageID).First(&page).Error; err == nil {
 		if pageToken, decErr := security.DecryptSecret(page.EncryptedPageToken, h.getEncryptionKey()); decErr == nil && pageToken != "" {
-			if syncErr := h.pullAllConversationsFromMeta(page, pageToken, req.MaxRecipients); syncErr != nil {
+			var existing int64
+			h.DB.Model(&models.Conversation{}).
+				Where("page_id = ? AND COALESCE(TRIM(customer_ps_id), '') <> ''", req.PageID).
+				Count(&existing)
+			if existing > 0 {
+				// Đã có khách trong CRM: quét Meta chạy ngầm để không bắt giao diện chờ quá lâu (timeout)
+				go func(p models.FacebookPage, tok string, max int) {
+					if syncErr := h.pullAllConversationsFromMeta(p, tok, max); syncErr != nil {
+						log.Printf("[Broadcast] Cảnh báo quét ngầm từ Meta Business: %v", syncErr)
+					}
+				}(page, pageToken, req.MaxRecipients)
+			} else if syncErr := h.pullAllConversationsFromMeta(page, pageToken, req.MaxRecipients); syncErr != nil {
 				metaSyncErr = syncErr.Error()
 				log.Printf("[Broadcast] Cảnh báo quét từ Meta Business: %v", syncErr)
 			}

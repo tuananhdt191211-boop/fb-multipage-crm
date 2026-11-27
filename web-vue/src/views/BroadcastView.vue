@@ -347,7 +347,7 @@ async function createCampaign() {
       ...form.value,
       templates: form.value.templates.filter((t) => t.trim() !== ''),
       attachments: attachments.value.map(({ type, url, name }) => ({ type, url, name }))
-    })
+    }, { timeout: 180000 })
     const total = res.data?.total_recipients ?? 0
     message.value = `Đã khởi chạy chiến dịch cho ${total} khách hàng!`
     form.value.name = ''
