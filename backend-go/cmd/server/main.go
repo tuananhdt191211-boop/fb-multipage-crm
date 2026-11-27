@@ -219,6 +219,8 @@ func main() {
 	{
 		competitorsGroup.GET("", competitorHandler.ListCompetitors)
 		competitorsGroup.GET("/search", competitorHandler.SearchByKeyword)
+		competitorsGroup.GET("/explore", competitorHandler.ExploreContent)
+		competitorsGroup.POST("/explore/save", competitorHandler.SaveExploreItems)
 		competitorsGroup.POST("", competitorHandler.AddCompetitor)
 		competitorsGroup.POST("/:id/sync", competitorHandler.SyncCompetitorPosts)
 		competitorsGroup.DELETE("/:id", competitorHandler.DeleteCompetitor)

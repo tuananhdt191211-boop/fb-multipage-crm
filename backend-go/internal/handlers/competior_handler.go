@@ -773,7 +773,11 @@ func (h *CompetitorHandler) saveTikTokItems(comp *models.CompetitorPage, usernam
 }
 
 func (h *CompetitorHandler) syncFacebookPage(c *gin.Context, comp *models.CompetitorPage, pageID string) {
-	token := h.getAnyConnectedPageToken()
+	// Ưu tiên token của đúng Page đó (Page đã gộp); token Page khác không đọc được bài
+	token := h.pageTokenFor(pageID)
+	if token == "" {
+		token = h.getAnyConnectedPageToken()
+	}
 	if token == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần kết nối ít nhất 1 Fanpage của bạn trước để lấy token"})
 		return

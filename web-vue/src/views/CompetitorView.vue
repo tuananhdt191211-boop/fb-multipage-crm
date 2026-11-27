@@ -27,6 +27,7 @@ import {
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
 import CompetitorMaketResearch from './CompetitorMaketResearch.vue'
+import ContentExplorer from '../components/research/ContentExplorer.vue'
 
 interface CompetitorPageItem {
   id: number
@@ -60,7 +61,7 @@ interface CompetitorPostItem {
 
 const router = useRouter()
 
-const activeCompetitorTab = ref<'tracking' | 'market'>('tracking')
+const activeCompetitorTab = ref<'explore' | 'tracking' | 'market'>('explore')
 
 const competitors = ref<CompetitorPageItem[]>([])
 const posts = ref<CompetitorPostItem[]>([])
@@ -418,6 +419,20 @@ onMounted(loadData)
       <div class="mx-auto flex max-w-[1400px] items-center gap-3 overflow-x-auto">
         <button
           type="button"
+          @click="activeCompetitorTab = 'explore'"
+          class="inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-bold transition cursor-pointer"
+          :class="
+            activeCompetitorTab === 'explore'
+              ? 'border-emerald-600 text-emerald-700'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          "
+        >
+          <Search class="h-3.5 w-3.5" />
+          <span>Quét kênh & từ khoá</span>
+        </button>
+
+        <button
+          type="button"
           @click="activeCompetitorTab = 'tracking'"
           class="inline-flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-xs font-bold transition cursor-pointer"
           :class="
@@ -461,8 +476,13 @@ onMounted(loadData)
       {{ errorMsg }}
     </div>
 
+    <!-- TAB 0: Quét kênh / từ khoá TikTok, YouTube, Facebook -->
+    <main v-if="activeCompetitorTab === 'explore'" class="mx-auto max-w-[1400px] p-4 sm:p-5">
+      <ContentExplorer @saved="loadData" />
+    </main>
+
     <!-- TAB 1: Theo dõi kênh & nội dung đối thủ -->
-    <main v-if="activeCompetitorTab === 'tracking'" class="mx-auto max-w-[1400px] space-y-5 p-5">
+    <main v-else-if="activeCompetitorTab === 'tracking'" class="mx-auto max-w-[1400px] space-y-5 p-5">
       <!-- Thanh Thống kê nhanh (KPI Bar) -->
       <div class="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
         <div class="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-2xs">
