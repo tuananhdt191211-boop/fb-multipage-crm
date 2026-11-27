@@ -102,6 +102,7 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 					Title   string `json:"title"`
 					Payload string `json:"payload"`
 				} `json:"postback"`
+				Optin *MarketingOptinEvent `json:"optin"`
 			} `json:"messaging"`
 		} `json:"entry"`
 	}
@@ -122,6 +123,14 @@ func (h *WebhookHandler) HandleWebhook(c *gin.Context) {
 			}
 
 			for _, event := range entry.Messaging {
+				// Khách đồng ý / dừng / tiếp tục nhận tin marketing (webhook messaging_optins)
+				if event.Optin != nil {
+					if psid := strings.TrimSpace(event.Sender.ID); psid != "" && psid != pageID {
+						UpsertMarketingOptin(h.DB, pageID, psid, *event.Optin)
+					}
+					continue
+				}
+
 				// Xử lý sự kiện Postback (nếu khách bấm nút trên Template)
 				if event.Message == nil && event.Postback != nil {
 					customerPSID := event.Sender.ID
@@ -258,6 +267,7 @@ func (h *WebhookHandler) handleCustomerInteraction(
 				`UPDATE broadcast_messages SET status = 'cancelled', error_message = 'Khách hàng từ chối nhận tin' WHERE conversation_id = ? AND status = 'pending'`,
 				conv.ID,
 			).Error
+			StopMarketingForCustomer(h.DB, page.PageID, customerPSID)
 
 			h.sendOptOutConfirmation(page, conv)
 			return

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -18,6 +18,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  UserPlus,
   Users,
   X
 } from 'lucide-vue-next'
@@ -51,6 +52,16 @@ interface Campaign {
   failed_count: number
   created_at: string
   attachments?: MediaAttachment[]
+  delivery_mode?: string
+}
+
+interface SubscriberStats {
+  active: number
+  stopped: number
+  eligible_now: number
+  invites_7d: number
+  marketing_ready: boolean
+  marketing_error: string
 }
 
 const MAX_ATTACHMENTS = 5
@@ -87,8 +98,73 @@ const form = ref({
   min_delay_sec: 4,
   max_delay_sec: 9,
   batch_size: 20,
-  batch_pause_sec: 60
+  batch_pause_sec: 60,
+  // Marketing Messages (khách đã đăng ký nhận tin)
+  marketing_title: '',
+  marketing_image_url: '',
+  marketing_button_url: '',
+  marketing_button_title: 'Xem ngay',
+  marketing_daily_budget: 0
 })
+
+const isMarketing = computed(() => form.value.target_mode === 'subscribers')
+
+// ---- Lời mời nhận tin & người đăng ký ----
+const subStats = ref<SubscriberStats | null>(null)
+const optinForm = ref({ title: 'Thông tin mới và khuyến mãi', image_url: '' })
+const sendingOptin = ref(false)
+const syncingSubs = ref(false)
+
+async function fetchSubscribers() {
+  if (!form.value.page_id) {
+    subStats.value = null
+    return
+  }
+  try {
+    const { data } = await api.get<SubscriberStats>(`/broadcasts/subscribers?page_id=${form.value.page_id}`)
+    subStats.value = data
+  } catch {
+    subStats.value = null
+  }
+}
+
+async function sendOptinRequests() {
+  error.value = ''
+  message.value = ''
+  if (!form.value.page_id) return
+  sendingOptin.value = true
+  try {
+    const { data } = await api.post('/broadcasts/optin-requests', {
+      page_id: form.value.page_id,
+      title: optinForm.value.title,
+      image_url: optinForm.value.image_url
+    })
+    message.value = data?.message || `Đang gửi lời mời cho ${data?.queued ?? 0} khách`
+    await fetchSubscribers()
+  } catch (e: any) {
+    error.value = e?.response?.data?.error || 'Gửi lời mời nhận tin thất bại'
+  } finally {
+    sendingOptin.value = false
+  }
+}
+
+async function syncSubscribers() {
+  error.value = ''
+  message.value = ''
+  if (!form.value.page_id) return
+  syncingSubs.value = true
+  try {
+    const { data } = await api.post(`/broadcasts/subscribers/sync?page_id=${form.value.page_id}`)
+    message.value = data?.message || 'Đã đồng bộ người đăng ký'
+    await fetchSubscribers()
+  } catch (e: any) {
+    error.value = e?.response?.data?.error || 'Không đồng bộ được người đăng ký'
+  } finally {
+    syncingSubs.value = false
+  }
+}
+
+watch(() => form.value.page_id, () => fetchSubscribers())
 
 const runningCount = computed(() => campaigns.value.filter((c) => c.status === 'running').length)
 
@@ -123,6 +199,7 @@ function getPageNameById(pageId: string): string {
 function formatTargetMode(mode?: string): string {
   if (mode === 'within_24h') return 'Khách trong 24h'
   if (mode === 'over_24h') return 'Khách quá 24h'
+  if (mode === 'subscribers') return 'Khách đã đăng ký nhận tin (Marketing)'
   return 'Tất cả khách (trong & quá 24h)'
 }
 
@@ -276,6 +353,7 @@ async function createCampaign() {
     form.value.name = ''
     clearAttachments()
     await fetchData()
+    if (isMarketing.value) await fetchSubscribers()
   } catch (e: any) {
     error.value = e?.response?.data?.error || 'Tạo chiến dịch thất bại'
   } finally {
@@ -407,6 +485,53 @@ onUnmounted(() => {
         <span>{{ message }}</span>
       </div>
 
+      <!-- Mời khách đăng ký nhận tin (Marketing Messages) -->
+      <section class="rounded-2xl border border-indigo-200/80 bg-white p-5 text-left shadow-2xs">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div class="space-y-1 lg:max-w-md">
+            <div class="flex items-center gap-2">
+              <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
+                <UserPlus class="h-4 w-4" />
+              </div>
+              <h2 class="text-sm font-extrabold !text-slate-900">Mời khách đăng ký nhận tin</h2>
+            </div>
+            <p class="text-[11px] leading-relaxed text-slate-500">
+              Gửi lời mời cho khách đã nhắn Page trong 24h qua. Khách bấm đồng ý sẽ vào danh sách đăng ký, sau đó bạn gửi được tin khuyến mãi cho họ
+              <b>kể cả khi đã quá 24h</b> (chọn đối tượng "Khách đã đăng ký nhận tin"). Mỗi khách chỉ được mời 1 lần/tuần với cùng tiêu đề.
+            </p>
+            <div class="flex flex-wrap gap-2 pt-1 text-[11px]">
+              <span class="rounded-full bg-indigo-50 px-2.5 py-1 font-bold text-indigo-800">Đang đăng ký: {{ subStats?.active ?? 0 }}</span>
+              <span class="rounded-full bg-emerald-50 px-2.5 py-1 font-bold text-emerald-800">Nhận được hôm nay: {{ subStats?.eligible_now ?? 0 }}</span>
+              <span class="rounded-full bg-slate-100 px-2.5 py-1 font-bold text-slate-600">Đã dừng: {{ subStats?.stopped ?? 0 }}</span>
+              <span class="rounded-full bg-slate-100 px-2.5 py-1 font-bold text-slate-600">Lời mời 7 ngày: {{ subStats?.invites_7d ?? 0 }}</span>
+            </div>
+          </div>
+
+          <div class="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-xl">
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-600">Tiêu đề lời mời (tối đa 65 ký tự)</label>
+              <input v-model="optinForm.title" maxlength="65"
+                class="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/50 px-2.5 py-1.5 text-sm !text-slate-900" />
+            </div>
+            <div>
+              <label class="block text-[11px] font-semibold text-slate-600">Link ảnh (không bắt buộc)</label>
+              <input v-model="optinForm.image_url" placeholder="https://..."
+                class="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50/50 px-2.5 py-1.5 text-sm !text-slate-900" />
+            </div>
+            <button type="button" @click="sendOptinRequests" :disabled="sendingOptin || !form.page_id"
+              class="inline-flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white transition hover:bg-indigo-700 disabled:opacity-60 cursor-pointer">
+              <Send class="h-3.5 w-3.5" />
+              <span>{{ sendingOptin ? 'Đang gửi...' : 'Gửi lời mời cho khách trong 24h' }}</span>
+            </button>
+            <button type="button" @click="syncSubscribers" :disabled="syncingSubs || !form.page_id"
+              class="inline-flex items-center justify-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3.5 py-2 text-xs font-bold text-indigo-800 transition hover:bg-indigo-100 disabled:opacity-60 cursor-pointer">
+              <RefreshCw class="h-3.5 w-3.5" :class="{ 'animate-spin': syncingSubs }" />
+              <span>{{ syncingSubs ? 'Đang đồng bộ...' : 'Đồng bộ người đăng ký từ Meta' }}</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
       <!-- Layout 2 cột: Form tạo chiến dịch (7 cột) + Tiến độ gửi (5 cột) -->
       <div class="grid grid-cols-1 gap-6 lg:grid-cols-12 items-start">
         <!-- Cột trái: Form cấu hình -->
@@ -455,6 +580,7 @@ onUnmounted(() => {
                 <option value="all">Tất cả khách (trong & quá 24h)</option>
                 <option value="over_24h">Chỉ khách cũ quá 24h</option>
                 <option value="within_24h">Chỉ khách tương tác trong 24h</option>
+                <option value="subscribers">Khách đã đăng ký nhận tin (Marketing – kể cả ngoài 24h)</option>
               </select>
             </div>
 
@@ -462,7 +588,7 @@ onUnmounted(() => {
               <label class="mb-1.5 block text-xs font-bold !text-slate-700">Tag ưu tiên quá 24h</label>
               <select
                 v-model="form.out_of_window_tag"
-                :disabled="form.target_mode === 'within_24h'"
+                :disabled="form.target_mode === 'within_24h' || isMarketing"
                 class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2.5 text-xs font-semibold !text-slate-800 disabled:bg-slate-100 disabled:text-slate-400 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
               >
                 <option value="HUMAN_AGENT">HUMAN_AGENT (Hỗ trợ CSKH)</option>
@@ -481,6 +607,50 @@ onUnmounted(() => {
                 class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3.5 py-2.5 text-sm font-semibold !text-slate-900 transition focus:border-emerald-500 focus:bg-white focus:outline-none"
               />
             </div>
+          </div>
+
+          <!-- Cấu hình tin Marketing (chỉ khi chọn khách đã đăng ký) -->
+          <div v-if="isMarketing" class="space-y-3 rounded-xl border border-indigo-200 bg-indigo-50/50 p-4">
+            <div>
+              <p class="text-xs font-bold text-indigo-900">Tin Marketing Messages (tính phí theo tin giao tới khách)</p>
+              <p class="mt-0.5 text-[11px] text-indigo-800/80">
+                Gửi dạng thẻ: tiêu đề & mô tả tối đa 80 ký tự mỗi phần (phần dài hơn sẽ bị cắt). Mỗi khách nhận tối đa 1 tin/ngày.
+                Hiện có <b>{{ subStats?.eligible_now ?? 0 }}</b> khách đủ điều kiện nhận.
+              </p>
+              <p v-if="subStats && !subStats.marketing_ready" class="mt-1.5 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-900">
+                {{ subStats.marketing_error }}
+              </p>
+            </div>
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Tiêu đề thẻ (để trống = dòng đầu mẫu câu)</label>
+                <input v-model="form.marketing_title" maxlength="80" placeholder="VD: Ưu đãi 20% cuối tuần"
+                  class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Link ảnh (URL công khai, không bắt buộc)</label>
+                <input v-model="form.marketing_image_url" placeholder="https://..."
+                  class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900" />
+              </div>
+              <div>
+                <label class="block text-[11px] font-semibold text-slate-600">Link nút bấm (không bắt buộc)</label>
+                <input v-model="form.marketing_button_url" placeholder="https://shop.vn/khuyen-mai"
+                  class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900" />
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-[11px] font-semibold text-slate-600">Chữ trên nút</label>
+                  <input v-model="form.marketing_button_title" maxlength="20"
+                    class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900" />
+                </div>
+                <div>
+                  <label class="block text-[11px] font-semibold text-slate-600">Ngân sách/ngày (0 = Meta tự đặt)</label>
+                  <input v-model.number="form.marketing_daily_budget" type="number" min="0"
+                    class="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm !text-slate-900" />
+                </div>
+              </div>
+            </div>
+            <p class="text-[11px] text-indigo-800/70">Ảnh/video đính kèm bên dưới không áp dụng cho tin Marketing – dùng ô "Link ảnh" ở trên.</p>
           </div>
 
           <!-- Biến thể mẫu câu -->

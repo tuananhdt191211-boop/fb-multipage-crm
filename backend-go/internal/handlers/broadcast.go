@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"fb-multipage-crm/internal/config"
@@ -37,6 +38,28 @@ type BroadcastCampaign struct {
 	FailedCount     int       `json:"failed_count"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+
+	// Marketing Messages (target_mode = "subscribers")
+	DeliveryMode         string `gorm:"default:'standard'" json:"delivery_mode"` // standard | marketing
+	MetaCampaignID       string `json:"meta_campaign_id"`
+	MarketingTitle       string `json:"marketing_title"`
+	MarketingImageURL    string `gorm:"type:text" json:"marketing_image_url"`
+	MarketingButtonURL   string `gorm:"type:text" json:"marketing_button_url"`
+	MarketingButtonTitle string `json:"marketing_button_title"`
+	MarketingDailyBudget int64  `json:"marketing_daily_budget"`
+
+	// Ảnh/video gửi kèm sau nội dung chữ (lưu JSON, trả ra dạng mảng)
+	AttachmentsJSON string                `gorm:"type:text" json:"-"`
+	Attachments     []BroadcastAttachment `gorm:"-" json:"attachments"`
+}
+
+// AfterFind giải mã danh sách ảnh/video mỗi khi đọc chiến dịch từ DB
+func (c *BroadcastCampaign) AfterFind(tx *gorm.DB) error {
+	c.Attachments = nil
+	if strings.TrimSpace(c.AttachmentsJSON) != "" {
+		_ = json.Unmarshal([]byte(c.AttachmentsJSON), &c.Attachments)
+	}
+	return nil
 }
 
 type BroadcastMessage struct {
@@ -53,17 +76,23 @@ type BroadcastMessage struct {
 	ErrorMessage   string     `json:"error_message"`
 	SentAt         *time.Time `json:"sent_at"`
 	CreatedAt      time.Time  `json:"created_at"`
+
+	// Có giá trị => gửi qua Marketing Messages API bằng token đăng ký thay vì PSID
+	SubscriptionToken string `gorm:"type:text" json:"-"`
 }
 
 type BroadcastHandler struct {
-	DB         *gorm.DB
-	Cfg        *config.Config
-	HTTPClient *http.Client
-	vnLoc      *time.Location
+	DB           *gorm.DB
+	Cfg          *config.Config
+	HTTPClient   *http.Client
+	vnLoc        *time.Location
+	optinRunning sync.Map // page_id -> true khi đang gửi lời mời nhận tin
 }
 
 func NewBroadcastHandler(db *gorm.DB, cfg *config.Config) *BroadcastHandler {
 	_ = db.AutoMigrate(&BroadcastCampaign{}, &BroadcastMessage{}, &models.Conversation{})
+	migrateMarketingTables(db)
+	migrateBroadcastMediaTables(db)
 
 	_ = db.Exec(`
 		ALTER TABLE broadcast_messages
@@ -324,6 +353,18 @@ func (h *BroadcastHandler) startWorker() {
 			continue
 		}
 
+		// Tin marketing: gửi qua Marketing Messages API bằng token khách đã đăng ký nhận tin
+		if strings.TrimSpace(msg.SubscriptionToken) != "" {
+			var mcamp BroadcastCampaign
+			if h.DB.First(&mcamp, msg.CampaignID).Error != nil {
+				_ = h.DB.Model(&msg).Updates(map[string]any{"status": "failed", "error_message": "Không tìm thấy chiến dịch"}).Error
+				continue
+			}
+			h.processMarketingMessage(&mcamp, msg)
+			h.afterMessageStep(mcamp, &sentInBatch)
+			continue
+		}
+
 		var camp BroadcastCampaign
 		var page models.FacebookPage
 		var conv models.Conversation
@@ -352,19 +393,33 @@ func (h *BroadcastHandler) startWorker() {
 			continue
 		}
 
-		fbMsgID, errCode, errMsg := h.sendDirectMessage(page.PageID, pageToken, psid, msg.RenderedText, camp.OutOfWindowTag)
+		// Gửi chữ trước, sau đó lần lượt ảnh/video đính kèm của chiến dịch
+		fbMsgID, errCode, errMsg, mediaWarn := h.sendBroadcastContent(page.PageID, pageToken, psid, msg.RenderedText, camp)
 
 		if errCode == 0 && errMsg == "" {
 			now := time.Now()
-			_ = h.DB.Model(&msg).Updates(map[string]any{
+			updates := map[string]any{
 				"status":        "sent",
 				"fb_message_id": fbMsgID,
 				"sent_at":       &now,
-			}).Error
+			}
+			if mediaWarn != "" {
+				updates["error_message"] = mediaWarn
+			}
+			_ = h.DB.Model(&msg).Updates(updates).Error
 
 			_ = h.DB.Model(&camp).UpdateColumn("sent_count", gorm.Expr("sent_count + 1")).Error
 
-			conv.LastMessage = msg.RenderedText
+			inboxText := msg.RenderedText
+			if n := len(camp.Attachments); n > 0 {
+				if strings.TrimSpace(inboxText) == "" {
+					inboxText = fmt.Sprintf("[%d ảnh/video]", n)
+				} else {
+					inboxText += fmt.Sprintf(" [+%d ảnh/video]", n)
+				}
+			}
+
+			conv.LastMessage = inboxText
 			conv.LastMessageTime = now
 			_ = h.DB.Save(&conv).Error
 
@@ -373,7 +428,7 @@ func (h *BroadcastHandler) startWorker() {
 				FBMessageID:    fbMsgID,
 				SenderType:     "page",
 				SenderName:     page.Name,
-				Content:        msg.RenderedText,
+				Content:        inboxText,
 				SentAt:         now,
 			}).Error
 
@@ -395,77 +450,85 @@ func (h *BroadcastHandler) startWorker() {
 			}
 		}
 
-		var remaining int64
-		h.DB.Model(&BroadcastMessage{}).Where("campaign_id = ? AND status IN ?", camp.ID, []string{"pending", "processing"}).Count(&remaining)
-		if remaining == 0 {
-			_ = h.DB.Model(&camp).Where("status = ?", "running").Update("status", "completed").Error
-		}
-
-		sentInBatch++
-		if camp.BatchSize > 0 && sentInBatch >= camp.BatchSize {
-			sentInBatch = 0
-			pause := camp.BatchPauseSec
-			if pause < 30 {
-				pause = 60
-			}
-			time.Sleep(time.Duration(pause) * time.Second)
-			continue
-		}
-
-		minD := camp.MinDelaySec
-		if minD < 3 {
-			minD = 4
-		}
-		maxD := camp.MaxDelaySec
-		if maxD < minD {
-			maxD = minD + 5
-		}
-		time.Sleep(time.Duration(minD+rand.Intn(maxD-minD+1)) * time.Second)
+		h.afterMessageStep(camp, &sentInBatch)
 	}
 }
 
-func (h *BroadcastHandler) sendDirectMessage(pageID, pageToken, psid, text, preferredTag string) (string, int, string) {
-	callFBSend := func(msgType, tag string) (string, int, string) {
-		payload := map[string]any{
-			"recipient":      map[string]string{"id": psid},
-			"messaging_type": msgType,
-			"message":        map[string]string{"text": text},
-		}
-		if tag != "" {
-			payload["tag"] = tag
-		}
-		bodyBytes, _ := json.Marshal(payload)
-
-		sendURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages?access_token=%s", pageID, pageToken)
-		resp, err := h.HTTPClient.Post(sendURL, "application/json", bytes.NewBuffer(bodyBytes))
-		if err != nil {
-			return "", -1, "Không kết nối được Facebook: " + err.Error()
-		}
-		defer resp.Body.Close()
-
-		respBytes, _ := io.ReadAll(resp.Body)
-		var fbRes struct {
-			MessageID string `json:"message_id"`
-			Error     *struct {
-				Code    int    `json:"code"`
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		_ = json.Unmarshal(respBytes, &fbRes)
-		if fbRes.Error != nil {
-			code := fbRes.Error.Code
-			if code == 0 {
-				code = resp.StatusCode
-			}
-			return "", code, fbRes.Error.Message
-		}
-		return fbRes.MessageID, 0, ""
+// afterMessageStep: đánh dấu hoàn tất chiến dịch nếu hết tin, rồi nghỉ lô / giãn cách ngẫu nhiên
+func (h *BroadcastHandler) afterMessageStep(camp BroadcastCampaign, sentInBatch *int) {
+	var remaining int64
+	h.DB.Model(&BroadcastMessage{}).Where("campaign_id = ? AND status IN ?", camp.ID, []string{"pending", "processing"}).Count(&remaining)
+	if remaining == 0 {
+		_ = h.DB.Model(&camp).Where("status = ?", "running").Update("status", "completed").Error
 	}
 
+	*sentInBatch++
+	if camp.BatchSize > 0 && *sentInBatch >= camp.BatchSize {
+		*sentInBatch = 0
+		pause := camp.BatchPauseSec
+		if pause < 30 {
+			pause = 60
+		}
+		time.Sleep(time.Duration(pause) * time.Second)
+		return
+	}
+
+	minD := camp.MinDelaySec
+	if minD < 3 {
+		minD = 4
+	}
+	maxD := camp.MaxDelaySec
+	if maxD < minD {
+		maxD = minD + 5
+	}
+	time.Sleep(time.Duration(minD+rand.Intn(maxD-minD+1)) * time.Second)
+}
+
+// postFBMessage gửi 1 tin (chữ hoặc đính kèm) với messaging_type / tag chỉ định
+func (h *BroadcastHandler) postFBMessage(pageID, pageToken, psid string, message map[string]any, msgType, tag string) (string, int, string) {
+	payload := map[string]any{
+		"recipient":      map[string]string{"id": psid},
+		"messaging_type": msgType,
+		"message":        message,
+	}
+	if tag != "" {
+		payload["tag"] = tag
+	}
+	bodyBytes, _ := json.Marshal(payload)
+
+	sendURL := fmt.Sprintf("https://graph.facebook.com/v21.0/%s/messages?access_token=%s", pageID, pageToken)
+	resp, err := h.HTTPClient.Post(sendURL, "application/json", bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", -1, "Không kết nối được Facebook: " + err.Error()
+	}
+	defer resp.Body.Close()
+
+	respBytes, _ := io.ReadAll(resp.Body)
+	var fbRes struct {
+		MessageID string `json:"message_id"`
+		Error     *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(respBytes, &fbRes)
+	if fbRes.Error != nil {
+		code := fbRes.Error.Code
+		if code == 0 {
+			code = resp.StatusCode
+		}
+		return "", code, fbRes.Error.Message
+	}
+	return fbRes.MessageID, 0, ""
+}
+
+// sendDirectPayload: thử RESPONSE trước, nếu quá 24h (#10) thì thử lần lượt các Message Tag.
+// Trả thêm messaging_type / tag đã thành công để các tin tiếp theo (ảnh/video) dùng lại.
+func (h *BroadcastHandler) sendDirectPayload(pageID, pageToken, psid string, message map[string]any, preferredTag string) (string, int, string, string, string) {
 	// 1. Gửi thẳng cho khách trong 24h (RESPONSE)
-	mid, code, errMsg := callFBSend("RESPONSE", "")
+	mid, code, errMsg := h.postFBMessage(pageID, pageToken, psid, message, "RESPONSE", "")
 	if errMsg == "" {
-		return mid, 0, ""
+		return mid, 0, "", "RESPONSE", ""
 	}
 
 	// 2. Nếu quá 24h (#10), tự động thử lần lượt các Message Tag hợp lệ
@@ -480,14 +543,19 @@ func (h *BroadcastHandler) sendDirectMessage(pageID, pageToken, psid, text, pref
 			}
 		}
 		for _, tag := range tags {
-			mid, code, errMsg = callFBSend("MESSAGE_TAG", tag)
+			mid, code, errMsg = h.postFBMessage(pageID, pageToken, psid, message, "MESSAGE_TAG", tag)
 			if errMsg == "" {
-				return mid, 0, ""
+				return mid, 0, "", "MESSAGE_TAG", tag
 			}
 		}
 	}
 
-	return "", code, errMsg
+	return "", code, errMsg, "", ""
+}
+
+func (h *BroadcastHandler) sendDirectMessage(pageID, pageToken, psid, text, preferredTag string) (string, int, string) {
+	mid, code, errMsg, _, _ := h.sendDirectPayload(pageID, pageToken, psid, map[string]any{"text": text}, preferredTag)
+	return mid, code, errMsg
 }
 
 // CreateCampaign POST /api/v1/broadcasts
@@ -495,7 +563,8 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	var req struct {
 		PageID         string   `json:"page_id" binding:"required"`
 		Name           string   `json:"name" binding:"required"`
-		Templates      []string `json:"templates" binding:"required,min=1"`
+		Templates      []string              `json:"templates"`
+		Attachments    []BroadcastAttachment `json:"attachments"`
 		TargetMode     string   `json:"target_mode"`
 		OutOfWindowTag string   `json:"out_of_window_tag"`
 		CooldownDays   int      `json:"cooldown_days"`
@@ -504,6 +573,13 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		MaxDelaySec    int      `json:"max_delay_sec"`
 		BatchSize      int      `json:"batch_size"`
 		BatchPauseSec  int      `json:"batch_pause_sec"`
+
+		// Chỉ dùng khi target_mode = "subscribers" (Marketing Messages)
+		MarketingTitle       string `json:"marketing_title"`
+		MarketingImageURL    string `json:"marketing_image_url"`
+		MarketingButtonURL   string `json:"marketing_button_url"`
+		MarketingButtonTitle string `json:"marketing_button_title"`
+		MarketingDailyBudget int64  `json:"marketing_daily_budget"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -516,8 +592,13 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 			validTemplates = append(validTemplates, s)
 		}
 	}
-	if len(validTemplates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần ít nhất 1 mẫu nội dung"})
+	attachments, attErr := validateBroadcastAttachments(req.Attachments)
+	if attErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": attErr.Error()})
+		return
+	}
+	if len(validTemplates) == 0 && (len(attachments) == 0 || req.TargetMode == "subscribers") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần ít nhất 1 mẫu nội dung hoặc 1 ảnh/video đính kèm (tin Marketing bắt buộc có nội dung chữ)"})
 		return
 	}
 
@@ -538,6 +619,26 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 	if req.OutOfWindowTag == "" {
 		req.OutOfWindowTag = "HUMAN_AGENT"
+	}
+
+	// Khách đã đăng ký nhận tin -> gửi qua Marketing Messages API (không phụ thuộc cửa sổ 24h)
+	if req.TargetMode == "subscribers" {
+		h.createMarketingCampaign(c, marketingCampaignInput{
+			PageID:        req.PageID,
+			Name:          req.Name,
+			Templates:     validTemplates,
+			MaxRecipients: req.MaxRecipients,
+			MinDelaySec:   req.MinDelaySec,
+			MaxDelaySec:   req.MaxDelaySec,
+			BatchSize:     req.BatchSize,
+			BatchPauseSec: req.BatchPauseSec,
+			Title:         req.MarketingTitle,
+			ImageURL:      req.MarketingImageURL,
+			ButtonURL:     req.MarketingButtonURL,
+			ButtonTitle:   req.MarketingButtonTitle,
+			DailyBudget:   req.MarketingDailyBudget,
+		})
+		return
 	}
 
 	// Bước 1: Quét toàn bộ khách hàng có trong hộp thư Meta Business của Page về CRM
@@ -592,6 +693,11 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 
 	tplJSON, _ := json.Marshal(validTemplates)
+	attJSON := ""
+	if len(attachments) > 0 {
+		b, _ := json.Marshal(attachments)
+		attJSON = string(b)
+	}
 	camp := BroadcastCampaign{
 		PageID:          req.PageID,
 		Name:            req.Name,
@@ -604,6 +710,8 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		BatchPauseSec:   req.BatchPauseSec,
 		Status:          "running",
 		TotalRecipients: len(validConvs),
+		AttachmentsJSON: attJSON,
+		Attachments:     attachments,
 	}
 
 	if err := h.DB.Create(&camp).Error; err != nil {
@@ -617,7 +725,10 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		if psid == "" {
 			continue
 		}
-		tpl := validTemplates[rand.Intn(len(validTemplates))]
+		tpl := ""
+		if len(validTemplates) > 0 {
+			tpl = validTemplates[rand.Intn(len(validTemplates))]
+		}
 		name := strings.TrimSpace(cv.CustomerName)
 		if name == "" {
 			name = "anh/chị"

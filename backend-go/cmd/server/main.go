@@ -216,6 +216,11 @@ func main() {
 		broadcastsGroup.POST("/upload-media", broadcastHandler.UploadMedia)
 		broadcastsGroup.PATCH("/:id/status", broadcastHandler.ToggleStatus)
 
+		// Marketing Messages: mời khách đăng ký nhận tin & quản lý người đăng ký
+		broadcastsGroup.POST("/optin-requests", broadcastHandler.SendOptinRequests)
+		broadcastsGroup.GET("/subscribers", broadcastHandler.ListSubscribers)
+		broadcastsGroup.POST("/subscribers/sync", broadcastHandler.SyncSubscribers)
+
 	}
 
 	log.Printf("Backend Golang đang chạy tại http://localhost:%s", cfg.Port)
