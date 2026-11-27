@@ -18,6 +18,7 @@ import (
 type StorefrontHandler struct {
 	DB  *gorm.DB
 	Cfg *config.Config
+	AI  *AIHandler // dùng để dịch website bằng AI (gán trong main.go)
 }
 
 func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
@@ -25,6 +26,7 @@ func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
 	migrateSiteMedia(db)
 	migrateShopTables(db)
 	migrateSiteCustomers(db)
+	migrateTranslationCache(db)
 	return &StorefrontHandler{
 		DB:  db,
 		Cfg: cfg,
@@ -218,6 +220,7 @@ type saveStorefrontDraftReq struct {
 	PrimaryColor string `json:"primary_color"`
 	BlocksJSON   string `json:"draft_blocks_json"`
 	ThemeJSON    *string `json:"draft_theme_json"` // nil = không đổi
+	I18nJSON     *string `json:"draft_i18n_json"`  // nil = không đổi
 }
 
 // SaveDraft PUT /api/v1/storefront/draft
@@ -360,6 +363,7 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 		"primary_color": sf.PrimaryColor,
 		"blocks_json":   sf.PublishedBlocksJSON,
 		"theme_json":    sf.PublishedThemeJSON,
+		"i18n_json":     sf.PublishedI18nJSON,
 		"products":      pub,
 		"updated_at":    sf.UpdatedAt,
 	})

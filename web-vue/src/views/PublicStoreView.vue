@@ -1,18 +1,21 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Loader2 } from 'lucide-vue-next'
 import StoreRenderer from '../components/store/StoreRenderer.vue'
 import CartDrawer from '../components/store/CartDrawer.vue'
 import CustomerAuthDialog from '../components/store/CustomerAuthDialog.vue'
-import { loadPublicSite } from '../lib/publicSite'
+import { loadPublicSite, localizeSite } from '../lib/publicSite'
+import { t } from '../lib/i18n'
 import { useCart } from '../lib/cart'
 import type { PublicSiteData } from '../types/store'
 
 const route = useRoute()
 const loading = ref(true)
 const errorMsg = ref('')
-const site = ref<PublicSiteData | null>(null)
+const rawSite = ref<PublicSiteData | null>(null)
+// Bản đã dịch theo ngôn ngữ khách chọn (tự cập nhật khi đổi ngôn ngữ)
+const site = computed(() => (rawSite.value ? localizeSite(rawSite.value) : null))
 
 async function load() {
   loading.value = true
@@ -24,11 +27,11 @@ async function load() {
       (typeof route.query.slug === 'string' && route.query.slug.trim()) ||
       ''
     const domain = typeof route.query.domain === 'string' && route.query.domain.trim() ? route.query.domain.trim() : window.location.hostname
-    site.value = await loadPublicSite(slug ? { slug } : { domain })
-    document.title = site.value.site_title
-    useCart(site.value.slug).syncWith(site.value.products)
+    rawSite.value = await loadPublicSite(slug ? { slug } : { domain })
+    document.title = rawSite.value.site_title
+    useCart(rawSite.value.slug).syncWith(rawSite.value.products)
   } catch (err: any) {
-    errorMsg.value = err?.response?.data?.error || 'Không tìm thấy trang bán hàng đã xuất bản.'
+    errorMsg.value = err?.response?.data?.error || t('store_not_found')
   } finally {
     loading.value = false
   }
@@ -41,7 +44,7 @@ onMounted(load)
   <div class="min-h-screen bg-white text-slate-900">
     <div v-if="loading" class="flex items-center justify-center gap-2 py-24 text-sm text-slate-500">
       <Loader2 class="h-5 w-5 animate-spin text-emerald-600" />
-      <span>Đang tải cửa hàng...</span>
+      <span>{{ t('loading_store') }}</span>
     </div>
     <div v-else-if="errorMsg || !site" class="mx-auto max-w-lg px-6 py-24 text-center">
       <p class="text-sm font-semibold text-rose-600">{{ errorMsg }}</p>
@@ -56,7 +59,7 @@ onMounted(load)
         :logo-url="site.logo_url"
         :site-slug="site.slug"
       />
-      <CartDrawer :slug="site.slug" :accent="site.primary_color" />
+      <CartDrawer :slug="site.slug" :accent="site.primary_color" :products="site.products" />
       <CustomerAuthDialog :slug="site.slug" :accent="site.primary_color" :site-title="site.site_title" />
     </template>
   </div>

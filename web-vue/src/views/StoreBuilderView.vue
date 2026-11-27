@@ -15,6 +15,7 @@ import {
   LayoutList,
   Loader2,
   Monitor,
+  Languages,
   Palette,
   Plus,
   Redo2,
@@ -32,6 +33,8 @@ import TextStylePanel from '../components/store/TextStylePanel.vue'
 import ImageField from '../components/store/ImageField.vue'
 import type { AdminProduct, BlockType, PublicProduct, Site, SiteTheme, StoreBlock, TextFx } from '../types/store'
 import { parseTheme } from '../lib/theme'
+import { localizeBlocks, localizeProducts, parseI18n, previewLocale, type SiteI18n } from '../lib/i18n'
+import LanguagePanel from '../components/store/LanguagePanel.vue'
 import ThemeTypography from '../components/store/ThemeTypography.vue'
 
 const route = useRoute()
@@ -51,7 +54,16 @@ const blocks = ref<StoreBlock[]>([])
 const theme = ref<SiteTheme>({})
 const products = ref<PublicProduct[]>([])
 const selectedId = ref<string | null>(null)
-const leftTab = ref<'add' | 'sections' | 'theme'>('sections')
+const leftTab = ref<'add' | 'sections' | 'theme' | 'lang'>('sections')
+
+// Bán hàng quốc tế: thị trường + bản dịch (không đưa vào hoàn tác vì có thể rất lớn)
+const i18n = ref<SiteI18n>({ markets: [], tr: {} })
+const i18nDirty = ref(false)
+const previewLang = ref('vi')
+watch([previewLang, i18n], () => previewLocale(previewLang.value, i18n.value))
+const previewing = computed(() => previewLang.value !== 'vi')
+const canvasBlocks = computed(() => (previewing.value ? localizeBlocks(blocks.value, previewLang.value, i18n.value) : blocks.value))
+const canvasProducts = computed(() => (previewing.value ? localizeProducts(products.value, previewLang.value, i18n.value) : products.value))
 const device = ref<'desktop' | 'tablet' | 'mobile'>('desktop')
 
 const deviceWidth = computed(() => (device.value === 'mobile' ? '390px' : device.value === 'tablet' ? '768px' : '100%'))
@@ -91,7 +103,7 @@ function snapshot(): string {
   })
 }
 const savedSnapshot = ref('')
-const dirty = computed(() => !!site.value && currentSnap.value !== savedSnapshot.value)
+const dirty = computed(() => !!site.value && (currentSnap.value !== savedSnapshot.value || i18nDirty.value))
 const currentSnap = ref('')
 
 // Menu kiểu cũ (mảng chuỗi) -> {label, link}
@@ -116,6 +128,8 @@ function applySite(s: Site) {
   upgradeBlocks(parsed)
   blocks.value = parsed
   theme.value = parseTheme(s.draft_theme_json)
+  i18n.value = parseI18n(s.draft_i18n_json)
+  i18nDirty.value = false
   const snap = snapshot()
   savedSnapshot.value = snap
   currentSnap.value = snap
@@ -179,7 +193,8 @@ async function saveDraft(silent = false): Promise<boolean> {
       logo_url: site.value.logo_url,
       primary_color: site.value.primary_color,
       draft_blocks_json: JSON.stringify(cleanBlocks()),
-      draft_theme_json: JSON.stringify(theme.value)
+      draft_theme_json: JSON.stringify(theme.value),
+      draft_i18n_json: JSON.stringify(i18n.value)
     })
     applySite(data.site)
     resetHistory()
@@ -476,6 +491,7 @@ onMounted(() => {
   window.addEventListener('beforeunload', onBeforeUnload)
 })
 onBeforeUnmount(() => {
+  previewLocale('vi', { markets: [], tr: {} })
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('beforeunload', onBeforeUnload)
 })
@@ -568,9 +584,9 @@ watch(selectedId, (id) => {
         <aside class="flex max-h-[40vh] w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:max-h-none lg:w-72 lg:border-b-0 lg:border-r">
           <div class="flex shrink-0 border-b border-slate-100 p-1.5">
             <button
-              v-for="t in [{ v: 'sections', i: LayoutList, t: 'Section' }, { v: 'add', i: Plus, t: 'Thêm' }, { v: 'theme', i: Palette, t: 'Giao diện' }] as const"
+              v-for="t in [{ v: 'sections', i: LayoutList, t: 'Section' }, { v: 'add', i: Plus, t: 'Thêm' }, { v: 'theme', i: Palette, t: 'Giao diện' }, { v: 'lang', i: Languages, t: 'Ngôn ngữ' }] as const"
               :key="t.v"
-              class="flex flex-1 items-center justify-center gap-1 rounded-lg py-1.5 text-xs font-bold"
+              class="flex flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 text-[11px] font-bold leading-none"
               :class="leftTab === t.v ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'"
               @click="leftTab = t.v"
             >
@@ -630,6 +646,10 @@ watch(selectedId, (id) => {
             </template>
 
             <!-- Thư viện section: kéo thả vào trang -->
+            <template v-else-if="leftTab === 'lang'">
+              <LanguagePanel v-model:i18n="i18n" v-model:preview="previewLang" :site-id="site.id" :blocks="blocks" :products="products" @changed="i18nDirty = true" />
+            </template>
+
             <template v-else-if="leftTab === 'add'">
               <p class="mb-2 text-[11px] text-slate-500">Kéo section thả vào vị trí bất kỳ trên trang, hoặc bấm để thêm vào cuối.</p>
               <div v-for="g in catalogGroups" :key="g.name" class="mb-3 space-y-1.5">
@@ -705,14 +725,18 @@ watch(selectedId, (id) => {
             class="mx-auto min-h-full overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-slate-200 transition-[max-width] duration-300"
             :style="{ maxWidth: deviceWidth === '100%' ? '1200px' : deviceWidth }"
           >
+            <div v-if="previewing" class="flex items-center justify-between gap-2 bg-indigo-600 px-4 py-2 text-xs font-semibold text-white">
+              <span>Đang xem trước bản dịch — trang chỉ xem, không sửa trực tiếp. Sửa câu dịch ở tab Ngôn ngữ.</span>
+              <button type="button" class="shrink-0 rounded-md bg-white/20 px-2 py-1 hover:bg-white/30" @click="previewLang = 'vi'">Về tiếng Việt</button>
+            </div>
             <StoreRenderer
               :site-title="site.site_title"
               :primary-color="site.primary_color"
               :theme="theme"
               :logo-url="site.logo_url"
-              :blocks="blocks"
-              :products="products"
-              editable
+              :blocks="canvasBlocks"
+              :products="canvasProducts"
+              :editable="!previewing"
               :selected-id="selectedId"
               :drag-active="dragActive"
               @select="selectBlock"

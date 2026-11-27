@@ -459,6 +459,9 @@ func (h *StorefrontHandler) SaveSiteDraft(c *gin.Context) {
 	if req.ThemeJSON != nil {
 		sf.DraftThemeJSON = sanitizeThemeJSON(*req.ThemeJSON)
 	}
+	if req.I18nJSON != nil {
+		sf.DraftI18nJSON = sanitizeI18nJSON(*req.I18nJSON)
+	}
 	if err := h.DB.Save(sf).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lưu bản nháp thất bại."})
 		return
@@ -482,6 +485,7 @@ func (h *StorefrontHandler) PublishSite(c *gin.Context) {
 	}
 	sf.PublishedBlocksJSON = clean
 	sf.PublishedThemeJSON = sanitizeThemeJSON(sf.DraftThemeJSON)
+	sf.PublishedI18nJSON = sanitizeI18nJSON(sf.DraftI18nJSON)
 	sf.IsPublished = true
 	if err := h.DB.Save(sf).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Xuất bản thất bại."})

@@ -43,6 +43,7 @@ func main() {
 	videoDownloader := handlers.NewVideoDownloaderHandler()
 
 	storefrontHandler := handlers.NewStorefrontHandler(db, cfg)
+	storefrontHandler.AI = aiHandler
 
 	inboxHandler := handlers.NewInboxHandler(db, cfg)
 	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
@@ -108,6 +109,7 @@ func main() {
 	r.GET("/api/v1/storefront/public/customers/me", storefrontHandler.CustomerMe)
 	r.PUT("/api/v1/storefront/public/customers/me", storefrontHandler.CustomerUpdate)
 	r.GET("/api/v1/storefront/public/customers/orders", storefrontHandler.CustomerOrders)
+	r.GET("/api/v1/storefront/public/rates", storefrontHandler.PublicRates)
 	r.GET("/api/v1/payments/vnpay/ipn", storefrontHandler.VnpayIPN)
 	r.GET("/api/v1/inbox/avatar-check/:page_id/:psid", inboxHandler.CheckCustomerAvatar)
 
@@ -124,6 +126,7 @@ func main() {
 		storefrontGroup.POST("/sites/:id/publish", storefrontHandler.PublishSite)
 		storefrontGroup.POST("/sites/:id/unpublish", storefrontHandler.UnpublishSite)
 		storefrontGroup.DELETE("/sites/:id", storefrontHandler.DeleteSite)
+		storefrontGroup.POST("/sites/:id/translate", storefrontHandler.TranslateStrings)
 		storefrontGroup.GET("/sites/:id/domain", storefrontHandler.GetSiteDomain)
 		storefrontGroup.PUT("/sites/:id/domain", storefrontHandler.SetSiteDomain)
 		storefrontGroup.DELETE("/sites/:id/domain", storefrontHandler.RemoveSiteDomain)

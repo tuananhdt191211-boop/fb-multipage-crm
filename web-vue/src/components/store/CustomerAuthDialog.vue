@@ -3,6 +3,7 @@
 import { computed, ref, watch } from 'vue'
 import { Eye, EyeOff, Loader2, X } from 'lucide-vue-next'
 import { apiError, customerState, useCustomer } from '../../lib/customer'
+import { t } from '../../lib/i18n'
 
 const props = defineProps<{ slug: string; accent: string; siteTitle?: string }>()
 const cust = useCustomer(props.slug)
@@ -36,7 +37,7 @@ async function submit() {
     f.value.password = ''
     close()
   } catch (e) {
-    err.value = apiError(e, mode.value === 'login' ? 'Đăng nhập thất bại.' : 'Đăng ký thất bại.')
+    err.value = apiError(e, mode.value === 'login' ? t('login_failed') : t('register_failed'))
   } finally {
     busy.value = false
   }
@@ -49,24 +50,24 @@ async function submit() {
       <form class="w-full max-w-sm space-y-4 rounded-2xl bg-white p-6 text-slate-800 shadow-2xl" @submit.prevent="submit">
         <div class="flex items-start justify-between">
           <div>
-            <h2 class="text-xl font-extrabold">{{ mode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản' }}</h2>
-            <p class="mt-0.5 text-xs text-slate-500">{{ siteTitle || 'Cửa hàng' }} · theo dõi đơn hàng, đặt hàng nhanh hơn</p>
+            <h2 class="text-xl font-extrabold">{{ mode === 'login' ? t('login') : t('create_account') }}</h2>
+            <p class="mt-0.5 text-xs text-slate-500">{{ t('auth_sub', { shop: siteTitle || '' }) }}</p>
           </div>
-          <button type="button" class="rounded-lg p-1.5 hover:bg-slate-100" aria-label="Đóng" @click="close"><X class="h-5 w-5" /></button>
+          <button type="button" class="rounded-lg p-1.5 hover:bg-slate-100" :aria-label="t('close')" @click="close"><X class="h-5 w-5" /></button>
         </div>
 
         <div class="grid grid-cols-2 rounded-xl bg-slate-100 p-1 text-sm font-bold">
-          <button type="button" class="rounded-lg py-1.5 transition" :class="mode === 'login' ? 'bg-white shadow-sm' : 'text-slate-500'" @click="customerState.dialog = 'login'">Đăng nhập</button>
-          <button type="button" class="rounded-lg py-1.5 transition" :class="mode === 'register' ? 'bg-white shadow-sm' : 'text-slate-500'" @click="customerState.dialog = 'register'">Đăng ký</button>
+          <button type="button" class="rounded-lg py-1.5 transition" :class="mode === 'login' ? 'bg-white shadow-sm' : 'text-slate-500'" @click="customerState.dialog = 'login'">{{ t('login') }}</button>
+          <button type="button" class="rounded-lg py-1.5 transition" :class="mode === 'register' ? 'bg-white shadow-sm' : 'text-slate-500'" @click="customerState.dialog = 'register'">{{ t('register') }}</button>
         </div>
 
         <template v-if="mode === 'login'">
-          <input v-model="f.login" :class="inp" placeholder="Số điện thoại hoặc email" autocomplete="username" required />
+          <input v-model="f.login" :class="inp" :placeholder="t('login_id')" autocomplete="username" required />
         </template>
         <template v-else>
-          <input v-model="f.name" :class="inp" placeholder="Họ và tên" autocomplete="name" required />
-          <input v-model="f.phone" :class="inp" placeholder="Số điện thoại" inputmode="tel" autocomplete="tel" required />
-          <input v-model="f.email" :class="inp" type="email" placeholder="Email (không bắt buộc)" autocomplete="email" />
+          <input v-model="f.name" :class="inp" :placeholder="t('full_name')" autocomplete="name" required />
+          <input v-model="f.phone" :class="inp" :placeholder="t('phone')" inputmode="tel" autocomplete="tel" required />
+          <input v-model="f.email" :class="inp" type="email" :placeholder="t('email_optional')" autocomplete="email" />
         </template>
         <div class="relative">
           <input
@@ -74,12 +75,12 @@ async function submit() {
             :type="showPw ? 'text' : 'password'"
             :class="inp"
             class="pr-10"
-            :placeholder="mode === 'login' ? 'Mật khẩu' : 'Mật khẩu (ít nhất 6 ký tự)'"
+            :placeholder="mode === 'login' ? t('password') : t('password_new')"
             :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
             minlength="6"
             required
           />
-          <button type="button" class="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600" :aria-label="showPw ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'" @click="showPw = !showPw">
+          <button type="button" class="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600" :aria-label="showPw ? t('hide_password') : t('show_password')" @click="showPw = !showPw">
             <EyeOff v-if="showPw" class="h-4 w-4" /><Eye v-else class="h-4 w-4" />
           </button>
         </div>
@@ -87,11 +88,11 @@ async function submit() {
         <p v-if="err" class="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-600">{{ err }}</p>
 
         <button type="submit" class="flex w-full items-center justify-center gap-2 rounded-full py-3 text-sm font-bold text-white transition hover:opacity-90 disabled:opacity-60" :style="{ backgroundColor: accent }" :disabled="busy">
-          <Loader2 v-if="busy" class="h-4 w-4 animate-spin" /> {{ mode === 'login' ? 'Đăng nhập' : 'Đăng ký' }}
+          <Loader2 v-if="busy" class="h-4 w-4 animate-spin" /> {{ mode === 'login' ? t('login') : t('register') }}
         </button>
         <p class="text-center text-xs text-slate-500">
-          <template v-if="mode === 'login'">Chưa có tài khoản? <button type="button" class="font-bold underline" @click="customerState.dialog = 'register'">Đăng ký ngay</button></template>
-          <template v-else>Đã có tài khoản? <button type="button" class="font-bold underline" @click="customerState.dialog = 'login'">Đăng nhập</button></template>
+          <template v-if="mode === 'login'">{{ t('no_account') }} <button type="button" class="font-bold underline" @click="customerState.dialog = 'register'">{{ t('register_now') }}</button></template>
+          <template v-else>{{ t('have_account') }} <button type="button" class="font-bold underline" @click="customerState.dialog = 'login'">{{ t('login') }}</button></template>
         </p>
       </form>
     </div>

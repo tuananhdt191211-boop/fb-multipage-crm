@@ -31,7 +31,7 @@ import {
   X
 } from 'lucide-vue-next'
 import { safeHref, safeImg } from '../../lib/safeUrl'
-import { formatVnd } from '../../lib/format'
+import { money, t } from '../../lib/i18n'
 import { blockLabels } from '../../lib/blockFactory'
 import { useCart } from '../../lib/cart'
 import { customerState, useCustomer } from '../../lib/customer'
@@ -39,6 +39,7 @@ import EditableText from './EditableText.vue'
 import BannerSlider from './BannerSlider.vue'
 import NewsletterForm from './NewsletterForm.vue'
 import AccountMenu from './AccountMenu.vue'
+import MarketSwitcher from './MarketSwitcher.vue'
 import StoreIcon from './StoreIcon.vue'
 import { pathKey, scopedSectionCss } from '../../lib/textStyle'
 import { themeCss, usedFonts } from '../../lib/theme'
@@ -473,7 +474,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 :class="headerLayout(blk.data.layout).cta"
                 :style="{ backgroundColor: accent }"
               >
-                <EditableText :fx="fx(blk, ['cta_label'])" :model-value="blk.data.cta_label || (editable ? '' : 'Đặt mua ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
+                <EditableText :fx="fx(blk, ['cta_label'])" :model-value="blk.data.cta_label || (editable ? '' : t('cta_default'))" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
               </a>
 
               <!-- Tìm kiếm, tài khoản, giỏ hàng, menu điện thoại -->
@@ -481,7 +482,9 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 class="flex items-center"
                 :class="[blk.data.text_color ? '' : 'text-slate-700', headerLayout(blk.data.layout).cta ? '@3xl:order-4' : '', iconMode(blk) ? 'gap-1 @3xl:gap-2.5' : 'gap-0.5']"
               >
-                <button v-if="blk.data.show_search" type="button" class="rounded-full p-2 transition hover:bg-current/10" aria-label="Tìm kiếm" @click.stop="toggleSearch(blk.id)">
+                <!-- Quốc gia / ngôn ngữ / tiền tệ (chỉ hiện khi website bật từ 2 thị trường) -->
+                <MarketSwitcher v-if="!editable" compact />
+                <button v-if="blk.data.show_search" type="button" class="rounded-full p-2 transition hover:bg-current/10" :aria-label="t('search')" @click.stop="toggleSearch(blk.id)">
                   <Search :class="iconCls(blk)" />
                 </button>
 
@@ -490,8 +493,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   <button
                     type="button"
                     class="relative rounded-full p-2 transition hover:bg-current/10"
-                    :aria-label="customerName ? 'Tài khoản của ' + customerName : 'Đăng nhập'"
-                    :title="customerName ? customerName : 'Đăng nhập / Đăng ký'"
+                    :aria-label="customerName ? t('account_of', { name: customerName }) : t('login')"
+                    :title="customerName ? customerName : t('login_register')"
                     @click.stop="customerName ? (accountOpen = !accountOpen) : openAuth('login')"
                   >
                     <User :class="iconCls(blk)" />
@@ -508,15 +511,15 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 </div>
                 <!-- Kiểu chữ: trên điện thoại vẫn dùng biểu tượng -->
                 <template v-else-if="blk.data.right_mode === 'account'">
-                  <router-link v-if="customerName" :to="accountPath" class="rounded-full p-1.5 @xl:hidden" aria-label="Tài khoản">
+                  <router-link v-if="customerName" :to="accountPath" class="rounded-full p-1.5 @xl:hidden" :aria-label="t('account')">
                     <span class="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white" :style="{ backgroundColor: accent }">{{ initial(customerName) }}</span>
                   </router-link>
-                  <button v-else type="button" class="rounded-full p-2 transition hover:bg-current/10 @xl:hidden" aria-label="Đăng nhập" @click.stop="openAuth('login')">
+                  <button v-else type="button" class="rounded-full p-2 transition hover:bg-current/10 @xl:hidden" :aria-label="t('login')" @click.stop="openAuth('login')">
                     <User class="h-5 w-5" />
                   </button>
                 </template>
 
-                <button v-if="blk.data.show_cart || blk.data.right_mode === 'account'" type="button" class="relative rounded-full p-2 transition hover:bg-current/10" aria-label="Giỏ hàng" @click.stop="openCart">
+                <button v-if="blk.data.show_cart || blk.data.right_mode === 'account'" type="button" class="relative rounded-full p-2 transition hover:bg-current/10" :aria-label="t('cart')" @click.stop="openCart">
                   <ShoppingBag :class="iconCls(blk)" />
                   <span
                     v-if="cartCount > 0"
@@ -549,8 +552,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     />
                   </div>
                   <template v-else>
-                    <button type="button" class="rounded-full px-3.5 py-2 text-sm font-semibold transition hover:bg-current/10" @click.stop="openAuth('login')">Đăng nhập</button>
-                    <button type="button" class="rounded-full px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-110" :style="{ backgroundColor: accent }" @click.stop="openAuth('register')">Đăng ký</button>
+                    <button type="button" class="rounded-full px-3.5 py-2 text-sm font-semibold transition hover:bg-current/10" @click.stop="openAuth('login')">{{ t('login') }}</button>
+                    <button type="button" class="rounded-full px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-110" :style="{ backgroundColor: accent }" @click.stop="openAuth('register')">{{ t('register') }}</button>
                   </template>
                 </div>
 
@@ -558,7 +561,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   v-if="navItems(blk).length"
                   type="button"
                   class="rounded-lg p-2 @3xl:hidden"
-                  aria-label="Mở menu"
+                  :aria-label="t('open_menu')"
                   @click.stop="toggleMenu(blk.id)"
                 >
                   <component :is="openMenus[blk.id] ? X : Menu" class="h-6 w-6" />
@@ -570,11 +573,11 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <div v-if="searchOpen === blk.id" class="relative mt-3" @click.stop>
               <div class="flex items-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2.5 text-slate-800">
                 <Search class="h-4 w-4 text-slate-400" />
-                <input ref="searchInput" v-model="searchText" type="search" placeholder="Tìm sản phẩm..." class="min-w-0 flex-1 bg-transparent text-sm outline-none" @keydown.esc="searchOpen = null" />
-                <button type="button" class="text-slate-400 hover:text-slate-700" aria-label="Đóng tìm kiếm" @click="searchOpen = null"><X class="h-4 w-4" /></button>
+                <input ref="searchInput" v-model="searchText" type="search" :placeholder="t('search_placeholder')" class="min-w-0 flex-1 bg-transparent text-sm outline-none" @keydown.esc="searchOpen = null" />
+                <button type="button" class="text-slate-400 hover:text-slate-700" :aria-label="t('search_close')" @click="searchOpen = null"><X class="h-4 w-4" /></button>
               </div>
               <div v-if="searchText.trim()" class="absolute inset-x-0 top-full z-30 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-800 shadow-xl">
-                <p v-if="!searchResults.length" class="px-4 py-3 text-sm text-slate-500">Không tìm thấy sản phẩm phù hợp</p>
+                <p v-if="!searchResults.length" class="px-4 py-3 text-sm text-slate-500">{{ t('search_empty') }}</p>
                 <a
                   v-for="p in searchResults"
                   :key="p.id"
@@ -585,7 +588,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     <img v-if="safeImg(p.image_url)" :src="safeImg(p.image_url)" :alt="p.name" class="h-full w-full object-cover" />
                   </span>
                   <span class="min-w-0 flex-1 truncate text-sm font-semibold">{{ p.name }}</span>
-                  <span class="text-sm font-bold" :style="{ color: accent }">{{ formatVnd(p.price) }}</span>
+                  <span class="text-sm font-bold" :style="{ color: accent }">{{ money(p.price) }}</span>
                 </a>
               </div>
             </div>
@@ -608,21 +611,21 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 :style="{ backgroundColor: accent }"
                 @click="openMenus[blk.id] = false"
               >
-                {{ blk.data.cta_label || 'Đặt mua ngay' }}
+                {{ blk.data.cta_label || t('cta_default') }}
               </a>
               <!-- Tài khoản trong menu điện thoại -->
               <div v-if="blk.data.right_mode === 'account'" class="mt-2 border-t border-slate-100 pt-3">
                 <template v-if="customerName">
                   <router-link :to="accountPath" class="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-base font-semibold hover:bg-slate-50" @click="openMenus[blk.id] = false">
-                    <Package class="h-4 w-4 opacity-60" /> Đơn hàng của tôi
+                    <Package class="h-4 w-4 opacity-60" /> {{ t('my_orders') }}
                   </router-link>
                   <button type="button" class="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-base font-semibold text-rose-600 hover:bg-rose-50" @click="logoutCustomer(); openMenus[blk.id] = false">
-                    <LogOut class="h-4 w-4" /> Đăng xuất
+                    <LogOut class="h-4 w-4" /> {{ t('logout') }}
                   </button>
                 </template>
                 <div v-else class="grid grid-cols-2 gap-2">
-                  <button type="button" class="rounded-xl border border-slate-300 py-3 text-sm font-bold" @click="openAuth('login'); openMenus[blk.id] = false">Đăng nhập</button>
-                  <button type="button" class="rounded-xl py-3 text-sm font-bold text-white" :style="{ backgroundColor: accent }" @click="openAuth('register'); openMenus[blk.id] = false">Đăng ký</button>
+                  <button type="button" class="rounded-xl border border-slate-300 py-3 text-sm font-bold" @click="openAuth('login'); openMenus[blk.id] = false">{{ t('login') }}</button>
+                  <button type="button" class="rounded-xl py-3 text-sm font-bold text-white" :style="{ backgroundColor: accent }" @click="openAuth('register'); openMenus[blk.id] = false">{{ t('register') }}</button>
                 </div>
               </div>
             </div>
@@ -663,7 +666,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   class="inline-flex items-center justify-center rounded-full px-7 py-3.5 text-base font-bold text-white shadow-lg transition hover:-translate-y-0.5 hover:brightness-110"
                   :style="{ backgroundColor: accent, boxShadow: `0 10px 25px -8px ${accent}` }"
                 >
-                  <EditableText :fx="fx(blk, ['cta_label'])" :model-value="blk.data.cta_label || (editable ? '' : 'Khám phá ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
+                  <EditableText :fx="fx(blk, ['cta_label'])" :model-value="blk.data.cta_label || (editable ? '' : t('explore'))" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['cta_label'], $event)" />
                 </a>
               </div>
             </div>
@@ -682,7 +685,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <div class="mx-auto max-w-2xl text-center">
               <EditableText :fx="fx(blk, ['heading'])"
                 tag="h2"
-                :model-value="blk.data.heading || (editable ? '' : 'Sản phẩm nổi bật')"
+                :model-value="blk.data.heading || (editable ? '' : t('products_heading'))"
                 :editable="editable"
                 placeholder="Tiêu đề mục"
                 class="block text-2xl font-extrabold tracking-tight text-slate-900 @3xl:text-4xl"
@@ -694,21 +697,21 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <!-- Sản phẩm từ danh sách của shop -->
             <template v-if="blk.data.source === 'catalog'">
               <p v-if="!products?.length" class="text-center text-sm text-slate-500">
-                {{ editable ? 'Chưa có sản phẩm. Thêm sản phẩm ở trang "Quản lý sản phẩm".' : 'Sản phẩm sắp ra mắt.' }}
+                {{ editable ? 'Chưa có sản phẩm. Thêm sản phẩm ở trang "Quản lý sản phẩm".' : t('products_soon') }}
               </p>
               <div class="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @3xl:gap-6 @5xl:grid-cols-4">
                 <article v-for="prod in products || []" :key="prod.id" class="group flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white transition hover:-translate-y-1 hover:shadow-xl hover:shadow-slate-900/5">
                   <component :is="productLink(prod.id) ? 'a' : 'div'" :href="productLink(prod.id)" class="relative block aspect-square overflow-hidden bg-slate-100">
                     <img v-if="safeImg(prod.image_url)" :src="safeImg(prod.image_url)" :alt="prod.name" loading="lazy" class="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
                     <span v-if="discount(prod)" class="absolute left-2.5 top-2.5 rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-bold text-white">Sale -{{ discount(prod) }}%</span>
-                    <span v-if="!prod.in_stock" class="absolute inset-x-0 bottom-0 bg-slate-900/75 py-1.5 text-center text-xs font-bold text-white">Hết hàng</span>
+                    <span v-if="!prod.in_stock" class="absolute inset-x-0 bottom-0 bg-slate-900/75 py-1.5 text-center text-xs font-bold text-white">{{ t('out_of_stock') }}</span>
                   </component>
                   <div class="flex flex-1 flex-col gap-1.5 p-3.5 @3xl:p-4">
                     <component :is="productLink(prod.id) ? 'a' : 'h3'" :href="productLink(prod.id)" class="line-clamp-2 text-sm font-bold leading-snug text-slate-900 hover:underline @3xl:text-[15px]">{{ prod.name }}</component>
                     <p v-if="prod.description" class="line-clamp-2 text-xs leading-relaxed text-slate-500">{{ prod.description }}</p>
                     <div class="mt-auto flex flex-wrap items-baseline gap-x-2 pt-1.5">
-                      <span class="text-base font-extrabold @3xl:text-lg" :style="{ color: accent }">{{ formatVnd(prod.price) }}</span>
-                      <span v-if="prod.compare_price > prod.price" class="text-xs text-slate-400 line-through">{{ formatVnd(prod.compare_price) }}</span>
+                      <span class="text-base font-extrabold @3xl:text-lg" :style="{ color: accent }">{{ money(prod.price) }}</span>
+                      <span v-if="prod.compare_price > prod.price" class="text-xs text-slate-400 line-through">{{ money(prod.compare_price) }}</span>
                     </div>
                     <template v-if="blk.data.show_buy !== false && prod.in_stock">
                       <a
@@ -717,7 +720,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                         class="mt-2 block rounded-xl py-2.5 text-center text-sm font-bold text-white transition hover:brightness-110"
                         :style="{ backgroundColor: accent }"
                       >
-                        {{ blk.data.buy_label || 'Đặt mua' }}
+                        {{ blk.data.buy_label || t('buy') }}
                       </a>
                       <button
                         v-else
@@ -726,7 +729,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                         :style="{ backgroundColor: accent }"
                         @click.stop="addToCart(prod)"
                       >
-                        <ShoppingBag class="h-4 w-4" /> {{ blk.data.buy_label || 'Thêm vào giỏ' }}
+                        <ShoppingBag class="h-4 w-4" /> {{ blk.data.buy_label || t('add_to_cart') }}
                       </button>
                     </template>
                   </div>
@@ -751,7 +754,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     class="mt-2 block rounded-xl py-2.5 text-center text-sm font-bold text-white transition hover:brightness-110"
                     :style="{ backgroundColor: accent }"
                   >
-                    {{ blk.data.buy_label || 'Đặt mua' }}
+                    {{ blk.data.buy_label || t('buy') }}
                   </a>
                 </div>
               </article>
@@ -764,7 +767,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           <div :class="inner" class="space-y-10 py-14 @3xl:py-16">
             <EditableText :fx="fx(blk, ['heading'])"
               tag="h2"
-              :model-value="blk.data.heading || (editable ? '' : 'Cam kết dịch vụ')"
+              :model-value="blk.data.heading || (editable ? '' : t('features_heading'))"
               :editable="editable"
               placeholder="Tiêu đề mục"
               class="block text-center text-2xl font-extrabold tracking-tight text-slate-900 @3xl:text-3xl"
@@ -784,7 +787,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           <div :class="inner" class="space-y-10 py-16 @3xl:py-20">
             <EditableText :fx="fx(blk, ['heading'])"
               tag="h2"
-              :model-value="blk.data.heading || (editable ? '' : 'Khách hàng nói gì')"
+              :model-value="blk.data.heading || (editable ? '' : t('testimonials_heading'))"
               :editable="editable"
               placeholder="Tiêu đề mục"
               class="block text-center text-2xl font-extrabold tracking-tight text-slate-900 @3xl:text-3xl"
@@ -792,10 +795,10 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             />
             <div data-carousel class="relative">
             <div v-if="blk.data.layout === 'carousel'" class="-mt-4 mb-4 flex justify-end gap-2">
-              <button type="button" class="flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" aria-label="Trước" @click.stop="scrollCarousel($event, -1)">
+              <button type="button" class="flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" :aria-label="t('prev')" @click.stop="scrollCarousel($event, -1)">
                 <ChevronLeft class="h-5 w-5" />
               </button>
-              <button type="button" class="flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" aria-label="Sau" @click.stop="scrollCarousel($event, 1)">
+              <button type="button" class="flex h-10 w-10 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-700 hover:bg-slate-50" :aria-label="t('next')" @click.stop="scrollCarousel($event, 1)">
                 <ChevronRight class="h-5 w-5" />
               </button>
             </div>
@@ -936,11 +939,11 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <div class="mx-auto grid max-w-4xl grid-cols-1 gap-3 @xl:grid-cols-2">
               <a v-if="blk.data.phone" :href="safeHref('tel:' + blk.data.phone)" class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 transition hover:shadow-md">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full" :style="{ backgroundColor: tint(12), color: accent }"><Phone class="h-5 w-5" /></span>
-                <span><span class="block text-xs text-slate-500">Gọi điện</span><span class="block text-base font-bold text-slate-900">{{ blk.data.phone }}</span></span>
+                <span><span class="block text-xs text-slate-500">{{ t('call') }}</span><span class="block text-base font-bold text-slate-900">{{ blk.data.phone }}</span></span>
               </a>
               <a v-if="blk.data.zalo_link" :href="safeHref(blk.data.zalo_link)" target="_blank" rel="noopener" class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 transition hover:shadow-md">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-sky-50 text-sky-600"><MessageCircle class="h-5 w-5" /></span>
-                <span><span class="block text-xs text-slate-500">Nhắn tin</span><span class="block text-base font-bold text-slate-900">Chat Zalo</span></span>
+                <span><span class="block text-xs text-slate-500">{{ t('message') }}</span><span class="block text-base font-bold text-slate-900">{{ t('chat_zalo') }}</span></span>
               </a>
               <a v-if="blk.data.email" :href="safeHref('mailto:' + blk.data.email)" class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4 transition hover:shadow-md">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full" :style="{ backgroundColor: tint(12), color: accent }"><Mail class="h-5 w-5" /></span>
@@ -948,7 +951,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               </a>
               <div v-if="blk.data.address" class="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-4">
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full" :style="{ backgroundColor: tint(12), color: accent }"><MapPin class="h-5 w-5" /></span>
-                <span><span class="block text-xs text-slate-500">Địa chỉ</span><span class="block text-[15px] font-bold leading-snug text-slate-900">{{ blk.data.address }}</span></span>
+                <span><span class="block text-xs text-slate-500">{{ t('address') }}</span><span class="block text-[15px] font-bold leading-snug text-slate-900">{{ blk.data.address }}</span></span>
               </div>
               <p v-if="editable && !blk.data.phone && !blk.data.email && !blk.data.address && !blk.data.zalo_link" class="text-center text-xs text-slate-400 @xl:col-span-2">
                 Nhập số điện thoại, email, địa chỉ, Zalo ở bảng bên phải
@@ -1114,7 +1117,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 <EditableText :fx="fx(blk, ['subtitle'])" tag="p" multiline :model-value="blk.data.subtitle" :editable="editable" placeholder="Mô tả" class="block text-base leading-relaxed text-white/85 @3xl:text-lg" @update:model-value="set(blk, ['subtitle'], $event)" />
                 <div class="pt-3">
                   <a :href="safeHref(blk.data.button_link)" class="inline-flex items-center justify-center rounded-full bg-white px-7 py-3.5 text-base font-bold shadow-lg transition hover:-translate-y-0.5" :style="{ color: accent }">
-                    <EditableText :fx="fx(blk, ['button_text'])" :model-value="blk.data.button_text || (editable ? '' : 'Liên hệ ngay')" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['button_text'], $event)" />
+                    <EditableText :fx="fx(blk, ['button_text'])" :model-value="blk.data.button_text || (editable ? '' : t('contact_now'))" :editable="editable" placeholder="Chữ trên nút" @update:model-value="set(blk, ['button_text'], $event)" />
                   </a>
                 </div>
               </div>
@@ -1150,7 +1153,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         :href="safeHref('tel:' + floatContact.phone)"
         class="pp-ring flex h-14 w-14 items-center justify-center rounded-full text-white shadow-xl transition hover:scale-105"
         :style="{ backgroundColor: accent }"
-        aria-label="Gọi điện"
+        :aria-label="t('call')"
       >
         <Phone class="h-6 w-6" />
       </a>

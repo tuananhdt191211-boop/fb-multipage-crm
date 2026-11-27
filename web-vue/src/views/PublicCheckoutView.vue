@@ -5,10 +5,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { CreditCard, Loader2, Lock, Minus, Plus, Trash2, Truck } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
-import { loadPublicSite } from '../lib/publicSite'
+import { loadPublicSite, localizeSite } from '../lib/publicSite'
+import { formatVndPlain, isForeignCurrency, money, t } from '../lib/i18n'
 import { useCart } from '../lib/cart'
 import { customerHeaders, useCustomer } from '../lib/customer'
-import { formatVnd } from '../lib/format'
 import { safeImg } from '../lib/safeUrl'
 import type { PublicSiteData } from '../types/store'
 
@@ -17,7 +17,12 @@ const router = useRouter()
 const slug = computed(() => currentSlug(route.params.slug))
 const cart = useCart(slug.value)
 
-const site = ref<PublicSiteData | null>(null)
+const rawSite = ref<PublicSiteData | null>(null)
+const site = computed(() => (rawSite.value ? localizeSite(rawSite.value) : null))
+// Tên sản phẩm theo ngôn ngữ đang chọn
+function nameOf(l: { product_id: number; name: string }) {
+  return site.value?.products.find((p) => p.id === l.product_id)?.name || l.name
+}
 const loading = ref(true)
 const submitting = ref(false)
 const errorMsg = ref('')
@@ -56,9 +61,9 @@ function rememberInfo() {
 async function load() {
   loading.value = true
   try {
-    site.value = await loadPublicSite({ slug: slug.value })
-    cart.syncWith(site.value.products)
-    document.title = `Thanh toán – ${site.value.site_title}`
+    rawSite.value = await loadPublicSite({ slug: slug.value })
+    cart.syncWith(rawSite.value.products)
+    document.title = `${t('checkout')} – ${rawSite.value.site_title}`
     const { data } = await api.get('/storefront/public/checkout-config', { params: { slug: slug.value } })
     config.value = data
     form.value.payment_method = data.cod ? 'cod' : 'vnpay'
@@ -72,7 +77,7 @@ async function load() {
       if (!form.value.address) form.value.address = c.address
     }
   } catch (e: any) {
-    errorMsg.value = e?.response?.data?.error || 'Không tải được trang thanh toán.'
+    errorMsg.value = e?.response?.data?.error || t('checkout_failed_load')
   } finally {
     loading.value = false
   }
@@ -82,11 +87,11 @@ async function submit() {
   errorMsg.value = ''
   const f = form.value
   if (!f.customer_name.trim() || !f.phone.trim() || !f.address.trim()) {
-    errorMsg.value = 'Vui lòng nhập đủ họ tên, số điện thoại và địa chỉ.'
+    errorMsg.value = t('fill_required')
     return
   }
   if (!cart.state.lines.length) {
-    errorMsg.value = 'Giỏ hàng đang trống.'
+    errorMsg.value = t('cart_is_empty')
     return
   }
   submitting.value = true
@@ -106,7 +111,7 @@ async function submit() {
     cart.clear()
     router.replace({ name: 'public-order', params: { slug: slug.value, code: data.code }, query: { t: data.token } })
   } catch (e: any) {
-    errorMsg.value = e?.response?.data?.error || 'Đặt hàng chưa thành công, vui lòng thử lại.'
+    errorMsg.value = e?.response?.data?.error || t('order_failed')
   } finally {
     submitting.value = false
   }
@@ -116,102 +121,104 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-if="loading" class="flex min-h-screen items-center justify-center gap-2 text-sm text-slate-500"><Loader2 class="h-5 w-5 animate-spin" /> Đang tải...</div>
+  <div v-if="loading" class="flex min-h-screen items-center justify-center gap-2 text-sm text-slate-500"><Loader2 class="h-5 w-5 animate-spin" /> {{ t('loading') }}</div>
   <div v-else-if="!site" class="py-24 text-center text-sm font-semibold text-rose-600">{{ errorMsg }}</div>
   <PublicShell v-else :site="site">
     <div class="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
-      <h1 class="mb-8 text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Thanh toán</h1>
+      <h1 class="mb-8 text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">{{ t('checkout') }}</h1>
 
       <div v-if="!cart.state.lines.length" class="rounded-3xl bg-slate-50 py-16 text-center">
-        <p class="font-semibold text-slate-700">Giỏ hàng của bạn đang trống.</p>
-        <router-link :to="storePath(site.slug)" class="mt-4 inline-block rounded-full px-6 py-3 text-sm font-bold text-white" :style="{ backgroundColor: accent }">Tiếp tục mua sắm</router-link>
+        <p class="font-semibold text-slate-700">{{ t('cart_empty_long') }}</p>
+        <router-link :to="storePath(site.slug)" class="mt-4 inline-block rounded-full px-6 py-3 text-sm font-bold text-white" :style="{ backgroundColor: accent }">{{ t('continue_shopping') }}</router-link>
       </div>
 
       <form v-else class="grid grid-cols-1 gap-8 lg:grid-cols-[1fr_420px]" @submit.prevent="submit">
         <!-- Thông tin giao hàng -->
         <div class="space-y-6">
           <section class="space-y-4 rounded-3xl border border-slate-200 p-5 sm:p-6">
-            <h2 class="text-lg font-bold text-slate-900">Thông tin nhận hàng</h2>
+            <h2 class="text-lg font-bold text-slate-900">{{ t('shipping_info') }}</h2>
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label class="space-y-1">
-                <span class="text-sm font-semibold text-slate-700">Họ và tên *</span>
+                <span class="text-sm font-semibold text-slate-700">{{ t('full_name_req') }}</span>
                 <input v-model="form.customer_name" autocomplete="name" required class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
               </label>
               <label class="space-y-1">
-                <span class="text-sm font-semibold text-slate-700">Số điện thoại *</span>
+                <span class="text-sm font-semibold text-slate-700">{{ t('phone_req') }}</span>
                 <input v-model="form.phone" type="tel" autocomplete="tel" inputmode="tel" required class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
               </label>
             </div>
             <label class="block space-y-1">
-              <span class="text-sm font-semibold text-slate-700">Địa chỉ nhận hàng *</span>
-              <textarea v-model="form.address" rows="2" autocomplete="street-address" required placeholder="Số nhà, đường, phường/xã, quận/huyện, tỉnh/thành" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
+              <span class="text-sm font-semibold text-slate-700">{{ t('address_req') }}</span>
+              <textarea v-model="form.address" rows="2" autocomplete="street-address" required :placeholder="t('address_ph')" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
             </label>
             <label class="block space-y-1">
-              <span class="text-sm font-semibold text-slate-700">Email (không bắt buộc)</span>
+              <span class="text-sm font-semibold text-slate-700">{{ t('email_optional') }}</span>
               <input v-model="form.email" type="email" autocomplete="email" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
             </label>
             <label class="block space-y-1">
-              <span class="text-sm font-semibold text-slate-700">Ghi chú</span>
-              <textarea v-model="form.note" rows="2" placeholder="Thời gian nhận hàng, yêu cầu đặc biệt..." class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
+              <span class="text-sm font-semibold text-slate-700">{{ t('note') }}</span>
+              <textarea v-model="form.note" rows="2" :placeholder="t('note_ph')" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
             </label>
           </section>
 
           <section class="space-y-3 rounded-3xl border border-slate-200 p-5 sm:p-6">
-            <h2 class="text-lg font-bold text-slate-900">Phương thức thanh toán</h2>
+            <h2 class="text-lg font-bold text-slate-900">{{ t('payment_method') }}</h2>
             <label v-if="config.cod" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'cod' ? { borderColor: accent } : undefined" :class="form.payment_method === 'cod' ? '' : 'border-slate-200'">
               <input v-model="form.payment_method" type="radio" value="cod" class="h-4 w-4" />
               <Truck class="h-5 w-5 text-slate-500" />
-              <span><span class="block font-semibold text-slate-900">Thanh toán khi nhận hàng (COD)</span><span class="block text-xs text-slate-500">Kiểm tra hàng rồi trả tiền cho shipper</span></span>
+              <span><span class="block font-semibold text-slate-900">{{ t('cod') }}</span><span class="block text-xs text-slate-500">{{ t('cod_desc') }}</span></span>
             </label>
             <label v-if="config.vnpay" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'vnpay' ? { borderColor: accent } : undefined" :class="form.payment_method === 'vnpay' ? '' : 'border-slate-200'">
               <input v-model="form.payment_method" type="radio" value="vnpay" class="h-4 w-4" />
               <CreditCard class="h-5 w-5 text-slate-500" />
-              <span><span class="block font-semibold text-slate-900">Thanh toán online qua VNPay</span><span class="block text-xs text-slate-500">Thẻ ATM, Visa/Master, QR ngân hàng</span></span>
+              <span><span class="block font-semibold text-slate-900">{{ t('vnpay') }}</span><span class="block text-xs text-slate-500">{{ t('vnpay_desc') }}</span></span>
             </label>
           </section>
         </div>
 
         <!-- Tóm tắt đơn hàng -->
         <aside class="h-fit space-y-4 rounded-3xl bg-slate-50 p-5 sm:p-6 lg:sticky lg:top-24">
-          <h2 class="text-lg font-bold text-slate-900">Đơn hàng ({{ cart.count.value }} sản phẩm)</h2>
+          <h2 class="text-lg font-bold text-slate-900">{{ t('order_summary', { n: cart.count.value }) }}</h2>
           <ul class="divide-y divide-slate-200">
             <li v-for="l in cart.state.lines" :key="l.product_id" class="flex gap-3 py-3">
               <div class="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-white">
-                <img v-if="safeImg(l.image_url)" :src="safeImg(l.image_url)" :alt="l.name" class="h-full w-full object-cover" />
+                <img v-if="safeImg(l.image_url)" :src="safeImg(l.image_url)" :alt="nameOf(l)" class="h-full w-full object-cover" />
               </div>
               <div class="min-w-0 flex-1">
-                <div class="line-clamp-2 text-sm font-semibold text-slate-800">{{ l.name }}</div>
+                <div class="line-clamp-2 text-sm font-semibold text-slate-800">{{ nameOf(l) }}</div>
                 <div class="mt-1.5 flex items-center justify-between">
                   <div class="flex items-center rounded-full border border-slate-300 bg-white">
-                    <button type="button" class="p-1.5" aria-label="Giảm" @click="cart.setQty(l.product_id, l.qty - 1)"><Minus class="h-3 w-3" /></button>
+                    <button type="button" class="p-1.5" :aria-label="t('decrease')" @click="cart.setQty(l.product_id, l.qty - 1)"><Minus class="h-3 w-3" /></button>
                     <span class="w-6 text-center text-xs font-semibold">{{ l.qty }}</span>
-                    <button type="button" class="p-1.5" aria-label="Tăng" @click="cart.setQty(l.product_id, l.qty + 1)"><Plus class="h-3 w-3" /></button>
+                    <button type="button" class="p-1.5" :aria-label="t('increase')" @click="cart.setQty(l.product_id, l.qty + 1)"><Plus class="h-3 w-3" /></button>
                   </div>
-                  <span class="text-sm font-bold">{{ formatVnd(l.price * l.qty) }}</span>
+                  <span class="text-sm font-bold">{{ money(l.price * l.qty) }}</span>
                 </div>
               </div>
-              <button type="button" class="self-start p-1 text-slate-400 hover:text-rose-600" aria-label="Xoá" @click="cart.remove(l.product_id)"><Trash2 class="h-4 w-4" /></button>
+              <button type="button" class="self-start p-1 text-slate-400 hover:text-rose-600" :aria-label="t('remove')" @click="cart.remove(l.product_id)"><Trash2 class="h-4 w-4" /></button>
             </li>
           </ul>
           <div class="space-y-2 border-t border-slate-200 pt-4 text-sm">
-            <div class="flex justify-between"><span class="text-slate-600">Tạm tính</span><span class="font-semibold">{{ formatVnd(cart.subtotal.value) }}</span></div>
+            <div class="flex justify-between"><span class="text-slate-600">{{ t('subtotal') }}</span><span class="font-semibold">{{ money(cart.subtotal.value) }}</span></div>
             <div class="flex justify-between">
-              <span class="text-slate-600">Phí vận chuyển</span>
-              <span class="font-semibold">{{ shipping ? formatVnd(shipping) : 'Miễn phí' }}</span>
+              <span class="text-slate-600">{{ t('shipping_fee') }}</span>
+              <span class="font-semibold">{{ shipping ? money(shipping) : t('free') }}</span>
             </div>
-            <p v-if="config.free_ship_from > 0 && shipping > 0" class="text-xs text-slate-500">Mua thêm {{ formatVnd(config.free_ship_from - cart.subtotal.value) }} để được miễn phí vận chuyển</p>
+            <p v-if="config.free_ship_from > 0 && shipping > 0" class="text-xs text-slate-500">{{ t('free_ship_more', { amount: money(config.free_ship_from - cart.subtotal.value) }) }}</p>
             <div class="flex items-baseline justify-between border-t border-slate-200 pt-3">
-              <span class="font-bold text-slate-900">Tổng cộng</span>
-              <span class="text-2xl font-extrabold" :style="{ color: accent }">{{ formatVnd(total) }}</span>
+              <span class="font-bold text-slate-900">{{ t('total') }}</span>
+              <span class="text-2xl font-extrabold" :style="{ color: accent }">{{ money(total) }}</span>
             </div>
           </div>
+          <!-- Đang xem bằng ngoại tệ: ghi rõ số tiền VND thực thu -->
+          <p v-if="isForeignCurrency()" class="rounded-xl bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">{{ t('charged_in_vnd', { amount: formatVndPlain(total) }) }}</p>
           <p v-if="errorMsg" class="rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">{{ errorMsg }}</p>
           <button type="submit" :disabled="submitting" class="flex w-full items-center justify-center gap-2 rounded-full py-4 text-base font-bold text-white shadow-lg transition hover:brightness-110 disabled:opacity-60" :style="{ backgroundColor: accent }">
             <Loader2 v-if="submitting" class="h-5 w-5 animate-spin" />
             <Lock v-else class="h-4 w-4" />
-            {{ form.payment_method === 'vnpay' ? 'Thanh toán qua VNPay' : 'Đặt hàng' }}
+            {{ form.payment_method === 'vnpay' ? t('pay_vnpay') : t('place_order') }}
           </button>
-          <p class="text-center text-xs text-slate-400">Thông tin của bạn chỉ dùng để giao hàng.</p>
+          <p class="text-center text-xs text-slate-400">{{ t('privacy_note') }}</p>
         </aside>
       </form>
     </div>

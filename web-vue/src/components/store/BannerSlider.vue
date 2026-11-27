@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-vue-next'
 import { safeHref, safeImg } from '../../lib/safeUrl'
 import EditableText from './EditableText.vue'
 import { pathKey } from '../../lib/textStyle'
+import { t } from '../../lib/i18n'
 import type { StoreBlock, TextFx, TextStyle } from '../../types/store'
 
 const props = defineProps<{ blk: StoreBlock; editable?: boolean; accent: string }>()
@@ -115,10 +116,10 @@ function onTouchEnd(e: TouchEvent) {
     </div>
 
     <template v-if="slides.length > 1">
-      <button type="button" class="absolute left-3 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/80 text-slate-800 shadow hover:bg-white @3xl:flex" aria-label="Ảnh trước" @click.stop="go(idx - 1)">
+      <button type="button" class="absolute left-3 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/80 text-slate-800 shadow hover:bg-white @3xl:flex" :aria-label="t('slide_prev')" @click.stop="go(idx - 1)">
         <ChevronLeft class="h-5 w-5" />
       </button>
-      <button type="button" class="absolute right-3 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/80 text-slate-800 shadow hover:bg-white @3xl:flex" aria-label="Ảnh sau" @click.stop="go(idx + 1)">
+      <button type="button" class="absolute right-3 top-1/2 hidden h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/80 text-slate-800 shadow hover:bg-white @3xl:flex" :aria-label="t('slide_next')" @click.stop="go(idx + 1)">
         <ChevronRight class="h-5 w-5" />
       </button>
       <div class="absolute inset-x-0 bottom-4 flex justify-center gap-2">
@@ -128,7 +129,7 @@ function onTouchEnd(e: TouchEvent) {
           type="button"
           class="h-2 rounded-full transition-all"
           :class="i === idx ? 'w-7 bg-white' : 'w-2 bg-white/50 hover:bg-white/80'"
-          :aria-label="`Ảnh ${i + 1}`"
+          :aria-label="t('slide_n', { n: i + 1 })"
           @click.stop="go(i)"
         />
       </div>

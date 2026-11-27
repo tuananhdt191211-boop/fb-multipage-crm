@@ -86,6 +86,8 @@ export interface Site {
   published_blocks_json: string
   draft_theme_json?: string
   published_theme_json?: string
+  draft_i18n_json?: string
+  published_i18n_json?: string
   is_published: boolean
   created_at: string
   updated_at: string
@@ -123,6 +125,7 @@ export interface PublicSiteData {
   blocks: StoreBlock[]
   products: PublicProduct[]
   theme: SiteTheme
+  i18n: import('../lib/i18n').SiteI18n
 }
 
 export interface OrderItem {

@@ -42,7 +42,7 @@ watchEffect(() => ensureFonts(usedFonts(props.site.theme, [])))
       :products="site.products"
       :site-slug="site.slug"
     />
-    <CartDrawer :slug="site.slug" :accent="site.primary_color" />
+    <CartDrawer :slug="site.slug" :accent="site.primary_color" :products="site.products" />
     <CustomerAuthDialog :slug="site.slug" :accent="site.primary_color" :site-title="site.site_title" />
   </div>
 </template>
