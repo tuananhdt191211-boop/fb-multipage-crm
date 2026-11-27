@@ -307,7 +307,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 <template>
   <main
     class="pp-store @container w-full bg-white text-slate-800 antialiased"
-    :class="editable ? 'min-h-full pb-24' : ''"
+    :class="editable ? 'min-h-full pb-24 pt-4' : ''"
     @click.capture="onCanvasClickCapture"
     @click="onBackgroundClick"
     @dragover="onCanvasDragOver"
@@ -349,7 +349,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           />
           <div
             v-if="(selectedId === blk.id || hoverId === blk.id) && !dragActive"
-            class="absolute left-2 top-2 z-40 flex items-center gap-0.5 rounded-lg bg-indigo-600 px-1 py-0.5 text-white shadow-lg"
+            class="absolute left-3 top-0 z-40 flex -translate-y-1/2 items-center gap-0.5 rounded-lg bg-indigo-600 px-1 py-0.5 text-white shadow-lg"
             @click.stop
           >
             <span class="cursor-grab rounded p-1 hover:bg-white/20 active:cursor-grabbing" draggable="true" title="Kéo để đổi vị trí" @dragstart="emit('section-dragstart', index, $event)" @dragend="emit('section-dragend')">
@@ -383,8 +383,32 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           <div :class="inner" class="py-3.5">
             <div class="flex flex-wrap items-center gap-x-8 gap-y-3" :class="headerLayout(blk.data.layout).wrap">
               <!-- Logo + tên -->
-              <div class="group/brand flex min-w-0 flex-1 items-center gap-2.5 @3xl:flex-none" :class="headerLayout(blk.data.layout).brand">
-                <img v-if="showLogo(blk)" :src="logoSrc(blk)" :alt="blk.data.brand_name || siteTitle" class="w-auto max-w-[180px] object-contain" :style="{ height: logoH(blk) + 'px' }" />
+              <div class="group/brand relative flex min-w-0 flex-1 items-center gap-2.5 @3xl:flex-none" :class="headerLayout(blk.data.layout).brand">
+                <span v-if="showLogo(blk)" class="relative inline-flex shrink-0">
+                  <img :src="logoSrc(blk)" :alt="blk.data.brand_name || siteTitle" class="w-auto max-w-[180px] object-contain" :style="{ height: logoH(blk) + 'px' }" />
+                  <!-- Trình chỉnh sửa: ẩn / hiện tên chữ ngay trên trang (chỉ khi có logo).
+                       Nút nổi (absolute) nên không chiếm chỗ — logo nằm đúng vị trí như trang thật. -->
+                  <template v-if="editable && showLogo(blk)">
+                    <button
+                      v-if="blk.data.show_brand !== false"
+                      type="button"
+                      class="absolute -right-3 -top-2 z-30 rounded-full bg-slate-900/80 p-1 text-white opacity-0 shadow transition hover:bg-rose-600 group-hover/brand:opacity-100"
+                      title="Ẩn tên thương hiệu (chỉ hiện logo)"
+                      @click.stop="toggleFlag(blk, 'show_brand', false)"
+                    >
+                      <EyeOff class="h-3 w-3" />
+                    </button>
+                    <button
+                      v-else
+                      type="button"
+                      class="absolute left-full top-1/2 z-30 ml-2 inline-flex -translate-y-1/2 items-center gap-1 whitespace-nowrap rounded-full border border-dashed border-indigo-400 bg-white/95 px-2 py-0.5 text-[11px] font-bold text-indigo-600 opacity-0 shadow-sm transition hover:bg-indigo-50 group-hover/brand:opacity-100"
+                      title="Hiện lại tên thương hiệu cạnh logo"
+                      @click.stop="toggleFlag(blk, 'show_brand', true)"
+                    >
+                      <Eye class="h-3 w-3" /> Hiện tên
+                    </button>
+                  </template>
+                </span>
                 <EditableText :fx="fx(blk, ['brand_name'])"
                   v-if="showBrand(blk)"
                   :model-value="blk.data.brand_name || (editable ? '' : siteTitle)"
@@ -394,27 +418,6 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   :class="[brandSizeClass(blk.data.brand_size), blk.data.text_color ? '' : 'text-slate-900']"
                   @update:model-value="set(blk, ['brand_name'], $event)"
                 />
-                <!-- Trình chỉnh sửa: ẩn / hiện tên chữ ngay trên trang (chỉ khi có logo) -->
-                <template v-if="editable && showLogo(blk)">
-                  <button
-                    v-if="blk.data.show_brand !== false"
-                    type="button"
-                    class="shrink-0 rounded-full bg-slate-900/80 p-1 text-white opacity-0 shadow transition hover:bg-rose-600 group-hover/brand:opacity-100"
-                    title="Ẩn tên thương hiệu (chỉ hiện logo)"
-                    @click.stop="toggleFlag(blk, 'show_brand', false)"
-                  >
-                    <EyeOff class="h-3 w-3" />
-                  </button>
-                  <button
-                    v-else
-                    type="button"
-                    class="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-indigo-400 px-2 py-0.5 text-[11px] font-bold text-indigo-600 hover:bg-indigo-50"
-                    title="Hiện lại tên thương hiệu cạnh logo"
-                    @click.stop="toggleFlag(blk, 'show_brand', true)"
-                  >
-                    <Eye class="h-3 w-3" /> Hiện tên
-                  </button>
-                </template>
               </div>
 
               <!-- Menu máy tính -->
