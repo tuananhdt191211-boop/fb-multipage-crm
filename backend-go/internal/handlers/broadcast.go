@@ -142,8 +142,17 @@ func (h *BroadcastHandler) getEncryptionKey() string {
 	return "default-dev-master-key-change-in-prod"
 }
 
+// metaSyncStats thống kê kết quả quét để báo lỗi rõ ràng cho người dùng
+type metaSyncStats struct {
+	Threads   int    // số hội thoại Meta trả về
+	NoPSID    int    // hội thoại không xác định được khách
+	Saved     int    // số khách lưu được vào CRM
+	SaveError string // lỗi lưu DB đầu tiên (nếu có)
+}
+
 // pullAllConversationsFromMeta quét phân trang toàn bộ khách hàng có trong Meta Business Inbox của Page
-func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage, pageToken string, maxCount int) error {
+func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage, pageToken string, maxCount int) (metaSyncStats, error) {
+	var stats metaSyncStats
 	if maxCount <= 0 {
 		maxCount = 2000
 	}
@@ -156,7 +165,7 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 	for nextURL != "" && fetched < maxCount {
 		resp, err := h.HTTPClient.Get(nextURL)
 		if err != nil {
-			return fmt.Errorf("không kết nối được Graph API: %v", err)
+			return stats, fmt.Errorf("không kết nối được Graph API: %v", err)
 		}
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -189,13 +198,14 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 		}
 
 		if err := json.Unmarshal(body, &fbData); err != nil {
-			return fmt.Errorf("lỗi đọc dữ liệu từ Meta: %v", err)
+			return stats, fmt.Errorf("lỗi đọc dữ liệu từ Meta: %v", err)
 		}
 		if fbData.Error != nil {
-			return fmt.Errorf("Meta báo lỗi: %s", fbData.Error.Message)
+			return stats, fmt.Errorf("Meta báo lỗi: %s", fbData.Error.Message)
 		}
 
 		for _, thread := range fbData.Data {
+			stats.Threads++
 			customerPSID := ""
 			customerName := "Khách hàng Facebook"
 			for _, p := range thread.Participants.Data {
@@ -219,6 +229,7 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 				}
 			}
 			if customerPSID == "" {
+				stats.NoPSID++
 				continue
 			}
 
@@ -235,8 +246,12 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 			}
 
 			var conv models.Conversation
+			var saveErr error
 			res := h.DB.Where("thread_id = ? OR (page_id = ? AND customer_psid = ?)", threadID, page.PageID, customerPSID).Limit(1).Find(&conv)
-			if res.RowsAffected > 0 {
+			if res.Error != nil {
+				saveErr = res.Error
+			} else if res.RowsAffected > 0 {
+				conv.PageID = page.PageID
 				conv.PageName = page.Name
 				conv.CustomerPSID = customerPSID
 				if customerName != "Khách hàng Facebook" || conv.CustomerName == "" {
@@ -245,7 +260,7 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 				if updatedAt.After(conv.LastMessageTime) {
 					conv.LastMessageTime = updatedAt
 				}
-				_ = h.DB.Save(&conv).Error
+				saveErr = h.DB.Save(&conv).Error
 			} else {
 				conv = models.Conversation{
 					PageID:          page.PageID,
@@ -255,16 +270,24 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 					CustomerName:    customerName,
 					LastMessageTime: updatedAt,
 				}
-				_ = h.DB.Create(&conv).Error
+				saveErr = h.DB.Create(&conv).Error
 			}
+			if saveErr != nil {
+				if stats.SaveError == "" {
+					stats.SaveError = saveErr.Error()
+				}
+				log.Printf("[Broadcast] Lỗi lưu khách %s của Page %s: %v", customerPSID, page.Name, saveErr)
+				continue
+			}
+			stats.Saved++
 			fetched++
 		}
 
 		nextURL = fbData.Paging.Next
 	}
 
-	log.Printf("[Broadcast] Đã đồng bộ %d khách hàng từ Meta Business của Page %s", fetched, page.Name)
-	return nil
+	log.Printf("[Broadcast] Page %s: Meta trả %d hội thoại, lưu %d khách, %d không có PSID", page.Name, stats.Threads, stats.Saved, stats.NoPSID)
+	return stats, nil
 }
 
 func (h *BroadcastHandler) startWorker() {
@@ -863,10 +886,14 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 
 	// Bước 1: Quét toàn bộ khách hàng có trong hộp thư Meta Business của Page về CRM
 	var metaSyncErr string
+	var syncStats metaSyncStats
+	synced := false
 	var page models.FacebookPage
 	if err := h.DB.Where("page_id = ?", req.PageID).First(&page).Error; err == nil {
 		if pageToken, decErr := security.DecryptSecret(page.EncryptedPageToken, h.getEncryptionKey()); decErr == nil && pageToken != "" {
-			if syncErr := h.pullAllConversationsFromMeta(page, pageToken, req.MaxRecipients); syncErr != nil {
+			st, syncErr := h.pullAllConversationsFromMeta(page, pageToken, req.MaxRecipients)
+			syncStats, synced = st, syncErr == nil
+			if syncErr != nil {
 				metaSyncErr = syncErr.Error()
 				log.Printf("[Broadcast] Cảnh báo quét từ Meta Business: %v", syncErr)
 			}
@@ -904,9 +931,18 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 	}
 
 	if len(validConvs) == 0 {
-		msgErr := "Không tìm thấy khách hàng có PSID hợp lệ trong Page này. Hãy mở mục Hộp thư bấm 'Đồng bộ tin nhắn' rồi thử lại!"
-		if metaSyncErr != "" {
-			msgErr += " (Chi tiết: " + metaSyncErr + ")"
+		msgErr := "Không tìm thấy khách hàng có PSID hợp lệ trong Page này."
+		switch {
+		case metaSyncErr != "":
+			msgErr += " Chi tiết: " + metaSyncErr
+		case synced && syncStats.Threads == 0:
+			msgErr += " Meta trả về 0 hội thoại cho Page này. Kiểm tra: Page đã có khách nhắn tin chưa; khi kết nối Page đã cấp quyền đọc tin nhắn (pages_messaging, pages_read_engagement) chưa — nếu chưa hãy kết nối lại Page; App Facebook có đang ở chế độ Development không (chế độ này chỉ thấy tin của tài khoản tester)."
+		case synced && syncStats.SaveError != "":
+			msgErr += fmt.Sprintf(" Meta trả về %d hội thoại nhưng lưu vào CRM bị lỗi: %s", syncStats.Threads, syncStats.SaveError)
+		case synced && syncStats.Saved > 0 && req.TargetMode != "all":
+			msgErr += fmt.Sprintf(" Đã quét được %d khách nhưng không ai thuộc nhóm \"%s\". Hãy chọn \"Tất cả khách\".", syncStats.Saved, req.TargetMode)
+		case synced:
+			msgErr += fmt.Sprintf(" Meta trả về %d hội thoại, %d hội thoại không xác định được khách.", syncStats.Threads, syncStats.NoPSID)
 		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": msgErr})
 		return
