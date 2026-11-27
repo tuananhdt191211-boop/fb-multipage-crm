@@ -5,7 +5,7 @@
 // Bố cục dùng container query (@container) nên xem trước chế độ điện thoại/máy tính bảng hiển thị đúng.
 // Nền mỗi section trải hết chiều ngang, nội dung nằm trong khung max-w-6xl ở giữa.
 import { storePath } from '../../lib/storeHost'
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watchEffect } from 'vue'
 import {
   ArrowDown,
   ArrowUp,
@@ -35,7 +35,9 @@ import BannerSlider from './BannerSlider.vue'
 import NewsletterForm from './NewsletterForm.vue'
 import StoreIcon from './StoreIcon.vue'
 import { pathKey, scopedSectionCss } from '../../lib/textStyle'
-import type { BlockStyle, PublicProduct, StoreBlock, TextFx, TextStyle } from '../../types/store'
+import { themeCss, usedFonts } from '../../lib/theme'
+import { ensureFonts } from '../../lib/fonts'
+import type { BlockStyle, PublicProduct, SiteTheme, StoreBlock, TextFx, TextStyle } from '../../types/store'
 
 const props = defineProps<{
   siteTitle: string
@@ -47,7 +49,12 @@ const props = defineProps<{
   editable?: boolean
   selectedId?: string | null
   dragActive?: boolean
+  theme?: SiteTheme | null
 }>()
+
+// Kiểu chữ toàn trang + tải font Google đang dùng
+const themeStyle = computed(() => themeCss(props.theme))
+watchEffect(() => ensureFonts(usedFonts(props.theme, props.blocks)))
 
 const emit = defineEmits<{
   (e: 'select', id: string | null): void
@@ -284,7 +291,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 
 <template>
   <main
-    class="@container w-full bg-white text-slate-800 antialiased"
+    class="pp-store @container w-full bg-white text-slate-800 antialiased"
     :class="editable ? 'min-h-full pb-24' : ''"
     @click.capture="onCanvasClickCapture"
     @click="onBackgroundClick"
@@ -292,6 +299,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
     @drop.prevent="onCanvasDrop"
     @dragleave="onCanvasDragLeave"
   >
+    <component :is="'style'" v-if="themeStyle">{{ themeStyle }}</component>
     <!-- Trang trống trong trình chỉnh sửa -->
     <div
       v-if="editable && !blocks.length"
@@ -367,7 +375,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   :model-value="blk.data.brand_name || (editable ? '' : siteTitle)"
                   :editable="editable"
                   placeholder="Tên thương hiệu"
-                  class="truncate font-extrabold tracking-tight"
+                  class="pp-hfont truncate font-extrabold tracking-tight"
                   :class="[brandSizeClass(blk.data.brand_size), blk.data.text_color ? '' : 'text-slate-900']"
                   @update:model-value="set(blk, ['brand_name'], $event)"
                 />

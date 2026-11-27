@@ -1,5 +1,6 @@
 // Tải dữ liệu website công khai (dùng chung cho trang chủ, trang sản phẩm, thanh toán, đơn hàng)
 import { api } from './api'
+import { parseTheme } from './theme'
 import type { PublicProduct, PublicSiteData, StoreBlock } from '../types/store'
 
 const cache = new Map<string, Promise<PublicSiteData>>()
@@ -16,6 +17,7 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
       primary_color?: string
       logo_url?: string
       blocks_json?: string
+      theme_json?: string
       products?: PublicProduct[]
     }>('/storefront/public', { params })
     .then(({ data }) => {
@@ -33,7 +35,8 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
         primary_color: data.primary_color || '#059669',
         logo_url: data.logo_url || '',
         blocks,
-        products: data.products || []
+        products: data.products || [],
+        theme: parseTheme(data.theme_json)
       }
     })
   p.catch(() => cache.delete(key))

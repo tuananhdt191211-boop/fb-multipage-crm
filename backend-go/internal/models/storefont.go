@@ -14,6 +14,8 @@ type Storefront struct {
 	PrimaryColor        string    `gorm:"size:32" json:"primary_color"`
 	DraftBlocksJSON     string    `gorm:"type:text" json:"draft_blocks_json"`
 	PublishedBlocksJSON string    `gorm:"type:text" json:"published_blocks_json"`
+	DraftThemeJSON      string    `gorm:"type:text" json:"draft_theme_json"` // kiểu chữ toàn trang (font, cỡ H1..P)
+	PublishedThemeJSON  string    `gorm:"type:text" json:"published_theme_json"`
 	IsPublished         bool      `gorm:"default:false" json:"is_published"`
 	CreatedAt           time.Time `json:"created_at"`
 	UpdatedAt           time.Time `json:"updated_at"`

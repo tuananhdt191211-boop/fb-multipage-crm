@@ -92,7 +92,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         </label>
         <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
           Cỡ chữ
-          <select v-model="block.data.brand_size" class="rounded-lg border border-slate-200 px-2 py-1 text-sm">
+          <select :value="block.data.brand_size || 'md'" class="rounded-lg border border-slate-200 px-2 py-1 text-sm" @change="block.data.brand_size = ($event.target as HTMLSelectElement).value">
             <option value="sm">Nhỏ</option>
             <option value="md">Vừa</option>
             <option value="lg">Lớn</option>

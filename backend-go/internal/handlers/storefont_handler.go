@@ -216,6 +216,7 @@ type saveStorefrontDraftReq struct {
 	LogoURL      string `json:"logo_url"`
 	PrimaryColor string `json:"primary_color"`
 	BlocksJSON   string `json:"draft_blocks_json"`
+	ThemeJSON    *string `json:"draft_theme_json"` // nil = không đổi
 }
 
 // SaveDraft PUT /api/v1/storefront/draft
@@ -357,6 +358,7 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 		"logo_url":      sf.LogoURL,
 		"primary_color": sf.PrimaryColor,
 		"blocks_json":   sf.PublishedBlocksJSON,
+		"theme_json":    sf.PublishedThemeJSON,
 		"products":      pub,
 		"updated_at":    sf.UpdatedAt,
 	})

@@ -1,14 +1,6 @@
 // Kiểu chữ tuỳ chỉnh (giống Shopify): chọn trên giao diện -> sinh CSS / HTML tương ứng.
 import type { TextStyle } from '../types/store'
-
-export const fontChoices = [
-  { v: '', t: 'Mặc định' },
-  { v: "'Be Vietnam Pro', sans-serif", t: 'Be Vietnam Pro' },
-  { v: 'Arial, Helvetica, sans-serif', t: 'Arial' },
-  { v: "Georgia, 'Times New Roman', serif", t: 'Georgia (có chân)' },
-  { v: "'Times New Roman', Times, serif", t: 'Times New Roman' },
-  { v: "'Courier New', monospace", t: 'Courier (đơn cách)' }
-]
+import { fontStack, isKnownFont } from './fonts'
 
 export const tagChoices = [
   { v: 'h1', t: 'H1' },
@@ -61,7 +53,7 @@ export function styleDecls(ts?: TextStyle): { base: [string, string][]; desktop?
   if (ts.ls !== undefined && ts.ls !== null && String(ts.ls) !== '' && Number.isFinite(Number(ts.ls))) {
     base.push(['letter-spacing', `${Math.min(20, Math.max(-5, Number(ts.ls)))}px`])
   }
-  if (ts.font && fontChoices.some((f) => f.v === ts.font)) base.push(['font-family', ts.font])
+  if (isKnownFont(ts.font)) base.push(['font-family', fontStack(ts.font)])
   const d = clampNum(ts.size, 8, 160)
   let m = clampNum(ts.size_m, 8, 120)
   // Không nhập cỡ điện thoại -> tự thu nhỏ chữ lớn cho vừa màn hình

@@ -30,7 +30,9 @@ import StoreRenderer from '../components/store/StoreRenderer.vue'
 import SectionSettings from '../components/store/SectionSettings.vue'
 import TextStylePanel from '../components/store/TextStylePanel.vue'
 import ImageField from '../components/store/ImageField.vue'
-import type { AdminProduct, BlockType, PublicProduct, Site, StoreBlock, TextFx } from '../types/store'
+import type { AdminProduct, BlockType, PublicProduct, Site, SiteTheme, StoreBlock, TextFx } from '../types/store'
+import { parseTheme } from '../lib/theme'
+import ThemeTypography from '../components/store/ThemeTypography.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -45,6 +47,8 @@ let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 const site = ref<Site | null>(null)
 const blocks = ref<StoreBlock[]>([])
+// Kiểu chữ toàn trang (font, cỡ H1–P)
+const theme = ref<SiteTheme>({})
 const products = ref<PublicProduct[]>([])
 const selectedId = ref<string | null>(null)
 const leftTab = ref<'add' | 'sections' | 'theme'>('sections')
@@ -82,6 +86,7 @@ function snapshot(): string {
     t: site.value?.site_title,
     l: site.value?.logo_url,
     c: site.value?.primary_color,
+    th: theme.value,
     b: blocks.value
   })
 }
@@ -110,6 +115,7 @@ function applySite(s: Site) {
   }
   upgradeBlocks(parsed)
   blocks.value = parsed
+  theme.value = parseTheme(s.draft_theme_json)
   const snap = snapshot()
   savedSnapshot.value = snap
   currentSnap.value = snap
@@ -172,7 +178,8 @@ async function saveDraft(silent = false): Promise<boolean> {
       site_title: site.value.site_title,
       logo_url: site.value.logo_url,
       primary_color: site.value.primary_color,
-      draft_blocks_json: JSON.stringify(cleanBlocks())
+      draft_blocks_json: JSON.stringify(cleanBlocks()),
+      draft_theme_json: JSON.stringify(theme.value)
     })
     applySite(data.site)
     resetHistory()
@@ -224,6 +231,7 @@ function restore(snap: string) {
     site.value.logo_url = s.l
     site.value.primary_color = s.c
   }
+  theme.value = s.th || {}
   blocks.value = s.b
   if (selectedId.value && !blocks.value.some((b) => b.id === selectedId.value)) selectedId.value = null
   currentSnap.value = snap
@@ -231,7 +239,7 @@ function restore(snap: string) {
 }
 
 watch(
-  [blocks, () => site.value?.site_title, () => site.value?.logo_url, () => site.value?.primary_color],
+  [blocks, theme, () => site.value?.site_title, () => site.value?.logo_url, () => site.value?.primary_color],
   () => {
     if (!site.value) return
     currentSnap.value = snapshot()
@@ -666,6 +674,9 @@ watch(selectedId, (id) => {
                     <input v-model="site.primary_color" type="color" class="h-7 w-9 rounded border border-slate-200" title="Màu khác" />
                   </div>
                 </div>
+                <div class="border-t border-slate-100 pt-4">
+                  <ThemeTypography v-model="theme" />
+                </div>
                 <div class="space-y-1 rounded-xl bg-slate-50 p-3 text-xs">
                   <div class="font-bold text-slate-600">Địa chỉ trang</div>
                   <a :href="publicUrl" target="_blank" rel="noopener" class="break-all text-indigo-700 hover:underline">{{ publicUrl }}</a>
@@ -697,6 +708,7 @@ watch(selectedId, (id) => {
             <StoreRenderer
               :site-title="site.site_title"
               :primary-color="site.primary_color"
+              :theme="theme"
               :logo-url="site.logo_url"
               :blocks="blocks"
               :products="products"

@@ -42,6 +42,24 @@ export interface TextStyle {
   css?: string // khai báo CSS tự viết thêm
 }
 
+// Kiểu chữ toàn trang (tab "Giao diện")
+export type ThemeTag = 'h1' | 'h2' | 'h3' | 'h4' | 'p'
+export interface ThemeTypo {
+  font?: string
+  size?: number
+  size_m?: number
+  weight?: '300' | '400' | '500' | '600' | '700' | '800' | '900'
+  lh?: number
+  ls?: number
+  upper?: boolean
+  color?: string
+}
+export interface SiteTheme {
+  heading_font?: string
+  body_font?: string
+  tags?: Partial<Record<ThemeTag, ThemeTypo>>
+}
+
 export interface TextFx {
   block: string
   key: string
@@ -66,6 +84,8 @@ export interface Site {
   primary_color: string
   draft_blocks_json: string
   published_blocks_json: string
+  draft_theme_json?: string
+  published_theme_json?: string
   is_published: boolean
   created_at: string
   updated_at: string
@@ -102,6 +122,7 @@ export interface PublicSiteData {
   logo_url: string
   blocks: StoreBlock[]
   products: PublicProduct[]
+  theme: SiteTheme
 }
 
 export interface OrderItem {

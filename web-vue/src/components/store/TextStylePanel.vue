@@ -3,7 +3,8 @@
 // và xem / sửa CSS, HTML được sinh tự động — kiểu Shopify.
 import { computed, ref } from 'vue'
 import { AlignCenter, AlignJustify, AlignLeft, AlignRight, Bold, Check, Copy, Italic, RotateCcw, Underline, X } from 'lucide-vue-next'
-import { cleanTextStyle, cssPreview, fontChoices, htmlPreview, tagChoices } from '../../lib/textStyle'
+import { cleanTextStyle, cssPreview, htmlPreview, tagChoices } from '../../lib/textStyle'
+import { fontGroups } from '../../lib/fonts'
 import type { StoreBlock, TextStyle } from '../../types/store'
 
 const props = defineProps<{ block: StoreBlock; fxKey: string; baseTag: string; text: string }>()
@@ -148,7 +149,10 @@ async function copyCode() {
       <label class="space-y-1">
         <span :class="lbl">Phông chữ</span>
         <select :value="st.font || ''" :class="inp" @change="patch({ font: ($event.target as HTMLSelectElement).value || undefined })">
-          <option v-for="f in fontChoices" :key="f.t" :value="f.v">{{ f.t }}</option>
+          <option value="">Theo toàn trang</option>
+          <optgroup v-for="g in fontGroups" :key="g.group" :label="g.group">
+            <option v-for="f in g.fonts" :key="f.name" :value="f.name">{{ f.name }}</option>
+          </optgroup>
         </select>
       </label>
     </div>

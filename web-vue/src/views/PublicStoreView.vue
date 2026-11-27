@@ -49,6 +49,7 @@ onMounted(load)
       <StoreRenderer
         :site-title="site.site_title"
         :primary-color="site.primary_color"
+        :theme="site.theme"
         :blocks="site.blocks"
         :products="site.products"
         :logo-url="site.logo_url"
