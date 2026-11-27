@@ -275,7 +275,7 @@ onMounted(fetchPages)
           />
         </div>
 
-        <div class="inline-flex shrink-0 items-center rounded-xl border border-slate-200 bg-white p-1 shadow-sm self-start">
+        <div class="inline-flex max-w-full shrink-0 items-center overflow-x-auto rounded-xl border border-slate-200 bg-white p-1 shadow-sm self-start">
           <button
             type="button"
             @click="statusFilter = 'all'"
@@ -321,7 +321,7 @@ onMounted(fetchPages)
         </p>
       </div>
 
-      <div v-else class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div v-else class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <div
           v-for="page in filteredPages"
           :key="page.id"
@@ -340,8 +340,8 @@ onMounted(fetchPages)
             </div>
 
             <div class="min-w-0 flex-1">
-              <div class="flex items-center justify-between gap-2">
-                <h3 class="truncate text-sm font-bold !text-slate-900" :title="page.name">
+              <div class="flex items-start justify-between gap-2">
+                <h3 class="line-clamp-2 min-w-0 break-words text-sm font-bold !text-slate-900" :title="page.name">
                   {{ page.name }}
                 </h3>
                 <span
