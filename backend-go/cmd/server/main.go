@@ -212,6 +212,11 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.GET("/api/v1/webhook/facebook", webhookHandler.VerifyWebhook)
 	r.POST("/api/v1/webhook/facebook", webhookHandler.HandleWebhook)
 
+	// Xoá dữ liệu theo yêu cầu của Meta (Data Deletion Request Callback) + tra cứu trạng thái
+	dataDeletionHandler := handlers.NewDataDeletionHandler(db, cfg)
+	r.POST("/api/v1/facebook/data-deletion", dataDeletionHandler.Callback)
+	r.GET("/api/v1/facebook/data-deletion/:code", dataDeletionHandler.Status)
+
 	// Route công khai (không cần đăng nhập trước)
 	authPublic := r.Group("/api/v1/auth")
 	{

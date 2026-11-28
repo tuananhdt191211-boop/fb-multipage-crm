@@ -148,6 +148,27 @@ const appRoutes: RouteRecordRaw[] = [
   name: 'public-account',
   component: () => import('../views/PublicAccountView.vue')
 },
+// Trang pháp lý công khai (Meta App Review bắt buộc): không cần đăng nhập
+{
+  path: '/privacy',
+  name: 'legal-privacy',
+  component: () => import('../views/LegalView.vue'),
+  meta: { legalDoc: 'privacy' }
+},
+{
+  path: '/terms',
+  name: 'legal-terms',
+  component: () => import('../views/LegalView.vue'),
+  meta: { legalDoc: 'terms' }
+},
+{
+  path: '/data-deletion',
+  name: 'legal-deletion',
+  component: () => import('../views/LegalView.vue'),
+  meta: { legalDoc: 'deletion' }
+},
+{ path: '/privacy-policy', redirect: '/privacy' },
+{ path: '/terms-of-service', redirect: '/terms' },
 {
   path: '/:pathMatch(.*)*',
   redirect: '/'
