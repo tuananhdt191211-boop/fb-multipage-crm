@@ -34,6 +34,7 @@ import ImageField from '../components/store/ImageField.vue'
 import type { AdminProduct, BlockType, PublicProduct, Site, SiteTheme, StoreBlock, TextFx } from '../types/store'
 import { parseTheme } from '../lib/theme'
 import { localizeBlocks, localizeProducts, parseI18n, previewLocale, type SiteI18n } from '../lib/i18n'
+import { missingCount, translateRows, translationRows } from '../lib/siteTranslate'
 import LanguagePanel from '../components/store/LanguagePanel.vue'
 import ThemeTypography from '../components/store/ThemeTypography.vue'
 
@@ -59,6 +60,11 @@ const leftTab = ref<'add' | 'sections' | 'theme' | 'lang'>('sections')
 // Bán hàng quốc tế: thị trường + bản dịch (không đưa vào hoàn tác vì có thể rất lớn)
 const i18n = ref<SiteI18n>({ markets: [], tr: {} })
 const i18nDirty = ref(false)
+// Các câu tiếng Việt cần dịch + số câu còn thiếu bản dịch (hiện ở tab "Ngôn ngữ", tự dịch nốt khi xuất bản)
+const trRows = computed(() => (i18n.value.markets.length ? translationRows(blocks.value, products.value) : []))
+const trMissing = computed(() => (i18n.value.markets.length ? missingCount(i18n.value, trRows.value) : 0))
+const publishNote = ref('')
+const warnMsg = ref('')
 const previewLang = ref('vi')
 watch([previewLang, i18n], () => previewLocale(previewLang.value, i18n.value))
 const previewing = computed(() => previewLang.value !== 'vi')
@@ -217,14 +223,43 @@ async function saveDraft(silent = false): Promise<boolean> {
 async function publish() {
   if (!site.value) return
   publishing.value = true
+  warnMsg.value = ''
   try {
+    // Website bán nhiều nước: dịch nốt các câu còn thiếu trước khi xuất bản, để khách không gặp chữ Việt lẫn trong bản tiếng Anh...
+    let untranslated = 0
+    let reason = ''
+    if (i18n.value.markets.length && trMissing.value > 0) {
+      try {
+        const res = await translateRows({
+          siteId: site.value.id,
+          i18n: i18n.value,
+          rows: trRows.value,
+          onI18n: (v) => {
+            i18n.value = v
+            i18nDirty.value = true
+          },
+          onProgress: (s) => (publishNote.value = s)
+        })
+        untranslated = res.failed
+        reason = res.reason || ''
+      } catch (err) {
+        untranslated = trMissing.value
+        reason = apiError(err, '')
+      } finally {
+        publishNote.value = ''
+      }
+    }
     if (!(await saveDraft(true))) return
     const { data } = await api.post<{ site: Site }>(`/storefront/sites/${site.value.id}/publish`)
     const selected = selectedId.value
     applySite(data.site)
     resetHistory()
     selectedId.value = selected
-    showToast('Đã xuất bản. Khách hàng thấy bản mới ngay.')
+    if (untranslated) {
+      warnMsg.value = `Đã xuất bản, nhưng còn ${untranslated} câu chưa được dịch nên khách vẫn thấy tiếng Việt ở các câu đó${reason ? ` (${reason})` : ''}. Mở tab "Ngôn ngữ" bấm "Dịch bằng AI" rồi xuất bản lại.`
+    } else {
+      showToast('Đã xuất bản. Khách hàng thấy bản mới ngay.')
+    }
   } catch (err) {
     errorMsg.value = apiError(err, 'Xuất bản thất bại.')
   } finally {
@@ -575,13 +610,17 @@ watch(selectedId, (id) => {
             :disabled="saving || publishing"
             @click="publish"
           >
-            <Loader2 v-if="publishing" class="mr-1 inline h-3.5 w-3.5 animate-spin" /> Xuất bản
+            <Loader2 v-if="publishing" class="mr-1 inline h-3.5 w-3.5 animate-spin" /> {{ publishNote ? 'Đang dịch ' + publishNote : 'Xuất bản' }}
           </button>
         </div>
       </header>
 
       <p v-if="errorMsg" class="flex items-center justify-between gap-2 bg-rose-50 px-4 py-2 text-xs font-semibold text-rose-700">
         {{ errorMsg }} <button class="rounded p-0.5 hover:bg-rose-100" @click="errorMsg = ''"><X class="h-3.5 w-3.5" /></button>
+      </p>
+
+      <p v-if="warnMsg" data-testid="publish-warning" class="flex items-center justify-between gap-2 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-800">
+        {{ warnMsg }} <button class="rounded p-0.5 hover:bg-amber-100" @click="warnMsg = ''"><X class="h-3.5 w-3.5" /></button>
       </p>
 
       <div class="flex min-h-0 flex-1 flex-col lg:flex-row">
@@ -591,11 +630,12 @@ watch(selectedId, (id) => {
             <button
               v-for="t in [{ v: 'sections', i: LayoutList, t: 'Section' }, { v: 'add', i: Plus, t: 'Thêm' }, { v: 'theme', i: Palette, t: 'Giao diện' }, { v: 'lang', i: Languages, t: 'Ngôn ngữ' }] as const"
               :key="t.v"
-              class="flex flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 text-[11px] font-bold leading-none"
+              class="relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 text-[11px] font-bold leading-none"
               :class="leftTab === t.v ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'"
               @click="leftTab = t.v"
             >
               <component :is="t.i" class="h-3.5 w-3.5" /> {{ t.t }}
+              <span v-if="t.v === 'lang' && trMissing > 0" data-testid="lang-missing" class="absolute -right-0.5 -top-0.5 rounded-full bg-amber-500 px-1 text-[9px] font-extrabold text-white" :title="trMissing + ' câu chưa dịch'">{{ trMissing > 99 ? '99+' : trMissing }}</span>
             </button>
           </div>
 

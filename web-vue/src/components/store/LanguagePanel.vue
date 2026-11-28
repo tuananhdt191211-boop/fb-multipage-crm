@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // Bán hàng quốc tế (tab "Ngôn ngữ" của trình chỉnh sửa):
 // chọn thị trường, dịch bằng AI, sửa từng bản dịch, xem trước theo ngôn ngữ.
-import { computed, nextTick, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { CheckCircle2, Languages, Loader2, Search, Sparkles } from 'lucide-vue-next'
-import { api } from '../../lib/api'
 import { LANG_NAMES, LANG_VI, MARKET_BY_CODE, MARKET_REGIONS, langsOf } from '../../lib/markets'
-import { UI_VI, collectBlockTexts, collectProductTexts, type SiteI18n } from '../../lib/i18n'
+import type { SiteI18n } from '../../lib/i18n'
+import { getTranslation, translateRows, translationRows, withTranslations, type TrRow } from '../../lib/siteTranslate'
 import { looksLikeHtml, textFromHtml } from '../../lib/richHtml'
 import type { PublicProduct, StoreBlock } from '../../types/store'
 
@@ -50,56 +50,13 @@ function setDefault(code: string) {
 
 // ----------------------------------------------------------------- Nguồn tiếng Việt cần dịch
 
-interface Row {
-  key: string // b|blockId|path, p|id|name, p|id|o|chữ gốc (phân loại), u|key
-  group: 'Trang' | 'Sản phẩm' | 'Giao diện'
-  src: string
-}
+type Row = TrRow
 
-const rows = computed<Row[]>(() => {
-  const out: Row[] = []
-  for (const [bid, paths] of Object.entries(collectBlockTexts(props.blocks))) {
-    for (const [p, v] of Object.entries(paths)) out.push({ key: `b|${bid}|${p}`, group: 'Trang', src: v })
-  }
-  for (const [pid, e] of Object.entries(collectProductTexts(props.products))) {
-    if (e.name) out.push({ key: `p|${pid}|name`, group: 'Sản phẩm', src: e.name })
-    if (e.description) out.push({ key: `p|${pid}|description`, group: 'Sản phẩm', src: e.description })
-    for (const o of e.options || []) out.push({ key: `p|${pid}|o|${o}`, group: 'Sản phẩm', src: o })
-  }
-  for (const [k, v] of Object.entries(UI_VI)) out.push({ key: `u|${k}`, group: 'Giao diện', src: v })
-  return out
-})
-
-// Khoá: kind|a|b[|c...] — phần sau "b" của khoá phân loại (p|id|o|chữ gốc) là chữ gốc, có thể chứa dấu "|"
-function parseKey(key: string): { kind: string; a: string; b: string; c: string } {
-  const [kind = '', a = '', b = '', ...rest] = key.split('|')
-  return { kind, a, b, c: rest.join('|') }
-}
-
-function getTr(lang: string, key: string): string {
-  const tr = i18n.value.tr[lang]
-  if (!tr) return ''
-  const { kind, a, b, c } = parseKey(key)
-  if (kind === 'b') return tr.b?.[a]?.[b] || ''
-  if (kind === 'p') return b === 'o' ? tr.p?.[a]?.o?.[c] || '' : (tr.p?.[a] as any)?.[b] || ''
-  return tr.ui?.[a] || ''
-}
-
-// Ghi nhiều câu dịch của 1 ngôn ngữ trong 1 lần gán
-function setTrMany(lang: string, entries: Record<string, string>) {
-  const tr = JSON.parse(JSON.stringify(i18n.value.tr[lang] || {}))
-  for (const [key, value] of Object.entries(entries)) {
-    const { kind, a, b, c } = parseKey(key)
-    if (kind === 'b') ((tr.b ||= {})[a] ||= {})[b] = value
-    else if (kind === 'p' && b === 'o') (((tr.p ||= {})[a] ||= {}).o ||= {})[c] = value
-    else if (kind === 'p') ((tr.p ||= {})[a] ||= {})[b] = value
-    else (tr.ui ||= {})[a] = value
-  }
-  i18n.value = { ...i18n.value, tr: { ...i18n.value.tr, [lang]: tr } }
-}
+const rows = computed<Row[]>(() => translationRows(props.blocks, props.products))
+const getTr = (lang: string, key: string) => getTranslation(i18n.value, lang, key)
 
 function setTr(lang: string, key: string, value: string) {
-  setTrMany(lang, { [key]: value })
+  i18n.value = withTranslations(i18n.value, lang, { [key]: value })
 }
 
 function doneCount(lang: string) {
@@ -119,23 +76,18 @@ async function translateAll() {
   running.value = true
   errorMsg.value = ''
   warnMsg.value = ''
-  let failed = 0
   try {
-    for (const [li, lang] of langs.value.entries()) {
-      const todo = rows.value.filter((r) => redoAll.value || !getTr(lang, r.key))
-      for (let i = 0; i < todo.length; i += 150) {
-        const chunk = todo.slice(i, i + 150)
-        progress.value = `${LANG_VI[lang]} (${li + 1}/${langs.value.length}) · ${Math.min(i + chunk.length, todo.length)}/${todo.length} câu`
-        const texts: Record<string, string> = {}
-        for (const r of chunk) texts[r.key] = r.src
-        const { data } = await api.post(`/storefront/sites/${props.siteId}/translate`, { lang, texts }, { timeout: 180000 })
-        setTrMany(lang, (data.translations || {}) as Record<string, string>)
-        await nextTick() // đợi v-model cập nhật trước nhóm câu tiếp theo
-        failed += Number(data.failed || 0)
-      }
+    const res = await translateRows({
+      siteId: props.siteId,
+      i18n: i18n.value,
+      rows: rows.value,
+      redo: redoAll.value,
+      onI18n: (v) => (i18n.value = v),
+      onProgress: (s) => (progress.value = s)
+    })
+    if (res.failed) {
+      warnMsg.value = `Còn ${res.failed} câu AI chưa dịch được${res.reason ? ` (${res.reason})` : ''}. Bấm "Dịch bằng AI" lần nữa để dịch tiếp phần còn thiếu.`
     }
-    progress.value = ''
-    if (failed) warnMsg.value = `Còn ${failed} câu AI chưa dịch được (thường do giới hạn lượt gọi AI). Bấm "Dịch bằng AI" lần nữa để dịch tiếp phần còn thiếu.`
     emit('changed')
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || 'Dịch chưa xong, vui lòng thử lại. Phần đã dịch vẫn được giữ.'

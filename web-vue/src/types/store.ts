@@ -251,3 +251,6 @@ export interface ShopOrder {
   paid_at?: string | null
   created_at: string
 }
+
+// Kiểu trượt của danh sách sản phẩm (section "Sản phẩm"); không đặt = lưới
+export type CarouselLayout = 'slide' | 'dots' | 'center' | 'marquee'

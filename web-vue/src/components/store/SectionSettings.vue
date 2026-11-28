@@ -147,7 +147,54 @@ function applyHeaderPreset(key: 'brand' | 'black' | 'light' | 'classic') {
   data.style = st
 }
 
-const cssPlaceholder = 'border-radius: 24px;\n\nh2 {\n  color: #be123c;\n  font-size: 48px;\n}\n\nbutton:hover {\n  transform: scale(1.03);\n}'
+// Màu nền gợi ý cho đầu trang (có màu thương hiệu của shop)
+const headerBgSwatches = computed(() => [...new Set(['#ffffff', '#f8fafc', '#0f172a', '#111111', darken(props.siteColor), String(props.siteColor || '#059669')])])
+
+// ----- Banner chữ + ảnh: chiều cao -----
+const heroHeights = [
+  { v: 0, t: 'Tự động' },
+  { v: 320, t: 'Thấp' },
+  { v: 480, t: 'Vừa' },
+  { v: 640, t: 'Cao' },
+  { v: 800, t: 'Rất cao' }
+]
+
+// ----- Sản phẩm: kiểu hiển thị -----
+type ProductLayout = 'grid' | 'slide' | 'dots' | 'center' | 'marquee'
+const productLayouts: { v: ProductLayout; t: string; d: string }[] = [
+  { v: 'grid', t: 'Lưới', d: 'Xếp thành lưới nhiều hàng' },
+  { v: 'slide', t: 'Trượt ngang', d: 'Vuốt hoặc bấm mũi tên' },
+  { v: 'dots', t: 'Chia trang', d: 'Có chấm tròn, tự chuyển trang' },
+  { v: 'center', t: 'Tâm điểm', d: 'Sản phẩm ở giữa to nhất' },
+  { v: 'marquee', t: 'Chạy liên tục', d: 'Dải tự chạy, rê chuột để dừng' }
+]
+const productLayout = computed<ProductLayout>(() => {
+  const l = d().layout as ProductLayout
+  return productLayouts.some((o) => o.v === l) ? l : 'grid'
+})
+function setProductLayout(v: ProductLayout) {
+  d().layout = v
+  // Kiểu "tâm điểm" đẹp nhất với số sản phẩm lẻ; kiểu khác giữ số shop đã chọn
+  if (v === 'center' && !d().per_view) d().per_view = 3
+}
+// Hình minh hoạ nhỏ của từng kiểu (khung 60 × 30)
+function layoutPreview(v: ProductLayout): { rects: { x: number; y: number; w: number; h: number; o: number }[]; dots: number } {
+  const row = (xs: number[], w: number, h: number, y: number, o: number[] = []) => xs.map((x, i) => ({ x, y, w, h, o: o[i] ?? 1 }))
+  switch (v) {
+    case 'slide':
+      return { rects: row([2, 21, 40], 17, 22, 4, [1, 1, 0.55]), dots: 0 }
+    case 'dots':
+      return { rects: row([2, 21, 40], 17, 18, 2), dots: 3 }
+    case 'center':
+      return { rects: [...row([3], 12, 14, 8, [0.45]), ...row([19], 22, 24, 3), ...row([45], 12, 14, 8, [0.45])], dots: 0 }
+    case 'marquee':
+      return { rects: row([-5, 14, 33, 52], 15, 20, 5, [0.35, 1, 1, 0.35]), dots: 0 }
+    default:
+      return { rects: [...row([2, 17, 32, 47], 12, 11, 2), ...row([2, 17, 32, 47], 12, 11, 16)], dots: 0 }
+  }
+}
+
+const cssPlaceholder ='border-radius: 24px;\n\nh2 {\n  color: #be123c;\n  font-size: 48px;\n}\n\nbutton:hover {\n  transform: scale(1.03);\n}'
 
 function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
   const st: Record<string, string> = { ...(d().style || {}) }
@@ -317,11 +364,126 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         </label>
         <button v-if="block.data.text_color" type="button" class="text-xs text-slate-500 underline" @click="block.data.text_color = ''">Mặc định</button>
       </div>
+      <!-- Màu nền đầu trang -->
+      <div class="space-y-2 rounded-xl border border-slate-200 p-3" data-testid="header-bg-panel">
+        <div class="flex flex-wrap items-center gap-3">
+          <span :class="lbl">Màu nền đầu trang</span>
+          <input
+            type="color"
+            data-testid="header-bg"
+            :value="block.data.style?.bg || '#ffffff'"
+            class="h-7 w-9 rounded border border-slate-200"
+            @input="setStyle('bg', ($event.target as HTMLInputElement).value)"
+          />
+          <button v-if="block.data.style?.bg" type="button" class="text-xs text-slate-500 underline" data-testid="header-bg-reset" @click="setStyle('bg', '')">Bỏ màu</button>
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <button
+            v-for="c in headerBgSwatches"
+            :key="c"
+            type="button"
+            class="h-6 w-6 rounded-full border-2"
+            :class="(block.data.style?.bg || '').toLowerCase() === c.toLowerCase() ? 'border-indigo-600' : 'border-slate-200'"
+            :style="{ backgroundColor: c }"
+            :title="c"
+            @click="setStyle('bg', c)"
+          />
+        </div>
+        <p class="text-[11px] leading-snug text-slate-400">Nền tối thì chữ tự chuyển sang màu trắng; muốn màu chữ riêng thì chọn ở "Màu chữ" phía trên.</p>
+      </div>
     </template>
 
     <!-- ===== Banner ===== -->
     <template v-else-if="block.type === 'hero'">
-      <ImageField v-model="block.data.image_url" :site-id="siteId" label="Ảnh banner" />
+      <!-- Ảnh nền + chiều cao -->
+      <div class="space-y-2.5 rounded-xl border border-slate-200 p-3" data-testid="hero-bg-panel">
+        <span :class="lbl">Ảnh nền banner</span>
+        <ImageField v-model="block.data.bg_image_url" :site-id="siteId" compact />
+        <template v-if="block.data.bg_image_url">
+          <label class="flex items-center gap-3 text-xs font-bold text-slate-600">
+            Độ phủ tối
+            <input
+              type="range"
+              min="0"
+              max="85"
+              step="5"
+              data-testid="hero-overlay"
+              :value="block.data.bg_overlay ?? 40"
+              class="flex-1 accent-indigo-600"
+              @input="block.data.bg_overlay = Number(($event.target as HTMLInputElement).value)"
+            />
+            <span class="w-9 text-right font-normal text-slate-500">{{ block.data.bg_overlay ?? 40 }}%</span>
+          </label>
+          <div class="space-y-1">
+            <span :class="lbl">Phần ảnh được giữ lại khi bị cắt</span>
+            <div class="grid grid-cols-3 gap-1">
+              <button
+                v-for="o in [{ v: 'top', t: 'Phía trên' }, { v: 'center', t: 'Ở giữa' }, { v: 'bottom', t: 'Phía dưới' }]"
+                :key="o.v"
+                type="button"
+                class="rounded-lg border px-1 py-1.5 text-[11px] font-bold"
+                :class="(block.data.bg_focus || 'center') === o.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'"
+                @click="block.data.bg_focus = o.v"
+              >
+                {{ o.t }}
+              </button>
+            </div>
+          </div>
+        </template>
+        <div class="space-y-1">
+          <div class="flex items-center justify-between">
+            <span :class="lbl">Chiều cao banner</span>
+            <span class="text-[11px] text-slate-500" data-testid="hero-height-label">{{ block.data.bg_height ? block.data.bg_height + 'px' : 'Tự động' }}</span>
+          </div>
+          <div class="grid grid-cols-5 gap-1">
+            <button
+              v-for="o in heroHeights"
+              :key="o.v"
+              type="button"
+              class="rounded-lg border px-0.5 py-1.5 text-[11px] font-bold"
+              :class="(Number(block.data.bg_height) || 0) === o.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'"
+              :data-height="o.v"
+              @click="block.data.bg_height = o.v"
+            >
+              {{ o.t }}
+            </button>
+          </div>
+          <label v-if="Number(block.data.bg_height) > 0" class="flex items-center gap-3 text-xs font-bold text-slate-600">
+            Tinh chỉnh
+            <input
+              type="range"
+              min="240"
+              max="900"
+              step="10"
+              data-testid="hero-height"
+              :value="block.data.bg_height"
+              class="flex-1 accent-indigo-600"
+              @input="block.data.bg_height = Number(($event.target as HTMLInputElement).value)"
+            />
+          </label>
+        </div>
+        <div class="space-y-1">
+          <span :class="lbl">Căn chữ</span>
+          <div class="grid grid-cols-3 gap-1">
+            <button
+              v-for="o in [{ v: 'left', t: 'Trái' }, { v: 'center', t: 'Giữa' }, { v: 'right', t: 'Phải' }]"
+              :key="o.v"
+              type="button"
+              class="rounded-lg border px-1 py-1.5 text-[11px] font-bold"
+              :class="(block.data.align || '') === o.v ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-slate-300'"
+              @click="block.data.align = o.v"
+            >
+              {{ o.t }}
+            </button>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <span :class="lbl">Màu chữ</span>
+          <input type="color" :value="block.data.text_color || '#ffffff'" class="h-7 w-9 rounded border border-slate-200" @input="block.data.text_color = ($event.target as HTMLInputElement).value" />
+          <button v-if="block.data.text_color" type="button" class="text-xs text-slate-500 underline" @click="block.data.text_color = ''">Tự động</button>
+        </div>
+      </div>
+      <ImageField v-model="block.data.image_url" :site-id="siteId" label="Ảnh bên cạnh chữ (không bắt buộc)" />
       <label class="space-y-1"><span :class="lbl">Nhãn nhỏ</span><input v-model="block.data.badge" :class="inp" /></label>
       <label class="space-y-1"><span :class="lbl">Tiêu đề</span><input v-model="block.data.title" :class="inp" /></label>
       <label class="space-y-1"><span :class="lbl">Mô tả</span><textarea v-model="block.data.subtitle" rows="3" :class="inp" /></label>
@@ -334,6 +496,64 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
     <!-- ===== Sản phẩm ===== -->
     <template v-else-if="block.type === 'products'">
       <label class="space-y-1"><span :class="lbl">Tiêu đề mục</span><input v-model="block.data.heading" :class="inp" /></label>
+      <!-- Kiểu hiển thị: lưới hoặc các kiểu carousel -->
+      <div class="space-y-2" data-testid="product-layout">
+        <span :class="lbl">Kiểu hiển thị</span>
+        <div class="grid grid-cols-2 gap-1.5">
+          <button
+            v-for="o in productLayouts"
+            :key="o.v"
+            type="button"
+            class="rounded-xl border p-2 text-left transition"
+            :class="productLayout === o.v ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200 hover:border-slate-300'"
+            :data-layout="o.v"
+            @click="setProductLayout(o.v)"
+          >
+            <svg viewBox="0 0 60 30" class="mb-1.5 h-8 w-full" aria-hidden="true">
+              <rect v-for="(r, ri) in layoutPreview(o.v).rects" :key="ri" :x="r.x" :y="r.y" :width="r.w" :height="r.h" rx="2" :fill="productLayout === o.v ? '#6366f1' : '#94a3b8'" :opacity="r.o" />
+              <circle v-for="di in layoutPreview(o.v).dots" :key="'d' + di" :cx="30 + (di - 1 - (layoutPreview(o.v).dots - 1) / 2) * 6" cy="27" r="1.4" :fill="di === 1 ? '#6366f1' : '#cbd5e1'" />
+            </svg>
+            <span class="block text-[11px] font-bold text-slate-800">{{ o.t }}</span>
+            <span class="block text-[10px] leading-tight text-slate-400">{{ o.d }}</span>
+          </button>
+        </div>
+        <template v-if="productLayout !== 'grid'">
+          <div class="grid grid-cols-2 gap-2">
+            <label class="space-y-1">
+              <span :class="lbl">Số sản phẩm mỗi hàng</span>
+              <select :value="block.data.per_view || (productLayout === 'center' ? 3 : 4)" :class="inp" data-testid="per-view" @change="block.data.per_view = Number(($event.target as HTMLSelectElement).value)">
+                <option v-for="n in [2, 3, 4, 5, 6]" :key="n" :value="n">{{ n }}</option>
+              </select>
+            </label>
+            <label v-if="productLayout !== 'marquee'" class="space-y-1">
+              <span :class="lbl">Tự chuyển sau</span>
+              <select :value="block.data.autoplay ?? (productLayout === 'dots' ? 5 : 0)" :class="inp" data-testid="autoplay" @change="block.data.autoplay = Number(($event.target as HTMLSelectElement).value)">
+                <option :value="0">Không tự chuyển</option>
+                <option v-for="n in [3, 4, 5, 7, 10]" :key="n" :value="n">{{ n }} giây</option>
+              </select>
+            </label>
+            <label v-else class="space-y-1">
+              <span :class="lbl">Tốc độ chạy</span>
+              <select :value="block.data.speed || 'normal'" :class="inp" @change="block.data.speed = ($event.target as HTMLSelectElement).value">
+                <option value="slow">Chậm</option>
+                <option value="normal">Vừa</option>
+                <option value="fast">Nhanh</option>
+              </select>
+            </label>
+          </div>
+          <div v-if="productLayout !== 'marquee'" class="flex flex-wrap items-center gap-4">
+            <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+              <input type="checkbox" :checked="block.data.arrows !== false" @change="block.data.arrows = ($event.target as HTMLInputElement).checked" />
+              Mũi tên trái / phải
+            </label>
+            <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
+              <input type="checkbox" :checked="block.data.dots ?? (productLayout === 'dots' || productLayout === 'center')" @change="block.data.dots = ($event.target as HTMLInputElement).checked" />
+              Chấm tròn bên dưới
+            </label>
+          </div>
+          <p class="text-[11px] leading-snug text-slate-400">Trong trình chỉnh sửa, carousel không tự chạy để bạn dễ chỉnh sửa; trên trang đã xuất bản thì chạy bình thường.</p>
+        </template>
+      </div>
       <label class="space-y-1">
         <span :class="lbl">Nguồn sản phẩm</span>
         <select v-model="block.data.source" :class="inp">
@@ -788,7 +1008,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
     <!-- ===== Nền & khoảng cách (mọi section) ===== -->
     <div class="space-y-3 border-t border-slate-100 pt-4">
       <span class="block text-[11px] font-extrabold uppercase tracking-wide text-slate-400">Giao diện section</span>
-      <div class="flex items-center gap-3">
+      <div v-if="block.type !== 'header'" class="flex items-center gap-3">
         <span class="text-xs font-bold text-slate-600">Màu nền</span>
         <input type="color" :value="block.data.style?.bg || '#ffffff'" class="h-7 w-9 rounded border border-slate-200" @input="setStyle('bg', ($event.target as HTMLInputElement).value)" />
         <button v-if="block.data.style?.bg" type="button" class="text-xs text-slate-500 underline" @click="setStyle('bg', '')">Bỏ màu</button>

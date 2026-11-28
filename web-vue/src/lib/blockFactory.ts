@@ -115,7 +115,7 @@ const defaults: Record<BlockType, () => Record<string, any>> = {
       { title: 'Điểm nổi bật 2', text: 'Mô tả ngắn' }
     ]
   }),
-  products: () => ({ heading: 'Sản phẩm nổi bật', source: 'catalog', items: [], show_buy: true, buy_mode: 'cart', buy_label: 'Thêm vào giỏ' }),
+  products: () => ({ heading: 'Sản phẩm nổi bật', source: 'catalog', layout: 'grid', items: [], show_buy: true, buy_mode: 'cart', buy_label: 'Thêm vào giỏ' }),
   collections: () => ({
     heading: 'Mua theo danh mục',
     items: [

@@ -39,12 +39,14 @@ import EditableText from './EditableText.vue'
 import BannerSlider from './BannerSlider.vue'
 import NewsletterForm from './NewsletterForm.vue'
 import AccountMenu from './AccountMenu.vue'
+import ProductCarousel from './ProductCarousel.vue'
+import { readableOn } from '../../lib/color'
 import MarketSwitcher from './MarketSwitcher.vue'
 import StoreIcon from './StoreIcon.vue'
 import { pathKey, scopedSectionCss } from '../../lib/textStyle'
 import { themeCss, usedFonts } from '../../lib/theme'
 import { ensureFonts } from '../../lib/fonts'
-import type { BlockStyle, PublicProduct, SiteTheme, StoreBlock, TextFx, TextStyle } from '../../types/store'
+import type { BlockStyle, CarouselLayout, PublicProduct, SiteTheme, StoreBlock, TextFx, TextStyle } from '../../types/store'
 
 const props = defineProps<{
   siteTitle: string
@@ -214,6 +216,73 @@ function navItems(blk: StoreBlock): { label: string; link: string; idx: number }
 
 function logoSrc(blk: StoreBlock): string {
   return safeImg(blk.data.logo_url) || safeImg(props.logoUrl)
+}
+
+// Màu chữ đầu trang: màu shop chọn; chưa chọn mà nền đầu trang tối thì tự dùng chữ trắng cho dễ đọc
+function hdrFg(blk: StoreBlock): string {
+  const own = String(blk.data.text_color || '').trim()
+  if (own) return own
+  return readableOn((blk.data.style as BlockStyle | undefined)?.bg, '#ffffff', '')
+}
+
+// ----- Banner chữ + ảnh: ảnh nền, chiều cao, căn chữ -----
+function heroBg(blk: StoreBlock): string {
+  return safeImg(blk.data.bg_image_url)
+}
+function heroSide(blk: StoreBlock): string {
+  return safeImg(blk.data.image_url)
+}
+// Một cột chữ (không có ảnh bên cạnh): trên web công khai, hoặc khi có ảnh nền trong trình chỉnh sửa
+function heroSolo(blk: StoreBlock): boolean {
+  return !heroSide(blk) && (!!heroBg(blk) || !props.editable)
+}
+function heroAlign(blk: StoreBlock): 'left' | 'center' | 'right' {
+  const a = blk.data.align
+  return a === 'left' || a === 'center' || a === 'right' ? a : heroSolo(blk) ? 'center' : 'left'
+}
+// Độ phủ tối của ảnh nền (%)
+function heroOverlay(blk: StoreBlock): number {
+  const n = Number(blk.data.bg_overlay)
+  return blk.data.bg_overlay === undefined || blk.data.bg_overlay === '' || Number.isNaN(n) ? 40 : Math.min(85, Math.max(0, n))
+}
+// Chữ trắng khi nền ảnh đã phủ tối; shop chọn màu thì dùng màu đó
+function heroFg(blk: StoreBlock): string {
+  const own = String(blk.data.text_color || '').trim()
+  if (own) return own
+  return heroBg(blk) && heroOverlay(blk) >= 20 ? '#ffffff' : ''
+}
+function heroFocus(blk: StoreBlock): string {
+  const f = blk.data.bg_focus
+  return f === 'top' || f === 'bottom' ? f : 'center'
+}
+// Chiều cao banner (px, máy tính); 0 / trống = tự động theo nội dung
+function heroHeight(blk: StoreBlock): number {
+  const n = Math.round(Number(blk.data.bg_height))
+  return n > 0 ? Math.min(1200, Math.max(200, n)) : 0
+}
+
+// ----- Sản phẩm: lưới hoặc carousel -----
+const CAROUSEL_LAYOUTS: CarouselLayout[] = ['slide', 'dots', 'center', 'marquee']
+const GRID_CLASS = 'grid grid-cols-2 gap-3 @3xl:grid-cols-3 @3xl:gap-6 @5xl:grid-cols-4'
+function carouselLayout(blk: StoreBlock): CarouselLayout | null {
+  const l = blk.data.layout as CarouselLayout
+  return CAROUSEL_LAYOUTS.includes(l) ? l : null
+}
+function productListProps(blk: StoreBlock, count: number): Record<string, unknown> {
+  const layout = carouselLayout(blk)
+  if (!layout) return { class: GRID_CLASS }
+  const d = blk.data
+  return {
+    layout,
+    count,
+    perView: Number(d.per_view) || (layout === 'center' ? 3 : 4),
+    autoplay: d.autoplay === undefined || d.autoplay === '' ? undefined : Number(d.autoplay),
+    arrows: d.arrows !== false,
+    dots: typeof d.dots === 'boolean' ? d.dots : undefined,
+    speed: d.speed,
+    accent: accent.value,
+    editable: props.editable
+  }
 }
 
 // Logo có hiện không (có ảnh và không bị tắt)
@@ -423,7 +492,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         <header
           v-if="blk.type === 'header'"
           :class="blk.data.border === false ? '' : 'border-b border-slate-200/70'"
-          :style="blk.data.text_color ? { color: blk.data.text_color } : undefined"
+          :style="hdrFg(blk) ? { color: hdrFg(blk) } : undefined"
         >
           <div :class="inner" class="py-3.5">
             <div class="flex flex-wrap items-center gap-x-8 gap-y-3" :class="headerLayout(blk.data.layout).wrap">
@@ -460,7 +529,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   :editable="editable"
                   :placeholder="siteTitle || 'Tên thương hiệu'"
                   class="pp-hfont truncate font-extrabold tracking-tight"
-                  :class="[brandSizeClass(blk.data.brand_size), blk.data.text_color ? '' : 'text-slate-900']"
+                  :class="[brandSizeClass(blk.data.brand_size), hdrFg(blk) ? '' : 'text-slate-900']"
                   @update:model-value="set(blk, ['brand_name'], $event)"
                 />
               </div>
@@ -470,10 +539,10 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 v-if="navItems(blk).length"
                 class="hidden flex-wrap items-center gap-x-7 gap-y-1 font-medium @3xl:flex"
                 :style="{ fontSize: blk.data.layout === 'left_menu' ? '16.5px' : '15px' }"
-                :class="[headerLayout(blk.data.layout).nav, blk.data.text_color ? '' : 'text-slate-600']"
+                :class="[headerLayout(blk.data.layout).nav, hdrFg(blk) ? '' : 'text-slate-600']"
               >
                 <template v-for="item in navItems(blk)" :key="item.idx">
-                  <a :href="safeHref(item.link)" class="transition" :class="blk.data.text_color ? 'opacity-80 hover:opacity-100' : 'hover:opacity-70'">
+                  <a :href="safeHref(item.link)" class="transition" :class="hdrFg(blk) ? 'opacity-80 hover:opacity-100' : 'hover:opacity-70'">
                     <EditableText :fx="fx(blk, ['nav_items', item.idx, 'label'])" :model-value="item.label" :editable="editable" placeholder="Mục menu" @update:model-value="set(blk, ['nav_items', item.idx, 'label'], $event)" />
                   </a>
                 </template>
@@ -493,7 +562,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <!-- Tìm kiếm, tài khoản, giỏ hàng, menu điện thoại -->
               <div
                 class="flex items-center"
-                :class="[blk.data.text_color ? '' : 'text-slate-700', headerLayout(blk.data.layout).cta ? '@3xl:order-4' : '', iconMode(blk) ? 'gap-1 @3xl:gap-2.5' : 'gap-0.5']"
+                :class="[hdrFg(blk) ? '' : 'text-slate-700', headerLayout(blk.data.layout).cta ? '@3xl:order-4' : '', iconMode(blk) ? 'gap-1 @3xl:gap-2.5' : 'gap-0.5']"
               >
                 <!-- Quốc gia / ngôn ngữ / tiền tệ (chỉ hiện khi website bật từ 2 thị trường) -->
                 <MarketSwitcher v-if="!editable" compact />
@@ -646,9 +715,28 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
         </header>
 
         <!-- ===================== BANNER CHÍNH ===================== -->
-        <section v-else-if="blk.type === 'hero'" class="overflow-hidden" :style="blk.data.style?.bg ? undefined : { background: `linear-gradient(180deg, ${tint(7)} 0%, #ffffff 100%)` }">
-          <div :class="inner" class="grid grid-cols-1 items-center gap-10 py-14 @3xl:grid-cols-2 @3xl:gap-14 @3xl:py-24" :style="safeImg(blk.data.image_url) || editable ? undefined : { textAlign: 'center' }">
-            <div class="space-y-5" :class="safeImg(blk.data.image_url) || editable ? '' : 'mx-auto max-w-3xl @3xl:col-span-2'">
+        <section
+          v-else-if="blk.type === 'hero'"
+          class="relative flex flex-col justify-center overflow-hidden"
+          :class="heroHeight(blk) ? 'pp-hero-h' : ''"
+          :data-hero-bg="heroBg(blk) ? '1' : undefined"
+          :style="{
+            ...(heroBg(blk) || blk.data.style?.bg ? {} : { background: `linear-gradient(180deg, ${tint(7)} 0%, #ffffff 100%)` }),
+            ...(heroHeight(blk) ? { '--hero-h': heroHeight(blk) + 'px' } : {}),
+            ...(heroFg(blk) ? { color: heroFg(blk) } : {})
+          }"
+        >
+          <!-- Ảnh nền + lớp phủ tối để chữ dễ đọc -->
+          <template v-if="heroBg(blk)">
+            <img :src="heroBg(blk)" alt="" class="pointer-events-none absolute inset-0 h-full w-full object-cover" :style="{ objectPosition: heroFocus(blk) }" />
+            <div class="pointer-events-none absolute inset-0 bg-black" :style="{ opacity: heroOverlay(blk) / 100 }" />
+          </template>
+          <div :class="inner" class="relative grid grid-cols-1 items-center gap-10 py-14 @3xl:grid-cols-2 @3xl:gap-14 @3xl:py-24">
+            <div
+              class="space-y-5"
+              :class="heroSolo(blk) ? ['max-w-3xl @3xl:col-span-2', heroAlign(blk) === 'center' ? 'mx-auto' : heroAlign(blk) === 'right' ? 'ml-auto' : 'mr-auto'] : ''"
+              :style="{ textAlign: heroAlign(blk) }"
+            >
               <span
                 v-if="blk.data.badge || editable"
                 class="inline-flex items-center rounded-full px-3.5 py-1 text-xs font-bold tracking-wide"
@@ -661,7 +749,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 :model-value="blk.data.title"
                 :editable="editable"
                 placeholder="Tiêu đề chính"
-                class="block text-[2rem] font-extrabold leading-[1.15] tracking-tight text-slate-900 @3xl:text-5xl"
+                class="block text-[2rem] font-extrabold leading-[1.15] tracking-tight @3xl:text-5xl"
+                :class="heroFg(blk) ? '' : 'text-slate-900'"
                 @update:model-value="set(blk, ['title'], $event)"
               />
               <EditableText :fx="fx(blk, ['subtitle'])"
@@ -670,7 +759,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 :model-value="blk.data.subtitle"
                 :editable="editable"
                 placeholder="Mô tả ngắn"
-                class="block whitespace-pre-line text-base leading-relaxed text-slate-600 @3xl:text-lg"
+                class="block whitespace-pre-line text-base leading-relaxed @3xl:text-lg"
+                :class="heroFg(blk) ? 'opacity-90' : 'text-slate-600'"
                 @update:model-value="set(blk, ['subtitle'], $event)"
               />
               <div class="pt-2">
@@ -686,7 +776,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <div v-if="safeImg(blk.data.image_url)" class="overflow-hidden rounded-3xl shadow-2xl shadow-slate-900/10 ring-1 ring-slate-900/5">
               <img :src="safeImg(blk.data.image_url)" :alt="blk.data.title" class="aspect-[4/3] h-full w-full object-cover" />
             </div>
-            <div v-else-if="editable" data-i18n="on" class="flex aspect-[4/3] items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-white/60 text-xs text-slate-400">
+            <div v-else-if="editable && !heroBg(blk)" data-i18n="on" class="flex aspect-[4/3] items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-white/60 text-xs text-slate-400">
               Chọn ảnh banner ở bảng bên phải
             </div>
           </div>
@@ -712,7 +802,8 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <p v-if="!catalogOf(blk).length" class="text-center text-sm text-slate-500">
                 {{ editable ? (products?.length ? 'Chưa có sản phẩm nào có thẻ đã chọn. Đổi thẻ ở cài đặt section hoặc gắn thẻ cho sản phẩm.' : 'Chưa có sản phẩm. Thêm sản phẩm ở trang "Quản lý sản phẩm".') : t('products_soon') }}
               </p>
-              <div class="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @3xl:gap-6 @5xl:grid-cols-4">
+              <!-- Lưới hoặc carousel (trượt / chấm tròn / tâm điểm / chạy liên tục) tuỳ cài đặt section -->
+              <component :is="carouselLayout(blk) ? ProductCarousel : 'div'" v-bind="productListProps(blk, catalogOf(blk).length)" :data-product-list="carouselLayout(blk) || 'grid'">
                 <article v-for="prod in catalogOf(blk)" :key="prod.id" class="group flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white transition hover:-translate-y-1 hover:shadow-xl hover:shadow-slate-900/5">
                   <component :is="productLink(prod.id) ? 'a' : 'div'" :href="productLink(prod.id)" class="relative block aspect-square overflow-hidden bg-slate-100">
                     <img v-if="safeImg(prod.image_url)" :src="safeImg(prod.image_url)" :alt="prod.name" loading="lazy" class="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
@@ -756,11 +847,11 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     </template>
                   </div>
                 </article>
-              </div>
+              </component>
             </template>
 
             <!-- Sản phẩm nhập tay -->
-            <div v-else class="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @3xl:gap-6 @5xl:grid-cols-4">
+            <component :is="carouselLayout(blk) ? ProductCarousel : 'div'" v-else v-bind="productListProps(blk, (blk.data.items || []).length)" :data-product-list="carouselLayout(blk) || 'grid'">
               <article v-for="(prod, pIdx) in blk.data.items || []" :key="prod.id || pIdx" class="group flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white transition hover:-translate-y-1 hover:shadow-xl hover:shadow-slate-900/5">
                 <div class="aspect-square overflow-hidden bg-slate-100">
                   <img v-if="safeImg(prod.image_url)" :src="safeImg(prod.image_url)" :alt="prod.name" loading="lazy" class="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
@@ -780,7 +871,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   </a>
                 </div>
               </article>
-            </div>
+            </component>
           </div>
         </section>
 
@@ -1192,6 +1283,15 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 }
 .pp-ring svg {
   animation: pp-ring 2.5s ease-in-out infinite;
+}
+/* Chiều cao banner do shop chọn: điện thoại thấp hơn một chút, máy tính bảng trở lên đúng số đã chọn */
+.pp-hero-h {
+  min-height: calc(var(--hero-h) * 0.7);
+}
+@container (min-width: 48rem) {
+  .pp-hero-h {
+    min-height: var(--hero-h);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .pp-ring svg { animation: none; }

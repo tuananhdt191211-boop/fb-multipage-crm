@@ -7,6 +7,7 @@ import { api } from './api'
 import { MARKET_BY_CODE, type Market } from './markets'
 import { summaryFromHtml } from './richHtml'
 import type { ProductOption, PublicProduct, PublicVariant, StoreBlock } from '../types/store'
+import { UI_EN } from './i18nEn'
 
 export const UI_VI = {
   loading: 'Đang tải...',
@@ -96,6 +97,7 @@ export const UI_VI = {
   slide_prev: 'Ảnh trước',
   slide_next: 'Ảnh sau',
   slide_n: 'Ảnh {n}',
+  page_n: 'Trang {n}',
   // Trang sản phẩm
   product: 'Sản phẩm',
   product_missing: 'Sản phẩm không tồn tại hoặc đã ngừng bán.',
@@ -283,9 +285,14 @@ export function currentMarket(): Market {
 
 // ----------------------------------------------------------------- Chữ & tiền
 
+// Bản dịch chữ cố định của một ngôn ngữ: bản của chủ shop / AI trước, rồi bản dựng sẵn (tiếng Anh), cuối cùng mới là tiếng Việt
+export function uiText(lang: string, key: UiKey, i18n: SiteI18n = locale.i18n): string {
+  if (lang === 'vi') return UI_VI[key] || key
+  return i18n.tr[lang]?.ui?.[key] || (lang === 'en' ? UI_EN[key] : '') || UI_VI[key] || key
+}
+
 export function t(key: UiKey, vars?: Record<string, string | number>): string {
-  const tr = locale.lang !== 'vi' ? locale.i18n.tr[locale.lang]?.ui?.[key] : undefined
-  let s: string = tr || UI_VI[key] || key
+  let s: string = uiText(locale.lang, key)
   if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v))
   return s
 }
@@ -390,6 +397,7 @@ const SKIP_KEYS = new Set([
   'style', '_text', 'layout', 'type', 'icon', 'source', 'buy_mode', 'right_mode', 'account_style', 'brand_size', 'height',
   'image_side', 'align', 'html', 'embed', 'pad', 'bg', 'text_color', 'color', 'css', 'id', 'socials', 'price', 'compare_price',
   'phone', 'email', 'url', 'link', 'href', 'video', 'map', 'map_embed', 'logo_height', 'columns_count',
+  'bg_focus', 'speed', // lựa chọn dạng chữ của banner nền ảnh / carousel: không dịch
   'tags', // thẻ lọc sản phẩm của section Sản phẩm: so khớp với thẻ gốc của sản phẩm nên không dịch
   // tên riêng / địa chỉ: giữ nguyên
   'brand_name', 'company', 'address'
