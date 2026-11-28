@@ -5,6 +5,7 @@ import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail, MessageSquare, User } fr
 import { useAuthStore } from './../stores/auth.stores'
 import SocialAuthButtons from '@/components/SocialAuthButtons.vue'
 import UiLangSwitcher from '@/components/UiLangSwitcher.vue'
+import LegalLinks from '@/components/LegalLinks.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -160,13 +161,7 @@ async function handleSubmit() {
           Đăng nhập
         </router-link>
       </p>
-      <p class="text-center text-[11px] text-slate-400">
-        <router-link to="/privacy" class="hover:underline">Chính sách quyền riêng tư</router-link>
-        ·
-        <router-link to="/terms" class="hover:underline">Điều khoản</router-link>
-        ·
-        <router-link to="/data-deletion" class="hover:underline">Xoá dữ liệu</router-link>
-      </p>
+      <LegalLinks />
     </div>
   </div>
 </template>

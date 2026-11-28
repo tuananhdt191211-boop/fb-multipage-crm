@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"html"
 	"log"
 	"net/http"
 	"strconv"
@@ -134,14 +135,6 @@ func (h *DataDeletionHandler) eraseFacebookData(fbUserID string) (string, bool) 
 	return summary + ".", true
 }
 
-func (h *DataDeletionHandler) statusURL(code string) string {
-	base := ""
-	if h.Cfg != nil {
-		base = strings.TrimRight(strings.TrimSpace(h.Cfg.FrontendURL), "/")
-	}
-	return base + "/data-deletion?code=" + code
-}
-
 // Callback POST /api/v1/facebook/data-deletion (Meta gọi, form signed_request)
 func (h *DataDeletionHandler) Callback(c *gin.Context) {
 	secret := ""
@@ -174,22 +167,51 @@ func (h *DataDeletionHandler) Callback(c *gin.Context) {
 	log.Printf("[DataDeletion] Mã %s: %s", req.ConfirmationCode, summary)
 
 	c.JSON(http.StatusOK, gin.H{
-		"url":               h.statusURL(req.ConfirmationCode),
+		"url":               publicBaseURL(c) + "/api/v1/facebook/data-deletion/" + req.ConfirmationCode,
 		"confirmation_code": req.ConfirmationCode,
 	})
 }
 
-// Status GET /api/v1/facebook/data-deletion/:code (công khai)
+// Status GET /api/v1/facebook/data-deletion/:code (công khai): trang trạng thái song ngữ cho người dùng.
+// Thêm ?format=json để nhận JSON.
 func (h *DataDeletionHandler) Status(c *gin.Context) {
 	code := strings.ToUpper(strings.TrimSpace(c.Param("code")))
-	if len(code) < 8 || len(code) > 40 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy mã xác nhận"})
-		return
-	}
 	var req DataDeletionRequest
-	if err := h.DB.Where("confirmation_code = ?", code).First(&req).Error; err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy mã xác nhận"})
+	found := len(code) >= 8 && len(code) <= 40 &&
+		h.DB.Where("confirmation_code = ?", code).Limit(1).Find(&req).RowsAffected > 0
+
+	if c.Query("format") == "json" {
+		if !found {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy mã xác nhận"})
+			return
+		}
+		c.JSON(http.StatusOK, req)
 		return
 	}
-	c.JSON(http.StatusOK, req)
+
+	esc := html.EscapeString
+	body := `<p class="err">Không tìm thấy mã xác nhận này.<br>Confirmation code not found.</p>`
+	status := http.StatusNotFound
+	if found {
+		status = http.StatusOK
+		stateVi, stateEn := "Đã xử lý", "Completed"
+		if req.Status == "not_found" {
+			stateVi, stateEn = "Không có dữ liệu", "No data found"
+		}
+		body = `<p class="ok">` + stateVi + ` / ` + stateEn + `</p>` +
+			`<p><b>Mã xác nhận / Confirmation code:</b> ` + esc(req.ConfirmationCode) + `</p>` +
+			`<p><b>Thời điểm / Received:</b> ` + req.CreatedAt.UTC().Format("2006-01-02 15:04 UTC") + `</p>` +
+			`<p>` + esc(req.Summary) + `</p>` +
+			`<p class="muted">Dữ liệu lấy từ Facebook (mã truy cập Page, liên kết tài khoản) đã được xoá. Để xoá toàn bộ tài khoản, xem trang Hướng dẫn xoá dữ liệu.<br>` +
+			`Data obtained from Facebook (Page access tokens, account link) has been deleted. To delete your whole account, see the Data Deletion Instructions page.</p>`
+	}
+	page := `<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">` +
+		`<title>Trạng thái xoá dữ liệu – PagePilot</title><style>` +
+		`:root{--bg:#f8fafc;--card:#fff;--text:#0f172a;--muted:#64748b;--ok:#059669;--err:#be123c;--border:#e2e8f0}` +
+		`@media (prefers-color-scheme:dark){:root{--bg:#0b1220;--card:#111a2e;--text:#e2e8f0;--muted:#94a3b8;--ok:#34d399;--err:#fb7185;--border:#1f2a44}}` +
+		`body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}` +
+		`main{max-width:560px;margin:40px auto;padding:0 16px}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:20px}` +
+		`h1{font-size:20px;margin:0 0 12px}.ok{color:var(--ok);font-weight:700}.err{color:var(--err);font-weight:700}.muted{color:var(--muted);font-size:13px}` +
+		`</style></head><body><main><div class="card"><h1>Trạng thái xoá dữ liệu / Data deletion status</h1>` + body + `</div></main></body></html>`
+	c.Data(status, "text/html; charset=utf-8", []byte(page))
 }

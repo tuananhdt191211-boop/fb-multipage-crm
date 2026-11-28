@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -46,12 +47,27 @@ func NewAIHandler(db *gorm.DB, cfg *config.Config) *AIHandler {
 	}
 }
 
+var aiURLPattern = regexp.MustCompile(`https?://[^\s\[\]()<>"']+`)
+
+// cleanAIBaseURL lấy đúng địa chỉ API từ chuỗi người dùng dán vào.
+// Hay gặp: dán từ khung chat bị dính dạng Markdown "[https://x](https://x)", dấu ngoặc,
+// khoảng trắng hoặc dư "/chat/completions" ở cuối.
+func cleanAIBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if m := aiURLPattern.FindString(raw); m != "" {
+		raw = m
+	}
+	raw = strings.TrimRight(raw, "/.,;")
+	raw = strings.TrimSuffix(raw, "/chat/completions")
+	return strings.TrimRight(raw, "/")
+}
+
 func (h *AIHandler) resolveAIConfig() (baseURL string, apiKeys []string, model string) {
 	// 1. Ưu tiên đọc cấu hình đã lưu từ giao diện web trong Database
 	var dbCfg SystemAIConfig
 	if h.DB != nil {
 		if err := h.DB.First(&dbCfg, 1).Error; err == nil && strings.TrimSpace(dbCfg.APIKeys) != "" {
-			baseURL = strings.TrimRight(strings.TrimSpace(dbCfg.BaseURL), "/")
+			baseURL = cleanAIBaseURL(dbCfg.BaseURL)
 			model = strings.TrimSpace(dbCfg.Model)
 			for _, k := range strings.Split(dbCfg.APIKeys, ",") {
 				if trimmed := strings.TrimSpace(k); trimmed != "" {
@@ -64,7 +80,7 @@ func (h *AIHandler) resolveAIConfig() (baseURL string, apiKeys []string, model s
 	// 2. Nếu Database chưa cấu hình thì đọc từ file .env
 	if len(apiKeys) == 0 {
 		if baseURL == "" {
-			baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("AI_BASE_URL")), "/")
+			baseURL = cleanAIBaseURL(os.Getenv("AI_BASE_URL"))
 		}
 		if model == "" {
 			model = strings.TrimSpace(os.Getenv("AI_MODEL"))
@@ -144,7 +160,7 @@ func (h *AIHandler) SaveGlobalAIConfig(c *gin.Context) {
 		return
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	baseURL := cleanAIBaseURL(req.BaseURL)
 	if baseURL == "" {
 		baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
 	}

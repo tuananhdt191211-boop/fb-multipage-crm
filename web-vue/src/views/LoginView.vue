@@ -11,6 +11,7 @@ import {
 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth.stores'
 import UiLangSwitcher from '../components/UiLangSwitcher.vue'
+import LegalLinks from '../components/LegalLinks.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -165,13 +166,7 @@ function loginWithProvider(provider: 'google' | 'facebook') {
           Đăng ký ngay
         </router-link>
       </p>
-      <p class="text-center text-[11px] text-slate-400">
-        <router-link to="/privacy" class="hover:underline">Chính sách quyền riêng tư</router-link>
-        ·
-        <router-link to="/terms" class="hover:underline">Điều khoản</router-link>
-        ·
-        <router-link to="/data-deletion" class="hover:underline">Xoá dữ liệu</router-link>
-      </p>
+      <LegalLinks />
     </div>
   </div>
 </template>
