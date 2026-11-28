@@ -29,6 +29,8 @@ const MAX_LEN = 260
 const EXCLUDE = [
   /^src\/lib\/i18n\.ts$/,
   /^src\/views\/Public.*\.vue$/,
+  /^src\/views\/LegalView\.vue$/, // trang pháp lý công khai: tự song ngữ Việt / Anh (src/lib/legalContent.ts)
+  /^src\/lib\/legalContent\.ts$/,
   /^src\/components\/store\/(CartDrawer|AccountMenu|CustomerAuthDialog|MarketSwitcher|NewsletterForm|PublicShell|BannerSlider)\.vue$/,
   /^src\/lib\/(publicSite|storeHost|cart|customer)\.ts$/,
   /\.d\.ts$/,

@@ -22,6 +22,25 @@ const appRoutes: RouteRecordRaw[] = [
       name: 'auth-callback',
       component: () => import('@/views/AuthCallbackView.vue')
     },
+    // Trang pháp lý CÔNG KHAI của ứng dụng (Meta bắt buộc có): không cần đăng nhập, không dùng khung quản trị
+    {
+      path: '/privacy',
+      name: 'legal-privacy',
+      component: () => import('@/views/LegalView.vue'),
+      meta: { legal: 'privacy' }
+    },
+    {
+      path: '/terms',
+      name: 'legal-terms',
+      component: () => import('@/views/LegalView.vue'),
+      meta: { legal: 'terms' }
+    },
+    {
+      path: '/data-deletion',
+      name: 'legal-deletion',
+      component: () => import('@/views/LegalView.vue'),
+      meta: { legal: 'deletion' }
+    },
     {
       path: '/',
       name: 'dashboard',
@@ -187,6 +206,7 @@ let sessionChecked = false
 
 router.beforeEach(async (to) => {
   if (onCustomDomain) return true
+  if (to.meta.legal) return true // trang pháp lý công khai: không hỏi phiên đăng nhập (token hết hạn cũng không bị đẩy về /login)
   const auth = useAuthStore()
   const storedToken = localStorage.getItem('access_token')
 
