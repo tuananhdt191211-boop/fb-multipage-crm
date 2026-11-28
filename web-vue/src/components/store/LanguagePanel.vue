@@ -51,7 +51,7 @@ function setDefault(code: string) {
 // ----------------------------------------------------------------- Nguồn tiếng Việt cần dịch
 
 interface Row {
-  key: string // b|blockId|path, p|id|name, u|key
+  key: string // b|blockId|path, p|id|name, p|id|o|chữ gốc (phân loại), u|key
   group: 'Trang' | 'Sản phẩm' | 'Giao diện'
   src: string
 }
@@ -64,17 +64,24 @@ const rows = computed<Row[]>(() => {
   for (const [pid, e] of Object.entries(collectProductTexts(props.products))) {
     if (e.name) out.push({ key: `p|${pid}|name`, group: 'Sản phẩm', src: e.name })
     if (e.description) out.push({ key: `p|${pid}|description`, group: 'Sản phẩm', src: e.description })
+    for (const o of e.options || []) out.push({ key: `p|${pid}|o|${o}`, group: 'Sản phẩm', src: o })
   }
   for (const [k, v] of Object.entries(UI_VI)) out.push({ key: `u|${k}`, group: 'Giao diện', src: v })
   return out
 })
 
+// Khoá: kind|a|b[|c...] — phần sau "b" của khoá phân loại (p|id|o|chữ gốc) là chữ gốc, có thể chứa dấu "|"
+function parseKey(key: string): { kind: string; a: string; b: string; c: string } {
+  const [kind = '', a = '', b = '', ...rest] = key.split('|')
+  return { kind, a, b, c: rest.join('|') }
+}
+
 function getTr(lang: string, key: string): string {
   const tr = i18n.value.tr[lang]
   if (!tr) return ''
-  const [kind, a, b] = key.split('|') as [string, string, string]
+  const { kind, a, b, c } = parseKey(key)
   if (kind === 'b') return tr.b?.[a]?.[b] || ''
-  if (kind === 'p') return (tr.p?.[a] as any)?.[b] || ''
+  if (kind === 'p') return b === 'o' ? tr.p?.[a]?.o?.[c] || '' : (tr.p?.[a] as any)?.[b] || ''
   return tr.ui?.[a] || ''
 }
 
@@ -82,8 +89,9 @@ function getTr(lang: string, key: string): string {
 function setTrMany(lang: string, entries: Record<string, string>) {
   const tr = JSON.parse(JSON.stringify(i18n.value.tr[lang] || {}))
   for (const [key, value] of Object.entries(entries)) {
-    const [kind, a, b] = key.split('|') as [string, string, string]
+    const { kind, a, b, c } = parseKey(key)
     if (kind === 'b') ((tr.b ||= {})[a] ||= {})[b] = value
+    else if (kind === 'p' && b === 'o') (((tr.p ||= {})[a] ||= {}).o ||= {})[c] = value
     else if (kind === 'p') ((tr.p ||= {})[a] ||= {})[b] = value
     else (tr.ui ||= {})[a] = value
   }

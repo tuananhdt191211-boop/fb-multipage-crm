@@ -6,7 +6,7 @@ import { reactive } from 'vue'
 import { api } from './api'
 import { MARKET_BY_CODE, type Market } from './markets'
 import { summaryFromHtml } from './richHtml'
-import type { PublicProduct, StoreBlock } from '../types/store'
+import type { ProductOption, PublicProduct, PublicVariant, StoreBlock } from '../types/store'
 
 export const UI_VI = {
   loading: 'Đang tải...',
@@ -108,6 +108,9 @@ export const UI_VI = {
   check_on_delivery: 'Kiểm tra hàng khi nhận',
   description: 'Mô tả sản phẩm',
   related: 'Có thể bạn cũng thích',
+  price_from: 'Từ {price}',
+  choose_options: 'Chọn phân loại',
+  cart_items_removed: 'Một số sản phẩm trong giỏ đã hết hàng hoặc không còn bán nên đã được bỏ khỏi giỏ.',
   // Thanh toán
   checkout_failed_load: 'Không tải được trang thanh toán.',
   fill_required: 'Vui lòng nhập đủ họ tên, số điện thoại và địa chỉ.',
@@ -170,10 +173,17 @@ export const UI_VI = {
 
 export type UiKey = keyof typeof UI_VI
 
+// p[id].o: bản dịch tên nhóm phân loại và giá trị (Màu, Đen, Size...) lưu theo CHỮ GỐC → bản dịch
+export interface ProductTr {
+  name?: string
+  description?: string
+  o?: Record<string, string>
+}
+
 export interface SiteI18n {
   markets: string[]
   default?: string
-  tr: Record<string, { b?: Record<string, Record<string, string>>; p?: Record<string, { name?: string; description?: string }>; ui?: Record<string, string> }>
+  tr: Record<string, { b?: Record<string, Record<string, string>>; p?: Record<string, ProductTr>; ui?: Record<string, string> }>
 }
 
 export function parseI18n(raw?: string | null): SiteI18n {
@@ -296,6 +306,12 @@ export function money(vnd: number): string {
   }
 }
 
+// Giá hiển thị trên thẻ sản phẩm: sản phẩm có biến thể khác giá hiện "Từ <giá thấp nhất>"
+export function priceLabel(p: { price: number; price_max?: number; variant_count?: number }): string {
+  if ((p.variant_count || 0) > 0 && (p.price_max || 0) > p.price) return t('price_from', { price: money(p.price) })
+  return money(p.price)
+}
+
 export function isForeignCurrency(): boolean {
   return locale.currency !== 'VND' && !!locale.rates[locale.currency]
 }
@@ -332,12 +348,39 @@ export function localizeBlocks(blocks: StoreBlock[], lang = locale.lang, i18n = 
   })
 }
 
-export function localizeProducts<T extends { id: number; name: string; description?: string; summary?: string }>(products: T[], lang = locale.lang, i18n = locale.i18n): T[] {
+// Tên nhóm phân loại / giá trị theo ngôn ngữ đang chọn (không có bản dịch thì giữ chữ gốc)
+export function optionText(pid: number, text: string, lang = locale.lang, i18n = locale.i18n): string {
+  const o = lang !== 'vi' ? i18n.tr[lang]?.p?.[String(pid)]?.o : undefined
+  return (o && o[text]) || text
+}
+
+// "Đen / L" → từng phần được dịch riêng
+export function variantLabel(pid: number, title: string | undefined): string {
+  return (title || '')
+    .split(' / ')
+    .map((s) => optionText(pid, s))
+    .join(' / ')
+}
+
+export function localizeProducts<
+  T extends { id: number; name: string; description?: string; summary?: string; options?: ProductOption[]; variants?: PublicVariant[] }
+>(products: T[], lang = locale.lang, i18n = locale.i18n): T[] {
   const tp = lang !== 'vi' ? i18n.tr[lang]?.p : undefined
   if (!tp) return products
   return products.map((p) => {
     const tr = tp[String(p.id)]
-    return tr ? { ...p, name: tr.name || p.name, description: tr.description ?? p.description, summary: tr.description ? summaryFromHtml(tr.description) : p.summary } : p
+    if (!tr) return p
+    const o = tr.o
+    const tx = (s: string) => (o && o[s]) || s
+    return {
+      ...p,
+      name: tr.name || p.name,
+      description: tr.description ?? p.description,
+      summary: tr.description ? summaryFromHtml(tr.description) : p.summary,
+      // phân loại: dịch tên nhóm, giá trị và tên biến thể (id không đổi nên lựa chọn của khách được giữ)
+      ...(o && p.options ? { options: p.options.map((g) => ({ name: tx(g.name), values: g.values.map(tx) })) } : {}),
+      ...(o && p.variants ? { variants: p.variants.map((v) => ({ ...v, title: v.option_values.map(tx).join(' / '), option_values: v.option_values.map(tx) })) } : {})
+    }
   })
 }
 
@@ -347,6 +390,7 @@ const SKIP_KEYS = new Set([
   'style', '_text', 'layout', 'type', 'icon', 'source', 'buy_mode', 'right_mode', 'account_style', 'brand_size', 'height',
   'image_side', 'align', 'html', 'embed', 'pad', 'bg', 'text_color', 'color', 'css', 'id', 'socials', 'price', 'compare_price',
   'phone', 'email', 'url', 'link', 'href', 'video', 'map', 'map_embed', 'logo_height', 'columns_count',
+  'tags', // thẻ lọc sản phẩm của section Sản phẩm: so khớp với thẻ gốc của sản phẩm nên không dịch
   // tên riêng / địa chỉ: giữ nguyên
   'brand_name', 'company', 'address'
 ])
@@ -379,13 +423,16 @@ export function collectBlockTexts(blocks: StoreBlock[]): Record<string, Record<s
   return out
 }
 
-export function collectProductTexts(products: PublicProduct[]): Record<string, { name?: string; description?: string }> {
-  const out: Record<string, { name?: string; description?: string }> = {}
+export function collectProductTexts(products: PublicProduct[]): Record<string, { name?: string; description?: string; options?: string[] }> {
+  const out: Record<string, { name?: string; description?: string; options?: string[] }> = {}
   for (const p of products) {
-    const e: { name?: string; description?: string } = {}
+    const e: { name?: string; description?: string; options?: string[] } = {}
     if (p.name?.trim()) e.name = p.name
     if ((p as any).description?.trim()) e.description = (p as any).description
-    if (e.name || e.description) out[String(p.id)] = e
+    // Tên nhóm phân loại + giá trị (Màu, Đen, Size, XL...): mỗi chữ gốc dịch một lần
+    const opts = [...new Set((p.options || []).flatMap((o) => [o.name, ...o.values]).map((s) => s.trim()).filter((s) => /\p{L}/u.test(s)))]
+    if (opts.length) e.options = opts
+    if (e.name || e.description || e.options) out[String(p.id)] = e
   }
   return out
 }

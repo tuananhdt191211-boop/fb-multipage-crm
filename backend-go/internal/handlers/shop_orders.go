@@ -30,6 +30,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -53,12 +54,15 @@ var (
 // ----------------------------------------------------------------- Models
 
 type ShopOrderItem struct {
-	ProductID uint   `json:"product_id"`
-	Name      string `json:"name"`
-	ImageURL  string `json:"image_url"`
-	Price     int64  `json:"price"`
-	Qty       int    `json:"qty"`
-	LineTotal int64  `json:"line_total"`
+	ProductID    uint   `json:"product_id"`
+	VariantID    uint   `json:"variant_id,omitempty"`    // 0 = sản phẩm không có biến thể
+	VariantTitle string `json:"variant_title,omitempty"` // "Đen / L" (chụp lại lúc đặt hàng)
+	SKU          string `json:"sku,omitempty"`
+	Name         string `json:"name"`
+	ImageURL     string `json:"image_url"`
+	Price        int64  `json:"price"`
+	Qty          int    `json:"qty"`
+	LineTotal    int64  `json:"line_total"`
 }
 
 type ShopOrder struct {
@@ -302,6 +306,7 @@ type createOrderReq struct {
 	Slug  string `json:"slug"`
 	Items []struct {
 		ProductID uint `json:"product_id"`
+		VariantID uint `json:"variant_id"` // bắt buộc nếu sản phẩm có biến thể
 		Qty       int  `json:"qty"`
 	} `json:"items"`
 	CustomerName  string `json:"customer_name"`
@@ -413,40 +418,89 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 		}
 	}
 
-	// Gộp số lượng theo sản phẩm, lấy giá & tồn kho từ DB
-	qtyByID := map[uint]int{}
-	order := []uint{}
+	// Gộp số lượng theo (sản phẩm, biến thể), lấy giá & tồn kho từ DB
+	type lineKey struct{ pid, vid uint }
+	qtyByKey := map[lineKey]int{}
+	order := []lineKey{}
+	pidSet := map[uint]bool{}
+	pids := []uint{}
 	for _, it := range req.Items {
 		if it.ProductID == 0 || it.Qty <= 0 {
 			continue
 		}
-		if _, seen := qtyByID[it.ProductID]; !seen {
-			order = append(order, it.ProductID)
+		k := lineKey{it.ProductID, it.VariantID}
+		if _, seen := qtyByKey[k]; !seen {
+			order = append(order, k)
 		}
-		qtyByID[it.ProductID] += it.Qty
+		qtyByKey[k] += it.Qty
+		if !pidSet[it.ProductID] {
+			pidSet[it.ProductID] = true
+			pids = append(pids, it.ProductID)
+		}
 	}
 	if len(order) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Giỏ hàng trống."})
 		return
 	}
 	var prods []models.Product
-	h.DB.Where("storefront_id = ? AND is_active = ? AND id IN ?", sf.ID, true, order).Find(&prods)
+	h.DB.Where("storefront_id = ? AND is_active = ? AND id IN ?", sf.ID, true, pids).Find(&prods)
 	byID := map[uint]models.Product{}
 	for _, p := range prods {
 		byID[p.ID] = p
 	}
+	varsOf := map[uint]map[uint]models.ProductVariant{} // product_id -> variant_id -> biến thể
+	if len(byID) > 0 {
+		var vs []models.ProductVariant
+		h.DB.Where("storefront_id = ? AND product_id IN ?", sf.ID, pids).Find(&vs)
+		for _, v := range vs {
+			if varsOf[v.ProductID] == nil {
+				varsOf[v.ProductID] = map[uint]models.ProductVariant{}
+			}
+			varsOf[v.ProductID][v.ID] = v
+		}
+	}
 
 	items := make([]ShopOrderItem, 0, len(order))
 	var subtotal int64
-	for _, id := range order {
-		p, ok := byID[id]
+	for _, k := range order {
+		p, ok := byID[k.pid]
 		if !ok {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Có sản phẩm trong giỏ không còn bán. Vui lòng tải lại trang."})
 			return
 		}
-		q := qtyByID[id]
+		q := qtyByKey[k]
 		if q > maxOrderQty {
 			q = maxOrderQty
+		}
+		if len(p.Options) > 0 && len(varsOf[p.ID]) > 0 {
+			// Sản phẩm có biến thể: bắt buộc chọn đúng một biến thể của chính sản phẩm này; giá & tồn kho lấy từ biến thể
+			if k.vid == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Vui lòng chọn phân loại cho sản phẩm \"%s\".", p.Name)})
+				return
+			}
+			v, ok := varsOf[p.ID][k.vid]
+			if !ok {
+				c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Phân loại của sản phẩm \"%s\" không còn bán. Vui lòng tải lại trang.", p.Name)})
+				return
+			}
+			if v.Stock == 0 || (v.Stock > 0 && q > v.Stock) {
+				c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("Sản phẩm \"%s\" (%s) không đủ hàng (còn %d).", p.Name, v.Title, max(v.Stock, 0))})
+				return
+			}
+			img := v.ImageURL
+			if img == "" {
+				img = p.ImageURL
+			}
+			line := v.Price * int64(q)
+			subtotal += line
+			items = append(items, ShopOrderItem{ProductID: p.ID, VariantID: v.ID, VariantTitle: v.Title, SKU: v.SKU,
+				Name: p.Name, ImageURL: img, Price: v.Price, Qty: q, LineTotal: line})
+			continue
+		}
+		if k.vid != 0 {
+			// Giỏ hàng cũ còn nhớ biến thể mà cửa hàng đã gỡ: để khách xem lại giá thay vì tính nhầm giá
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Phân loại của sản phẩm \"%s\" không còn bán. Vui lòng tải lại trang.", p.Name)})
+			return
 		}
 		if p.Stock == 0 || (p.Stock > 0 && q > p.Stock) {
 			c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("Sản phẩm \"%s\" không đủ hàng (còn %d).", p.Name, max(p.Stock, 0))})
@@ -536,9 +590,53 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 	c.JSON(http.StatusCreated, resp)
 }
 
-// applyStock cộng/trừ tồn kho (dir = -1 trừ, +1 hoàn). Sản phẩm stock = -1 (không giới hạn) bỏ qua.
+// applyStock cộng/trừ tồn kho (dir = -1 trừ, +1 hoàn). Sản phẩm / biến thể stock = -1 (không giới hạn) bỏ qua.
+// Dòng có variant_id trừ / hoàn ở biến thể rồi cập nhật lại số tổng hợp của sản phẩm.
 func applyStock(tx *gorm.DB, items []ShopOrderItem, dir int) error {
+	// Khoá các sản phẩm có biến thể (theo thứ tự id để không deadlock) trước khi đổi tồn kho: hai đơn cùng lúc
+	// cho hai biến thể của cùng một sản phẩm sẽ xếp hàng, nên số tổng hợp luôn đúng.
+	locked := []uint{}
+	seenLock := map[uint]bool{}
 	for _, it := range items {
+		if it.VariantID != 0 && !seenLock[it.ProductID] {
+			seenLock[it.ProductID] = true
+			locked = append(locked, it.ProductID)
+		}
+	}
+	if len(locked) > 0 {
+		sort.Slice(locked, func(i, j int) bool { return locked[i] < locked[j] })
+		var lockRows []models.Product
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id IN ?", locked).Order("id ASC").Find(&lockRows).Error; err != nil {
+			return err
+		}
+	}
+	for _, it := range items {
+		if it.VariantID != 0 {
+			if dir < 0 {
+				res := tx.Model(&models.ProductVariant{}).
+					Where("id = ? AND stock >= 0", it.VariantID).
+					Where("stock >= ?", it.Qty).
+					UpdateColumn("stock", gorm.Expr("stock - ?", it.Qty))
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected == 0 {
+					var v models.ProductVariant
+					if tx.Select("id, title, stock").First(&v, it.VariantID).Error == nil && v.Stock >= 0 {
+						return fmt.Errorf("Sản phẩm \"%s\" (%s) vừa hết hàng.", it.Name, v.Title)
+					}
+				}
+			} else {
+				_ = tx.Model(&models.ProductVariant{}).Where("id = ? AND stock >= 0", it.VariantID).
+					UpdateColumn("stock", gorm.Expr("stock + ?", it.Qty)).Error
+			}
+			continue
+		}
+		// Dòng không có biến thể nhưng sản phẩm nay đã có biến thể (đơn đặt trước khi cửa hàng chuyển sang biến thể):
+		// tồn kho tổng hợp của sản phẩm do các biến thể quyết định nên không cộng / trừ gì ở đây.
+		if productHasVariants(tx, it.ProductID) {
+			continue
+		}
 		if dir < 0 {
 			res := tx.Model(&models.Product{}).
 				Where("id = ? AND stock >= 0", it.ProductID).
@@ -558,6 +656,9 @@ func applyStock(tx *gorm.DB, items []ShopOrderItem, dir int) error {
 			_ = tx.Model(&models.Product{}).Where("id = ? AND stock >= 0", it.ProductID).
 				UpdateColumn("stock", gorm.Expr("stock + ?", it.Qty)).Error
 		}
+	}
+	for _, pid := range locked {
+		recomputeProductStock(tx, pid)
 	}
 	return nil
 }

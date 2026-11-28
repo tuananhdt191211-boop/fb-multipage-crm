@@ -7,7 +7,7 @@ import { CheckCircle2, Clock, Loader2, XCircle } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
 import { loadPublicSite, localizeSite } from '../lib/publicSite'
-import { locale, money, t } from '../lib/i18n'
+import { locale, money, t, variantLabel } from '../lib/i18n'
 import { useCart } from '../lib/cart'
 import type { PublicSiteData, ShopOrder } from '../types/store'
 
@@ -155,8 +155,8 @@ onBeforeUnmount(() => pollTimer && clearTimeout(pollTimer))
         </div>
 
         <div class="mt-10 space-y-3 rounded-3xl bg-slate-50 p-5 sm:p-6">
-          <div v-for="it in order.items" :key="it.product_id" class="flex justify-between gap-3 text-sm">
-            <span class="text-slate-700">{{ nameOf(it) }} <span class="text-slate-400">× {{ it.qty }}</span></span>
+          <div v-for="it in order.items" :key="`${it.product_id}:${it.variant_id || 0}`" class="flex justify-between gap-3 text-sm" data-testid="order-line">
+            <span class="text-slate-700">{{ nameOf(it) }}<span v-if="it.variant_title" class="text-slate-500"> ({{ variantLabel(it.product_id, it.variant_title) }})</span> <span class="text-slate-400">× {{ it.qty }}</span></span>
             <span class="font-semibold">{{ money(it.line_total) }}</span>
           </div>
           <div class="space-y-1.5 border-t border-slate-200 pt-3 text-sm">

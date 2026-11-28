@@ -2,8 +2,8 @@
 // Giỏ hàng trượt ra từ bên phải
 import { useRouter } from 'vue-router'
 import { Minus, Plus, ShoppingBag, Trash2, X } from 'lucide-vue-next'
-import { useCart } from '../../lib/cart'
-import { money, t } from '../../lib/i18n'
+import { lineKey, useCart } from '../../lib/cart'
+import { money, t, variantLabel } from '../../lib/i18n'
 import type { PublicProduct } from '../../types/store'
 import { safeImg } from '../../lib/safeUrl'
 
@@ -42,20 +42,21 @@ function checkout() {
 
         <template v-else>
           <ul class="flex-1 divide-y divide-slate-100 overflow-y-auto px-5">
-            <li v-for="l in cart.state.lines" :key="l.product_id" class="flex gap-3 py-4">
+            <li v-for="l in cart.state.lines" :key="lineKey(l)" class="flex gap-3 py-4" data-testid="cart-line">
               <div class="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-slate-100">
                 <img v-if="safeImg(l.image_url)" :src="safeImg(l.image_url)" :alt="nameOf(l)" class="h-full w-full object-cover" />
               </div>
               <div class="flex min-w-0 flex-1 flex-col">
                 <div class="line-clamp-2 text-sm font-semibold">{{ nameOf(l) }}</div>
+                <div v-if="l.variant_title" class="text-xs text-slate-500" data-testid="cart-variant">{{ variantLabel(l.product_id, l.variant_title) }}</div>
                 <div class="mt-0.5 text-sm font-bold" :style="{ color: accent }">{{ money(l.price) }}</div>
                 <div class="mt-auto flex items-center justify-between pt-2">
                   <div class="flex items-center rounded-full border border-slate-200">
-                    <button class="p-1.5 hover:text-slate-900" :aria-label="t('decrease')" @click="cart.setQty(l.product_id, l.qty - 1)"><Minus class="h-3.5 w-3.5" /></button>
+                    <button class="p-1.5 hover:text-slate-900" :aria-label="t('decrease')" @click="cart.setQty(l, l.qty - 1)"><Minus class="h-3.5 w-3.5" /></button>
                     <span class="w-8 text-center text-sm font-semibold">{{ l.qty }}</span>
-                    <button class="p-1.5 hover:text-slate-900" :aria-label="t('increase')" @click="cart.setQty(l.product_id, l.qty + 1)"><Plus class="h-3.5 w-3.5" /></button>
+                    <button class="p-1.5 hover:text-slate-900" :aria-label="t('increase')" @click="cart.setQty(l, l.qty + 1)"><Plus class="h-3.5 w-3.5" /></button>
                   </div>
-                  <button class="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" :aria-label="t('remove')" @click="cart.remove(l.product_id)"><Trash2 class="h-4 w-4" /></button>
+                  <button class="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600" :aria-label="t('remove')" @click="cart.remove(l)"><Trash2 class="h-4 w-4" /></button>
                 </div>
               </div>
             </li>

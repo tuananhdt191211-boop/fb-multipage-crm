@@ -4,9 +4,35 @@ import { computed, ref } from 'vue'
 import { GripVertical, Plus, Trash2 } from 'lucide-vue-next'
 import ImageField from './ImageField.vue'
 import { iconChoices } from '../../lib/blockFactory'
-import type { StoreBlock } from '../../types/store'
+import type { PublicProduct, StoreBlock } from '../../types/store'
 
-const props = defineProps<{ block: StoreBlock; siteId: number | string; siteLogo?: string; siteColor?: string }>()
+const props = defineProps<{ block: StoreBlock; siteId: number | string; siteLogo?: string; siteColor?: string; products?: PublicProduct[] }>()
+
+// ----- Sản phẩm: chọn thẻ để chỉ hiện các sản phẩm có thẻ đó trong section -----
+const tagKey = (s: string) => s.trim().toLowerCase()
+const selectedTags = computed<string[]>(() => (Array.isArray(d().tags) ? (d().tags as string[]) : []))
+// Mọi thẻ đang dùng ở các sản phẩm đang bán (kèm số sản phẩm); thẻ đã chọn mà không còn sản phẩm nào vẫn hiện để bỏ chọn
+const tagChoices = computed(() => {
+  const m = new Map<string, { name: string; count: number }>()
+  for (const p of props.products || []) {
+    for (const t of p.tags || []) {
+      const e = m.get(tagKey(t))
+      if (e) e.count++
+      else m.set(tagKey(t), { name: t, count: 1 })
+    }
+  }
+  for (const t of selectedTags.value) if (!m.has(tagKey(t))) m.set(tagKey(t), { name: t, count: 0 })
+  return [...m.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+})
+const tagOn = (name: string) => selectedTags.value.some((t) => tagKey(t) === tagKey(name))
+function toggleTag(name: string) {
+  d().tags = tagOn(name) ? selectedTags.value.filter((t) => tagKey(t) !== tagKey(name)) : [...selectedTags.value, name]
+}
+const matchingCount = computed(() => {
+  const want = new Set(selectedTags.value.map(tagKey))
+  if (!want.size) return (props.products || []).length
+  return (props.products || []).filter((p) => (p.tags || []).some((t) => want.has(tagKey(t)))).length
+})
 
 const inp = 'w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-sm focus:border-indigo-500 focus:outline-none'
 const lbl = 'block text-xs font-bold text-slate-600'
@@ -315,6 +341,29 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
           <option value="manual">Nhập tay trong section này</option>
         </select>
       </label>
+      <!-- Lọc theo thẻ (thẻ gắn ở Quản lý sản phẩm) -->
+      <div v-if="block.data.source === 'catalog'" class="space-y-1.5 rounded-xl border border-slate-200 p-3" data-testid="tag-filter">
+        <span :class="lbl">Chỉ hiện sản phẩm có thẻ</span>
+        <div v-if="tagChoices.length" class="flex flex-wrap gap-1.5">
+          <button
+            v-for="t in tagChoices"
+            :key="t.name"
+            type="button"
+            class="rounded-full border px-2.5 py-1 text-xs font-semibold"
+            :class="tagOn(t.name) ? 'border-indigo-600 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:bg-slate-50'"
+            :data-tag="t.name"
+            @click="toggleTag(t.name)"
+          >
+            {{ t.name }} <span class="text-[10px] opacity-60">{{ t.count }}</span>
+          </button>
+        </div>
+        <p v-else class="text-[11px] leading-relaxed text-slate-400">Chưa có sản phẩm nào gắn thẻ. Thêm thẻ khi sửa sản phẩm ở trang “Quản lý sản phẩm”.</p>
+        <p class="text-[11px] leading-relaxed text-slate-500">
+          <template v-if="selectedTags.length">Section này chỉ hiện sản phẩm có ít nhất một thẻ đã chọn: <strong>{{ matchingCount }}</strong> sản phẩm.</template>
+          <template v-else>Chưa chọn thẻ nào: section hiện tất cả sản phẩm đang bán.</template>
+          <button v-if="selectedTags.length" type="button" class="ml-1 font-bold text-indigo-700 hover:underline" @click="block.data.tags = []">Bỏ chọn hết</button>
+        </p>
+      </div>
       <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
         <input type="checkbox" :checked="block.data.show_buy !== false" @change="block.data.show_buy = ($event.target as HTMLInputElement).checked" />
         Hiện nút đặt mua dưới mỗi sản phẩm

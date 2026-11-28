@@ -6,14 +6,24 @@ import { safeImg } from '../../lib/safeUrl'
 import { t } from '../../lib/i18n'
 import type { ProductMedia } from '../../lib/productMedia'
 
-const props = defineProps<{ media?: ProductMedia[]; fallback?: string; name: string; accent?: string }>()
+// focus: ảnh của biến thể đang chọn — bộ sưu tập nhảy tới ảnh đó (chưa có trong bộ sưu tập thì thêm vào đầu)
+const props = defineProps<{ media?: ProductMedia[]; fallback?: string; name: string; accent?: string; focus?: string }>()
 
 const index = ref(0)
 const items = computed<ProductMedia[]>(() => {
-  if (props.media?.length) return props.media
-  return props.fallback ? [{ type: 'image', url: props.fallback }] : []
+  const base: ProductMedia[] = props.media?.length ? props.media : props.fallback ? [{ type: 'image', url: props.fallback }] : []
+  if (props.focus && !base.some((m) => m.type === 'image' && m.url === props.focus)) return [{ type: 'image', url: props.focus }, ...base]
+  return base
 })
 watch(items, () => (index.value = 0))
+watch(
+  () => props.focus,
+  (f) => {
+    const i = f ? items.value.findIndex((m) => m.type === 'image' && m.url === f) : -1
+    if (i >= 0) index.value = i
+  },
+  { immediate: true }
+)
 const current = computed(() => items.value[index.value])
 
 // Chỉ nhúng đúng 2 nguồn đã chuẩn hoá ở máy chủ (phòng thủ lớp hai)

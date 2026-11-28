@@ -6,10 +6,11 @@ import { ChevronRight, Loader2, Minus, Plus, ShieldCheck, ShoppingBag, Truck } f
 import PublicShell from '../components/store/PublicShell.vue'
 import ProductGallery from '../components/store/ProductGallery.vue'
 import { loadPublicProduct, loadPublicSite, localizeSite } from '../lib/publicSite'
-import { localizeProducts, money, t } from '../lib/i18n'
+import { localizeProducts, money, priceLabel, t } from '../lib/i18n'
 import { toRichHtml } from '../lib/richHtml'
 import { useCart } from '../lib/cart'
 import { safeImg } from '../lib/safeUrl'
+import { findVariant, pickValue, valueState } from '../lib/variants'
 import type { PublicProduct, PublicSiteData } from '../types/store'
 
 const route = useRoute()
@@ -30,10 +31,30 @@ const product = computed<PublicProduct | null>(() => {
   return base ? { ...base, ...full, name: full.name || base.name } : null
 })
 const descriptionHtml = computed(() => toRichHtml(product.value?.description || ''))
-const discount = computed(() => {
-  const p = product.value
-  return p && p.compare_price > p.price ? Math.round((1 - p.price / p.compare_price) * 100) : 0
-})
+
+// Biến thể (Màu / Size...): luôn có một biến thể đang chọn; trạng thái lưu theo id nên đổi ngôn ngữ không làm mất lựa chọn
+const options = computed(() => product.value?.options || [])
+const variants = computed(() => product.value?.variants || [])
+const hasVariants = computed(() => options.value.length > 0 && variants.value.length > 0)
+const variantId = ref(0)
+const variant = computed(() => (hasVariants.value ? variants.value.find((v) => v.id === variantId.value) : undefined))
+const selection = computed(() => variant.value?.option_values || [])
+watch(
+  variants,
+  (vs) => {
+    if (vs.length && !vs.some((v) => v.id === variantId.value)) variantId.value = (vs.find((v) => v.in_stock) || vs[0])!.id
+  },
+  { immediate: true }
+)
+function choose(p: number, val: string) {
+  const next = findVariant(variants.value, pickValue(variants.value, selection.value, p, val))
+  if (next) variantId.value = next.id
+}
+const unitPrice = computed(() => variant.value?.price ?? product.value?.price ?? 0)
+const unitCompare = computed(() => (variant.value ? variant.value.compare_price : product.value?.compare_price) || 0)
+const inStock = computed(() => (variant.value ? variant.value.in_stock : !!product.value?.in_stock))
+const skuShown = computed(() => variant.value?.sku || product.value?.sku || '')
+const discount = computed(() => (unitCompare.value > unitPrice.value ? Math.round((1 - unitPrice.value / unitCompare.value) * 100) : 0))
 const related = computed(() => (site.value?.products || []).filter((p) => p.id !== product.value?.id).slice(0, 4))
 const accent = computed(() => site.value?.primary_color || '#059669')
 
@@ -60,9 +81,13 @@ async function loadDetail() {
 }
 
 function addToCart(go = false) {
-  if (!product.value || !product.value.in_stock) return
+  if (!product.value || !inStock.value) return
+  if (hasVariants.value && !variant.value) return
   const cart = useCart(slug.value)
-  cart.add(product.value, qty.value)
+  // Giỏ lưu chữ GỐC của tên và phân loại (chưa dịch): khi hiển thị mới dịch theo ngôn ngữ khách đang chọn
+  const raw = detail.value && detail.value.id === product.value.id ? detail.value : product.value
+  const rawVariant = variant.value ? (raw.variants?.find((v) => v.id === variant.value!.id) ?? variant.value) : undefined
+  cart.add(raw, qty.value, rawVariant)
   if (go) {
     cart.state.open = false
     router.push({ name: 'public-checkout', params: { slug: slug.value } })
@@ -71,6 +96,7 @@ function addToCart(go = false) {
 
 watch(() => route.params.pid, async () => {
   qty.value = 1
+  variantId.value = 0
   window.scrollTo({ top: 0 })
   await loadDetail()
   if (product.value && rawSite.value) document.title = `${product.value.name} – ${rawSite.value.site_title}`
@@ -95,20 +121,49 @@ onMounted(load)
       </div>
 
       <div v-else class="grid grid-cols-1 gap-10 md:grid-cols-2 md:gap-14">
-        <ProductGallery :media="product.media" :fallback="product.image_url" :name="product.name" :accent="accent">
+        <ProductGallery :media="product.media" :fallback="product.image_url" :name="product.name" :accent="accent" :focus="variant?.image_url">
           <span v-if="discount" class="absolute left-4 top-4 rounded-full bg-rose-500 px-3 py-1 text-sm font-bold text-white">-{{ discount }}%</span>
         </ProductGallery>
 
         <div class="space-y-5">
           <h1 class="text-2xl font-extrabold leading-tight tracking-tight text-slate-900 sm:text-3xl">{{ product.name }}</h1>
-          <div class="flex flex-wrap items-baseline gap-3">
-            <span class="text-3xl font-extrabold" :style="{ color: accent }">{{ money(product.price) }}</span>
-            <span v-if="discount" class="text-lg text-slate-400 line-through">{{ money(product.compare_price) }}</span>
-            <span v-if="discount" class="rounded-full bg-rose-50 px-2.5 py-0.5 text-sm font-bold text-rose-600">{{ t('save_amount', { amount: money(product.compare_price - product.price) }) }}</span>
+          <div class="flex flex-wrap items-baseline gap-3" data-testid="price">
+            <span class="text-3xl font-extrabold" :style="{ color: accent }">{{ money(unitPrice) }}</span>
+            <span v-if="discount" class="text-lg text-slate-400 line-through">{{ money(unitCompare) }}</span>
+            <span v-if="discount" class="rounded-full bg-rose-50 px-2.5 py-0.5 text-sm font-bold text-rose-600">{{ t('save_amount', { amount: money(unitCompare - unitPrice) }) }}</span>
           </div>
-          <p class="text-sm font-semibold" :class="product.in_stock ? 'text-emerald-600' : 'text-rose-600'">{{ product.in_stock ? t('in_stock') : t('sold_out') }}</p>
 
-          <div v-if="product.in_stock" class="space-y-3 pt-1">
+          <!-- Phân loại (Màu, Size...) -->
+          <div v-if="hasVariants" class="space-y-4" data-testid="options">
+            <div v-for="(o, p) in options" :key="o.name + p" class="space-y-2">
+              <div class="text-sm font-semibold text-slate-600">{{ o.name }}: <span class="text-slate-900">{{ selection[p] }}</span></div>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  v-for="val in o.values"
+                  :key="val"
+                  type="button"
+                  class="rounded-xl border-2 px-3.5 py-2 text-sm font-semibold transition"
+                  :class="[
+                    selection[p] === val ? '' : 'border-slate-200 text-slate-700 hover:border-slate-400',
+                    valueState(variants, selection, p, val) === 'soldout' ? 'line-through opacity-50' : '',
+                    valueState(variants, selection, p, val) === 'missing' ? 'border-dashed opacity-40' : ''
+                  ]"
+                  :style="selection[p] === val ? { borderColor: accent, color: accent, backgroundColor: accent + '14' } : undefined"
+                  :aria-pressed="selection[p] === val"
+                  :title="valueState(variants, selection, p, val) === 'soldout' ? t('out_of_stock') : undefined"
+                  :data-option="p"
+                  :data-value="val"
+                  @click="choose(p, val)"
+                >
+                  {{ val }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <p class="text-sm font-semibold" :class="inStock ? 'text-emerald-600' : 'text-rose-600'" data-testid="stock">{{ inStock ? t('in_stock') : t('sold_out') }}</p>
+
+          <div v-if="inStock" class="space-y-3 pt-1">
             <div class="flex items-center gap-3">
               <span class="text-sm font-semibold text-slate-600">{{ t('quantity') }}</span>
               <div class="flex items-center rounded-full border border-slate-300">
@@ -118,7 +173,7 @@ onMounted(load)
               </div>
             </div>
             <div class="flex flex-col gap-3 sm:flex-row">
-              <button class="flex flex-1 items-center justify-center gap-2 rounded-full border-2 py-3.5 text-sm font-bold transition hover:bg-slate-50" :style="{ borderColor: accent, color: accent }" @click="addToCart(false)">
+              <button class="flex flex-1 items-center justify-center gap-2 rounded-full border-2 py-3.5 text-sm font-bold transition hover:bg-slate-50" :style="{ borderColor: accent, color: accent }" data-testid="add-to-cart" @click="addToCart(false)">
                 <ShoppingBag class="h-4 w-4" /> {{ t('add_to_cart') }}
               </button>
               <button class="flex-1 rounded-full py-3.5 text-sm font-bold text-white shadow-lg transition hover:brightness-110" :style="{ backgroundColor: accent }" @click="addToCart(true)">{{ t('buy_now') }}</button>
@@ -130,7 +185,7 @@ onMounted(load)
             <span class="flex items-center gap-2"><ShieldCheck class="h-4 w-4" :style="{ color: accent }" /> {{ t('check_on_delivery') }}</span>
           </div>
 
-          <p v-if="product.sku" class="text-xs text-slate-400">SKU: {{ product.sku }}</p>
+          <p v-if="skuShown" class="text-xs text-slate-400">SKU: {{ skuShown }}</p>
 
           <div v-if="descriptionHtml" class="border-t border-slate-100 pt-5">
             <h2 class="mb-2 text-base font-bold text-slate-900">{{ t('description') }}</h2>
@@ -148,7 +203,7 @@ onMounted(load)
             </div>
             <div class="p-3">
               <div class="line-clamp-2 text-sm font-semibold text-slate-800">{{ p.name }}</div>
-              <div class="mt-1 font-bold" :style="{ color: accent }">{{ money(p.price) }}</div>
+              <div class="mt-1 font-bold" :style="{ color: accent }">{{ priceLabel(p) }}</div>
             </div>
           </router-link>
         </div>

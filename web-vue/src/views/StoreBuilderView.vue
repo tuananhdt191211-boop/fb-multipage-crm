@@ -148,7 +148,11 @@ async function loadProducts() {
         price: p.price,
         compare_price: p.compare_price,
         image_url: p.image_url,
-        in_stock: p.stock !== 0
+        in_stock: p.stock !== 0,
+        tags: (p.tags || '').split(',').map((s) => s.trim()).filter(Boolean),
+        options: p.options || [], // để dịch tên phân loại ở tab Ngôn ngữ
+        variant_count: p.variant_count || 0,
+        price_max: p.price_max || p.price
       }))
   } catch {
     products.value = []
@@ -774,7 +778,7 @@ watch(selectedId, (id) => {
               <p v-else class="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
                 Mẹo: bấm vào một dòng chữ trên trang để chỉnh cỡ chữ, màu, thẻ H1/H2… và xem code CSS/HTML.
               </p>
-              <SectionSettings :key="selectedBlock.id" :block="selectedBlock" :site-id="site.id" :site-logo="site.logo_url" :site-color="site.primary_color" />
+              <SectionSettings :key="selectedBlock.id" :block="selectedBlock" :site-id="site.id" :site-logo="site.logo_url" :site-color="site.primary_color" :products="products" />
             </div>
           </template>
           <div v-else class="space-y-3 p-5 text-center text-xs text-slate-500">

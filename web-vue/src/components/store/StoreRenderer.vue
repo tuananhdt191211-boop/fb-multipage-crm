@@ -31,7 +31,7 @@ import {
   X
 } from 'lucide-vue-next'
 import { safeHref, safeImg } from '../../lib/safeUrl'
-import { money, t } from '../../lib/i18n'
+import { money, priceLabel, t } from '../../lib/i18n'
 import { blockLabels } from '../../lib/blockFactory'
 import { useCart } from '../../lib/cart'
 import { customerState, useCustomer } from '../../lib/customer'
@@ -122,8 +122,16 @@ function productLink(id: number) {
   return props.siteSlug && !props.editable ? storePath(props.siteSlug, `/p/${id}`) : undefined
 }
 
+// Section Sản phẩm: chỉ hiện sản phẩm có ít nhất một thẻ đã chọn (không chọn thẻ nào = tất cả sản phẩm)
+function catalogOf(blk: StoreBlock): PublicProduct[] {
+  const all = props.products || []
+  const want = (Array.isArray(blk.data?.tags) ? (blk.data.tags as unknown[]) : []).map((t) => String(t).trim().toLowerCase()).filter(Boolean)
+  if (!want.length) return all
+  return all.filter((p) => (p.tags || []).some((t) => want.includes(t.trim().toLowerCase())))
+}
+
 function addToCart(p: PublicProduct) {
-  if (cart && p.in_stock) cart.add(p)
+  if (cart && p.in_stock && !(p.variant_count || 0)) cart.add(p) // sản phẩm có biến thể phải chọn phân loại ở trang sản phẩm
 }
 
 function openCart() {
@@ -593,7 +601,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     <img v-if="safeImg(p.image_url)" :src="safeImg(p.image_url)" :alt="p.name" class="h-full w-full object-cover" />
                   </span>
                   <span class="min-w-0 flex-1 truncate text-sm font-semibold">{{ p.name }}</span>
-                  <span class="text-sm font-bold" :style="{ color: accent }">{{ money(p.price) }}</span>
+                  <span class="text-sm font-bold" :style="{ color: accent }">{{ priceLabel(p) }}</span>
                 </a>
               </div>
             </div>
@@ -701,11 +709,11 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 
             <!-- Sản phẩm từ danh sách của shop -->
             <template v-if="blk.data.source === 'catalog'">
-              <p v-if="!products?.length" class="text-center text-sm text-slate-500">
-                {{ editable ? 'Chưa có sản phẩm. Thêm sản phẩm ở trang "Quản lý sản phẩm".' : t('products_soon') }}
+              <p v-if="!catalogOf(blk).length" class="text-center text-sm text-slate-500">
+                {{ editable ? (products?.length ? 'Chưa có sản phẩm nào có thẻ đã chọn. Đổi thẻ ở cài đặt section hoặc gắn thẻ cho sản phẩm.' : 'Chưa có sản phẩm. Thêm sản phẩm ở trang "Quản lý sản phẩm".') : t('products_soon') }}
               </p>
               <div class="grid grid-cols-2 gap-3 @3xl:grid-cols-3 @3xl:gap-6 @5xl:grid-cols-4">
-                <article v-for="prod in products || []" :key="prod.id" class="group flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white transition hover:-translate-y-1 hover:shadow-xl hover:shadow-slate-900/5">
+                <article v-for="prod in catalogOf(blk)" :key="prod.id" class="group flex flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white transition hover:-translate-y-1 hover:shadow-xl hover:shadow-slate-900/5">
                   <component :is="productLink(prod.id) ? 'a' : 'div'" :href="productLink(prod.id)" class="relative block aspect-square overflow-hidden bg-slate-100">
                     <img v-if="safeImg(prod.image_url)" :src="safeImg(prod.image_url)" :alt="prod.name" loading="lazy" class="h-full w-full object-cover transition duration-500 group-hover:scale-105" />
                     <span v-if="discount(prod)" class="absolute left-2.5 top-2.5 rounded-full bg-rose-500 px-2 py-0.5 text-[11px] font-bold text-white">Sale -{{ discount(prod) }}%</span>
@@ -715,7 +723,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                     <component :is="productLink(prod.id) ? 'a' : 'h3'" :href="productLink(prod.id)" class="line-clamp-2 text-sm font-bold leading-snug text-slate-900 hover:underline @3xl:text-[15px]">{{ prod.name }}</component>
                     <p v-if="prod.summary" class="line-clamp-2 text-xs leading-relaxed text-slate-500">{{ prod.summary }}</p>
                     <div class="mt-auto flex flex-wrap items-baseline gap-x-2 pt-1.5">
-                      <span class="text-base font-extrabold @3xl:text-lg" :style="{ color: accent }">{{ money(prod.price) }}</span>
+                      <span class="text-base font-extrabold @3xl:text-lg" :style="{ color: accent }">{{ priceLabel(prod) }}</span>
                       <span v-if="prod.compare_price > prod.price" class="text-xs text-slate-400 line-through">{{ money(prod.compare_price) }}</span>
                     </div>
                     <template v-if="blk.data.show_buy !== false && prod.in_stock">
@@ -726,6 +734,15 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                         :style="{ backgroundColor: accent }"
                       >
                         {{ blk.data.buy_label || t('buy') }}
+                      </a>
+                      <!-- Có biến thể (Màu / Size...): khách phải chọn phân loại ở trang sản phẩm -->
+                      <a
+                        v-else-if="(prod.variant_count || 0) > 0"
+                        :href="productLink(prod.id)"
+                        class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-bold text-white transition hover:brightness-110"
+                        :style="{ backgroundColor: accent }"
+                      >
+                        <ShoppingBag class="h-4 w-4" /> {{ t('choose_options') }}
                       </a>
                       <button
                         v-else

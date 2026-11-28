@@ -10,6 +10,8 @@ import { api } from '../../lib/api'
 import { escapeHtml, sanitizeHtml } from '../../lib/richHtml'
 import { importImagesToLibrary, type ProductMedia } from '../../lib/productMedia'
 import { safeImg } from '../../lib/safeUrl'
+import { comboCount, fitOptions } from '../../lib/variants'
+import type { ProductOption } from '../../types/store'
 
 interface Draft {
   name: string
@@ -38,6 +40,7 @@ export interface ImportResult {
   cost_price: number
   sku: string
   source_url: string
+  options: ProductOption[] // nhóm phân loại để tạo biến thể (rỗng = không tạo)
 }
 
 const props = defineProps<{ siteId: number | string }>()
@@ -177,14 +180,20 @@ async function apply() {
     ...d.videos.filter((u) => selectedVideos.value.has(u)).map((u) => ({ type: 'video' as const, url: u }))
   ]
   let desc = d.description || ''
-  if (includeOptions.value && d.options?.length) {
-    desc += '<h3>Phân loại</h3><ul>' + d.options.map((o) => `<li><strong>${escapeHtml(o.name)}:</strong> ${escapeHtml(o.values.join(', '))}</li>`).join('') + '</ul>'
+  let options: ProductOption[] = []
+  if (d.options?.length) {
+    // Bật: tạo biến thể từ các nhóm (vượt 3 nhóm / 100 biến thể thì phần dư ghi vào mô tả); tắt: ghi hết vào mô tả
+    if (includeOptions.value) {
+      options = optionFit.value.kept
+      if (optionFit.value.dropped.length) desc += optionsHtml('Phân loại khác', optionFit.value.dropped)
+    } else desc += optionsHtml('Phân loại', d.options)
   }
   applying.value = ''
   emit('apply', {
     name: d.name,
     description: desc,
     media,
+    options,
     price: finalPrice.value,
     compare_price: finalCompare.value > finalPrice.value ? finalCompare.value : 0,
     cost_price: costVnd.value,
@@ -192,6 +201,14 @@ async function apply() {
     source_url: d.source_url || (tab.value === 'paste' ? sourceLink.value.trim() : '')
   })
 }
+
+function optionsHtml(title: string, opts: ProductOption[]): string {
+  return `<h3>${escapeHtml(title)}</h3><ul>` + opts.map((o) => `<li><strong>${escapeHtml(o.name)}:</strong> ${escapeHtml(o.values.join(', '))}</li>`).join('') + '</ul>'
+}
+
+// Các nhóm của nguồn → nhóm phân loại (tối đa 3 nhóm, 100 biến thể)
+const optionFit = computed(() => fitOptions(draft.value?.options || []))
+const variantTotal = computed(() => comboCount(optionFit.value.kept))
 
 const safeDescription = computed(() => sanitizeHtml(draft.value?.description || '') || '<p>(Chưa có mô tả)</p>')
 const sourceLabel = computed(() => (draft.value ? SOURCE_NAMES[draft.value.source] || 'website' : ''))
@@ -368,8 +385,10 @@ const sourceLabel = computed(() => (draft.value ? SOURCE_NAMES[draft.value.sourc
           <span class="text-xs font-bold text-slate-600">Phân loại tìm thấy</span>
           <p v-for="o in draft.options" :key="o.name" class="text-xs text-slate-600"><strong>{{ o.name }}:</strong> {{ o.values.join(', ') }}</p>
           <label class="inline-flex items-center gap-2 pt-1 text-[11px] font-semibold text-slate-500">
-            <input v-model="includeOptions" type="checkbox" /> Ghi các phân loại này vào cuối mô tả (hệ thống chưa quản lý biến thể riêng cho từng phân loại)
+            <input v-model="includeOptions" type="checkbox" data-testid="import-make-variants" /> Tạo biến thể từ các phân loại này (mỗi tổ hợp có giá, tồn kho, SKU riêng; bỏ chọn thì ghi vào cuối mô tả)
           </label>
+          <p v-if="includeOptions && variantTotal > 0" class="text-[11px] text-emerald-700">Sẽ tạo {{ variantTotal }} biến thể, giá lấy theo giá bán ở trên — bạn chỉnh giá từng biến thể trong trình sửa.</p>
+          <p v-if="includeOptions && optionFit.dropped.length" class="text-[11px] text-amber-700">Tối đa 3 nhóm và 100 biến thể: các nhóm còn lại sẽ được ghi vào cuối mô tả.</p>
         </div>
 
         <!-- Mô tả -->

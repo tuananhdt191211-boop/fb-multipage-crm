@@ -59,7 +59,8 @@ Màn **Sản phẩm → Nhập từ AliExpress / 1688 / link** tạo **bản nh�
 - Giá nguồn (CNY, USD...) được quy đổi sang VND theo tỉ giá hằng ngày; ô **Hệ số nhân** (mặc định 2,5 cho ngoại tệ) tính ra giá bán và
   giá nhập được lưu riêng để hiện lợi nhuận.
 - Tuỳ chọn **Tải ảnh về thư viện của tôi** lưu bản sao ảnh vào kho của bạn, không phụ thuộc nguồn (nguồn xoá ảnh vẫn không mất).
-- Hệ thống chưa quản lý biến thể (màu / size với giá và tồn kho riêng): phân loại tìm thấy được ghi vào cuối mô tả.
+- Phân loại tìm thấy (Màu, Size...) được **tạo thành biến thể** (mỗi tổ hợp có giá, tồn kho, SKU riêng; tối đa 3 nhóm / 100 biến thể — phần dư ghi vào cuối mô tả). Bỏ chọn
+  “Tạo biến thể từ các phân loại này” nếu chỉ muốn ghi chúng vào mô tả. Xem [product-variants.md](product-variants.md).
 - Máy chủ chặn tải địa chỉ nội bộ (chống SSRF), chỉ cổng 80/443, mỗi tài khoản tối đa 15 lần nhập / phút.
 
 ## Kiểm thử với kho S3 thật
@@ -69,5 +70,5 @@ docker run -d --name pp_s3 -p 18000:8000 -e S3BACKEND=mem -e SCALITY_ACCESS_KEY_
 cd backend-go
 TEST_DATABASE_URL=postgres://...fbcrm_test?sslmode=disable \
 TEST_S3_ENDPOINT=http://localhost:18000 TEST_S3_ACCESS=accessKey1 TEST_S3_SECRET=verySecretKey1 TEST_S3_BUCKET=pp-test TEST_S3_REGION=us-east-1 \
-go test ./internal/storage ./internal/handlers -run 'RealServer|Product|SiteMedia' -v
+go test ./internal/storage ./internal/handlers -run 'RealServer|Product|SiteMedia|Variant' -v
 ```

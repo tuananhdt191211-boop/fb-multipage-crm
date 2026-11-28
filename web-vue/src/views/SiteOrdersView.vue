@@ -429,8 +429,8 @@ onMounted(loadOrders)
             <div v-if="detail.note" class="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">Ghi chú: {{ detail.note }}</div>
           </section>
           <section class="space-y-2 rounded-xl bg-slate-50 p-4 text-sm">
-            <div v-for="it in detail.items" :key="it.product_id" class="flex justify-between gap-3">
-              <span>{{ it.name }} <span class="text-slate-400">× {{ it.qty }}</span></span>
+            <div v-for="it in detail.items" :key="`${it.product_id}:${it.variant_id || 0}`" class="flex justify-between gap-3" data-testid="admin-order-line">
+              <span>{{ it.name }}<span v-if="it.variant_title" class="font-semibold text-slate-600"> · {{ it.variant_title }}</span><span v-if="it.sku" class="text-xs text-slate-400"> ({{ it.sku }})</span> <span class="text-slate-400">× {{ it.qty }}</span></span>
               <span class="font-semibold" :title="adminMoneyTitle(it.line_total)">{{ adminMoney(it.line_total) }}</span>
             </div>
             <div class="flex justify-between border-t border-slate-200 pt-2 text-slate-500"><span>Phí ship</span><span :title="adminMoneyTitle(detail.shipping_fee)">{{ adminMoney(detail.shipping_fee) }}</span></div>

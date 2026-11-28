@@ -14,7 +14,9 @@ import { safeImg } from '../lib/safeUrl'
 import RichTextEditor from '../components/store/RichTextEditor.vue'
 import ProductMediaManager from '../components/store/ProductMediaManager.vue'
 import ProductImportDialog, { type ImportResult } from '../components/store/ProductImportDialog.vue'
-import type { AdminProduct, AdminProductLite, Site } from '../types/store'
+import ProductVariantsEditor from '../components/store/ProductVariantsEditor.vue'
+import { fromRows, rebuildVariants, toPayload, validateVariants, type VariantDefaults } from '../lib/variants'
+import type { AdminProduct, AdminProductLite, AdminVariant, ProductOption, Site } from '../types/store'
 
 const route = useRoute()
 const router = useRouter()
@@ -52,10 +54,12 @@ interface ProductForm {
   barcode: string
   source_url: string
   tags: string[]
+  options: ProductOption[] // nhóm phân loại (Màu, Size...)
+  variants: AdminVariant[] // thẳng hàng với options
 }
 const emptyForm = (): ProductForm => ({
   name: '', description: '', price: 0, compare_price: 0, cost_price: 0, media: [], stock: 0, unlimited: true, is_active: true,
-  sort_order: 0, sku: '', barcode: '', source_url: '', tags: []
+  sort_order: 0, sku: '', barcode: '', source_url: '', tags: [], options: [], variants: []
 })
 const form = ref<ProductForm>(emptyForm())
 const tagInput = ref('')
@@ -67,11 +71,13 @@ function apiError(err: any, fallback: string) {
 
 function toLite(p: AdminProduct): AdminProductLite {
   const media = p.media || []
+  const vs = p.variants || []
   return {
     id: p.id, name: p.name, summary: summaryFromHtml(p.description || ''), price: p.price, compare_price: p.compare_price,
     image_url: p.image_url, stock: p.stock, is_active: p.is_active, sort_order: p.sort_order, sku: p.sku || '',
     cost_price: p.cost_price || 0, source_url: p.source_url || '', tags: p.tags || '', media_count: media.length,
-    has_video: media.some((m) => m.type !== 'image')
+    has_video: media.some((m) => m.type !== 'image'),
+    variant_count: vs.length, price_max: Math.max(p.price, ...vs.map((v) => v.price))
   }
 }
 
@@ -104,7 +110,10 @@ const filtered = computed(() => {
 })
 
 function formFrom(p: AdminProduct): ProductForm {
+  const options = (p.options || []).map((o) => ({ name: o.name, values: [...o.values] }))
   return {
+    options,
+    variants: fromRows(options, p.variants || []),
     name: p.name,
     description: p.description || '',
     price: p.price,
@@ -161,6 +170,7 @@ async function duplicate(p: AdminProductLite) {
   const f = formFrom(full)
   f.name = `${f.name} (bản sao)`
   f.sku = ''
+  f.variants = f.variants.map((v) => ({ ...v, id: undefined, sku: '' })) // bản sao là sản phẩm mới: không dùng lại id / SKU của biến thể cũ
   f.is_active = false
   openForm(f, null, '')
 }
@@ -177,7 +187,16 @@ function onImported(r: ImportResult) {
   f.sku = r.sku
   f.source_url = r.source_url
   f.is_active = false // nhập xong để ẩn, xem lại rồi mới bật bán
-  openForm(f, null, 'Đã nhập dữ liệu — hãy xem lại tên, giá, ảnh, mô tả rồi bấm Lưu. Sản phẩm đang ở trạng thái ẨN cho tới khi bạn bật bán.')
+  // Phân loại tìm thấy → biến thể (giá = giá bán đã tính, tồn kho không giới hạn); chủ shop chỉnh giá từng biến thể sau
+  f.options = r.options.map((o) => ({ name: o.name, values: [...o.values] }))
+  f.variants = rebuildVariants(f.options, [], { price: f.price, compare_price: f.compare_price, cost_price: f.cost_price, stock: -1 })
+  openForm(
+    f,
+    null,
+    f.variants.length
+      ? `Đã nhập dữ liệu và tạo ${f.variants.length} biến thể — hãy xem lại tên, ảnh, mô tả, giá và tồn kho từng biến thể rồi bấm Lưu. Sản phẩm đang ở trạng thái ẨN cho tới khi bạn bật bán.`
+      : 'Đã nhập dữ liệu — hãy xem lại tên, giá, ảnh, mô tả rồi bấm Lưu. Sản phẩm đang ở trạng thái ẨN cho tới khi bạn bật bán.'
+  )
 }
 
 const dirty = computed(() => showForm.value && JSON.stringify(form.value) !== snapshot)
@@ -207,10 +226,16 @@ async function save() {
     return
   }
   if (tagInput.value.trim()) addTag()
+  const vErr = validateVariants(form.value.options, form.value.variants)
+  if (vErr) {
+    errorMsg.value = vErr
+    return
+  }
   saving.value = true
   errorMsg.value = ''
   const f = form.value
   const payload = {
+    ...toPayload(f.options, f.variants), // options + variants (rỗng = sản phẩm không có biến thể)
     name: f.name.trim(),
     description: f.description,
     price: Number(f.price) || 0,
@@ -267,6 +292,16 @@ function stockLabel(p: { stock: number }) {
   if (p.stock === 0) return 'Hết hàng'
   return `${p.stock} cái`
 }
+
+// Có biến thể: giá / giá gốc / giá nhập / tồn kho nhập theo từng biến thể (số của sản phẩm chỉ là tổng hợp)
+const hasVariants = computed(() => form.value.variants.length > 0)
+// Giá trị mặc định cho biến thể mới = giá / kho đang nhập ở sản phẩm
+const variantDefaults = computed<VariantDefaults>(() => ({
+  price: Number(form.value.price) || 0,
+  compare_price: Number(form.value.compare_price) || 0,
+  cost_price: Number(form.value.cost_price) || 0,
+  stock: form.value.unlimited ? -1 : Math.max(0, Number(form.value.stock) || 0)
+}))
 
 const discount = computed(() => (form.value.compare_price > form.value.price && form.value.price > 0 ? Math.round((1 - form.value.price / form.value.compare_price) * 100) : 0))
 const profit = computed(() => (Number(form.value.price) || 0) - (Number(form.value.cost_price) || 0))
@@ -344,8 +379,10 @@ onMounted(load)
               <div class="truncate text-sm font-extrabold">{{ p.name }}</div>
               <div class="text-xs text-slate-500">
                 <span :title="adminMoneyTitle(p.price)">{{ adminMoney(p.price) }}</span>
-                <span v-if="p.compare_price > p.price" class="ml-1 line-through text-slate-400" :title="adminMoneyTitle(p.compare_price)">{{ adminMoney(p.compare_price) }}</span>
+                <span v-if="p.variant_count > 0 && p.price_max > p.price" :title="adminMoneyTitle(p.price_max)"> – {{ adminMoney(p.price_max) }}</span>
+                <span v-else-if="p.compare_price > p.price" class="ml-1 line-through text-slate-400" :title="adminMoneyTitle(p.compare_price)">{{ adminMoney(p.compare_price) }}</span>
                 · Tồn kho: {{ stockLabel(p) }}
+                <span v-if="p.variant_count > 0" class="ml-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700" data-testid="variant-badge">{{ p.variant_count }} biến thể</span>
                 <template v-if="p.sku"> · SKU: {{ p.sku }}</template>
               </div>
               <div v-if="p.cost_price > 0" class="text-[11px] text-slate-400">
@@ -407,28 +444,33 @@ onMounted(load)
 
             <section class="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
               <h3 class="text-sm font-extrabold">Giá</h3>
-              <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <label class="block space-y-1">
-                  <span class="text-xs font-bold text-slate-600">Giá bán (đ)</span>
-                  <input v-model.number="form.price" type="number" min="0" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-                </label>
-                <label class="block space-y-1">
-                  <span class="text-xs font-bold text-slate-600">Giá gốc (đ, tùy chọn)</span>
-                  <input v-model.number="form.compare_price" type="number" min="0" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-                </label>
-                <label class="block space-y-1">
-                  <span class="text-xs font-bold text-slate-600">Giá nhập (đ, chỉ bạn thấy)</span>
-                  <input v-model.number="form.cost_price" type="number" min="0" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
-                </label>
-              </div>
-              <p class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-                <span v-if="discount" class="font-bold text-rose-600">Giảm {{ discount }}% so với giá gốc</span>
-                <span v-if="form.cost_price > 0 && form.price > 0">
-                  Lợi nhuận mỗi sản phẩm:
-                  <strong :class="profit >= 0 ? 'text-emerald-700' : 'text-rose-600'">{{ formatVnd(Math.abs(profit)) }}{{ profit < 0 ? ' (lỗ)' : '' }}</strong>
-                  <template v-if="margin !== null"> ({{ margin }}%)</template>
-                </span>
+              <p v-if="hasVariants" class="rounded-xl bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-800" data-testid="price-by-variant">
+                Sản phẩm có phân loại: giá bán, giá gốc và giá nhập được đặt riêng cho từng biến thể ở mục “Phân loại” bên dưới.
               </p>
+              <template v-else>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <label class="block space-y-1">
+                    <span class="text-xs font-bold text-slate-600">Giá bán (đ)</span>
+                    <input v-model.number="form.price" type="number" min="0" data-testid="product-price" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                  <label class="block space-y-1">
+                    <span class="text-xs font-bold text-slate-600">Giá gốc (đ, tùy chọn)</span>
+                    <input v-model.number="form.compare_price" type="number" min="0" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                  <label class="block space-y-1">
+                    <span class="text-xs font-bold text-slate-600">Giá nhập (đ, chỉ bạn thấy)</span>
+                    <input v-model.number="form.cost_price" type="number" min="0" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
+                  </label>
+                </div>
+                <p class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+                  <span v-if="discount" class="font-bold text-rose-600">Giảm {{ discount }}% so với giá gốc</span>
+                  <span v-if="form.cost_price > 0 && form.price > 0">
+                    Lợi nhuận mỗi sản phẩm:
+                    <strong :class="profit >= 0 ? 'text-emerald-700' : 'text-rose-600'">{{ formatVnd(Math.abs(profit)) }}{{ profit < 0 ? ' (lỗ)' : '' }}</strong>
+                    <template v-if="margin !== null"> ({{ margin }}%)</template>
+                  </span>
+                </p>
+              </template>
             </section>
 
             <section class="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
@@ -443,11 +485,12 @@ onMounted(load)
                   <input v-model="form.barcode" maxlength="100" class="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm" />
                 </label>
               </div>
-              <div class="flex items-center gap-4">
+              <p v-if="hasVariants" class="rounded-xl bg-indigo-50 px-3 py-2 text-xs leading-relaxed text-indigo-800">Tồn kho được quản lý riêng cho từng biến thể ở mục “Phân loại” bên dưới.</p>
+              <div v-else class="flex items-center gap-4">
                 <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
                   <input v-model="form.unlimited" type="checkbox" /> Không giới hạn tồn kho
                 </label>
-                <input v-if="!form.unlimited" v-model.number="form.stock" type="number" min="0" class="w-28 rounded-xl border border-slate-200 px-3 py-1.5 text-sm" />
+                <input v-if="!form.unlimited" v-model.number="form.stock" type="number" min="0" data-testid="product-stock" class="w-28 rounded-xl border border-slate-200 px-3 py-1.5 text-sm" />
               </div>
             </section>
           </div>
@@ -462,7 +505,7 @@ onMounted(load)
             </section>
 
             <section class="space-y-2 rounded-2xl border border-slate-200 bg-white p-5">
-              <h3 class="text-sm font-extrabold">Thẻ (phân loại nội bộ)</h3>
+              <h3 class="text-sm font-extrabold">Thẻ (nhóm sản phẩm)</h3>
               <div class="flex flex-wrap gap-1.5">
                 <span v-for="t in form.tags" :key="t" class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
                   {{ t }}
@@ -475,6 +518,7 @@ onMounted(load)
                 placeholder="Gõ thẻ rồi nhấn Enter"
                 @keydown="onTagKey"
               />
+              <p class="text-[11px] leading-relaxed text-slate-400">Ở trình chỉnh sửa website, section “Sản phẩm” có thể chọn chỉ hiện các sản phẩm theo thẻ (vd. “bán chạy”, “khuyến mãi”). Thẻ nằm trong dữ liệu công khai của website.</p>
             </section>
 
             <section class="space-y-2 rounded-2xl border border-slate-200 bg-white p-5">
@@ -486,6 +530,12 @@ onMounted(load)
               <p class="text-[11px] leading-relaxed text-slate-400">Chỉ bạn thấy mục này; khách hàng không bao giờ thấy giá nhập hay nguồn hàng.</p>
             </section>
           </div>
+
+          <!-- Phân loại: cả bề ngang để bảng biến thể đủ rộng -->
+          <section class="space-y-3 rounded-2xl border border-slate-200 bg-white p-5 lg:col-span-3">
+            <h3 class="text-sm font-extrabold">Phân loại</h3>
+            <ProductVariantsEditor v-model:options="form.options" v-model:variants="form.variants" :media="form.media" :defaults="variantDefaults" />
+          </section>
         </div>
 
         <div class="sticky bottom-0 flex items-center justify-end gap-3 rounded-b-2xl border-t border-slate-200 bg-white px-6 py-3">

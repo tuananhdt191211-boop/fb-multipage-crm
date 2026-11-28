@@ -93,15 +93,62 @@ export interface Site {
   updated_at: string
 }
 
+// Nhóm phân loại của sản phẩm (vd. "Màu": Đen, Trắng). Tối đa 3 nhóm.
+export interface ProductOption {
+  name: string
+  values: string[]
+}
+
+// Một biến thể trong trình sửa: option_values thẳng hàng với danh sách nhóm (nhóm chưa có giá trị = '')
+export interface AdminVariant {
+  id?: number
+  option_values: string[]
+  sku: string
+  barcode?: string
+  price: number
+  compare_price: number
+  cost_price: number
+  stock: number // -1 = không giới hạn, 0 = hết hàng
+  image_url: string
+}
+
+// Biến thể máy chủ trả cho chủ shop
+export interface AdminVariantRow {
+  id: number
+  title: string
+  option1: string
+  option2: string
+  option3: string
+  sku: string
+  barcode: string
+  price: number
+  compare_price: number
+  cost_price: number
+  stock: number
+  image_url: string
+}
+
+// Biến thể công khai (không có giá nhập, số tồn kho cụ thể)
+export interface PublicVariant {
+  id: number
+  title: string
+  option_values: string[]
+  price: number
+  compare_price: number
+  in_stock: boolean
+  image_url: string
+  sku?: string
+}
+
 export interface AdminProduct {
   id: number
   storefront_id: number
   name: string
   description: string // HTML đã lọc
-  price: number
+  price: number // có biến thể: giá thấp nhất
   compare_price: number
   image_url: string // ảnh bìa
-  stock: number // -1 = không giới hạn, 0 = hết hàng
+  stock: number // -1 = không giới hạn, 0 = hết hàng; có biến thể: tổng tồn kho
   is_active: boolean
   sort_order: number
   media?: import('../lib/productMedia').ProductMedia[]
@@ -111,6 +158,10 @@ export interface AdminProduct {
   source_url?: string
   tags?: string
   summary?: string // tóm tắt chữ thuần của mô tả (máy chủ tính)
+  options?: ProductOption[]
+  variants?: AdminVariantRow[]
+  variant_count?: number
+  price_max?: number
 }
 
 // Dòng nhẹ trong danh sách quản lý sản phẩm (không kèm mô tả đầy đủ)
@@ -130,6 +181,8 @@ export interface AdminProductLite {
   tags: string
   media_count: number
   has_video: boolean
+  variant_count: number
+  price_max: number
 }
 
 export interface PublicProduct {
@@ -137,12 +190,17 @@ export interface PublicProduct {
   name: string
   description?: string // chỉ có ở trang chi tiết (danh sách chỉ có summary)
   summary?: string
-  price: number
+  price: number // có biến thể: giá thấp nhất
+  price_max?: number // có biến thể: giá cao nhất
+  variant_count?: number // số biến thể (0 = sản phẩm thường)
   compare_price: number
   image_url: string
   in_stock: boolean
   media?: import('../lib/productMedia').ProductMedia[]
   sku?: string
+  options?: ProductOption[] // chỉ có ở trang chi tiết
+  variants?: PublicVariant[] // chỉ có ở trang chi tiết
+  tags?: string[] // thẻ của sản phẩm: section Sản phẩm có thể chỉ hiện sản phẩm theo thẻ
 }
 
 export interface PublicSiteData {
@@ -159,6 +217,9 @@ export interface PublicSiteData {
 
 export interface OrderItem {
   product_id: number
+  variant_id?: number
+  variant_title?: string
+  sku?: string
   name: string
   image_url: string
   price: number

@@ -25,7 +25,7 @@ type StorefrontHandler struct {
 }
 
 func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
-	_ = db.AutoMigrate(&models.Storefront{}, &models.Product{})
+	_ = db.AutoMigrate(&models.Storefront{}, &models.Product{}, &models.ProductVariant{})
 	migrateSiteMedia(db)
 	migrateShopTables(db)
 	migrateSiteCustomers(db)
@@ -353,9 +353,10 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 	// Danh sách sản phẩm đang bán (nhẹ: tóm tắt thay vì mô tả đầy đủ, không lộ số lượng tồn kho — chỉ còn/hết hàng).
 	// Mô tả đầy đủ + bộ sưu tập ảnh/video lấy riêng ở GET /storefront/public/products/:pid khi khách mở trang sản phẩm.
 	prods := h.publishedProducts(sf.ID)
+	stats := h.variantStats(sf.ID)
 	pub := make([]gin.H, 0, len(prods))
 	for _, p := range prods {
-		pub = append(pub, publicProductCard(p))
+		pub = append(pub, publicProductCard(p, stats[p.ID]))
 	}
 
 	c.Header("Cache-Control", "public, max-age=30")

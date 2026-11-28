@@ -35,6 +35,15 @@ type productReq struct {
 	CostPrice    int64                 `json:"cost_price"`
 	SourceURL    string                `json:"source_url"`
 	Tags         string                `json:"tags"`
+
+	// Biến thể. Con trỏ: client cũ không gửi hai trường này thì GIỮ NGUYÊN biến thể hiện có (không xoá nhầm);
+	// gửi options = [] nghĩa là chủ shop chủ động bỏ hết biến thể.
+	Options  *[]models.ProductOption `json:"options"`
+	Variants *[]variantReq           `json:"variants"`
+
+	opts     []models.ProductOption // kết quả chuẩn hoá
+	vars     []models.ProductVariant
+	keepVars bool
 }
 
 // ----------------------------------------------------------------- Video / nhúng
@@ -134,6 +143,17 @@ func coverOf(media []models.ProductMedia) string {
 	return ""
 }
 
+// tagList tách chuỗi thẻ "a, b, c" đã lưu thành danh sách (web công khai dùng để lọc sản phẩm theo thẻ trong từng section)
+func tagList(raw string) []string {
+	out := []string{}
+	for _, t := range strings.Split(raw, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func cleanTags(raw string) string {
 	seen := map[string]bool{}
 	out := []string{}
@@ -192,6 +212,24 @@ func (r *productReq) normalize() string {
 	r.Barcode = truncRunes(strings.TrimSpace(r.Barcode), 100)
 	r.SourceURL = cleanSourceURL(r.SourceURL)
 	r.Tags = cleanTags(r.Tags)
+
+	if r.Options == nil {
+		r.keepVars = true
+		return ""
+	}
+	opts, msg := cleanProductOptions(*r.Options)
+	if msg != "" {
+		return msg
+	}
+	var in []variantReq
+	if r.Variants != nil {
+		in = *r.Variants
+	}
+	vars, msg := buildVariants(opts, in)
+	if msg != "" {
+		return msg
+	}
+	r.opts, r.vars = opts, vars
 	return ""
 }
 
@@ -211,6 +249,21 @@ func (r *productReq) apply(p *models.Product) {
 	p.CostPrice = r.CostPrice
 	p.SourceURL = r.SourceURL
 	p.Tags = r.Tags
+	if r.keepVars {
+		// client cũ: để nguyên nhóm phân loại / biến thể hiện có (handler tự tính lại số tổng hợp)
+		if p.Options == nil {
+			p.Options = []models.ProductOption{}
+		}
+		return
+	}
+	p.Options = r.opts
+	p.OptionsJSON = ""
+	if len(r.opts) > 0 {
+		ob, _ := json.Marshal(r.opts)
+		p.OptionsJSON = string(ob)
+		// Có biến thể: giá / tồn kho của sản phẩm chỉ là số tổng hợp từ các biến thể
+		p.Price, p.ComparePrice, p.CostPrice, p.Stock = aggregateVariants(r.vars)
+	}
 }
 
 // descriptionOut: bản cũ lưu văn bản thuần → hiển thị dưới dạng HTML đoạn văn
@@ -249,13 +302,16 @@ type productLite struct {
 	Tags       string `json:"tags"`
 	MediaCount int    `json:"media_count"`
 	HasVideo   bool   `json:"has_video"`
+	// Biến thể: số lượng và giá cao nhất (giá thấp nhất là Price)
+	VariantCount int   `json:"variant_count"`
+	PriceMax     int64 `json:"price_max"`
 }
 
-func toLite(p models.Product) productLite {
+func toLite(p models.Product, st variantStat) productLite {
 	l := productLite{
 		ID: p.ID, Name: p.Name, Summary: productSummary(p.Description), Price: p.Price, Compare: p.ComparePrice, ImageURL: p.ImageURL,
 		Stock: p.Stock, IsActive: p.IsActive, SortOrder: p.SortOrder, SKU: p.SKU, CostPrice: p.CostPrice, SourceURL: p.SourceURL,
-		Tags: p.Tags, MediaCount: len(p.Media),
+		Tags: p.Tags, MediaCount: len(p.Media), VariantCount: st.N, PriceMax: max(p.Price, st.Max),
 	}
 	for _, m := range p.Media {
 		if m.Type != "image" {
@@ -268,7 +324,9 @@ func toLite(p models.Product) productLite {
 // productFull: sản phẩm đầy đủ kèm tóm tắt chữ thuần (cho thẻ sản phẩm)
 type productFull struct {
 	models.Product
-	Summary string `json:"summary"`
+	Summary      string `json:"summary"`
+	VariantCount int    `json:"variant_count"`
+	PriceMax     int64  `json:"price_max"`
 }
 
 // ListProducts GET /api/v1/storefront/sites/:id/products[?lite=1]
@@ -281,7 +339,7 @@ func (h *StorefrontHandler) ListProducts(c *gin.Context) {
 	q := h.DB.Where("storefront_id = ?", sf.ID).Order("sort_order ASC, id ASC")
 	lite := c.Query("lite") == "1"
 	if lite {
-		q = q.Select("id, storefront_id, user_id, name, LEFT(description, 1500) AS description, price, compare_price, image_url, stock, is_active, sort_order, sku, barcode, cost_price, source_url, tags, media_json, created_at, updated_at")
+		q = q.Select("id, storefront_id, user_id, name, LEFT(description, 1500) AS description, price, compare_price, image_url, stock, is_active, sort_order, sku, barcode, cost_price, source_url, tags, media_json, options_json, created_at, updated_at")
 	}
 	var items []models.Product
 	if err := q.Find(&items).Error; err != nil {
@@ -289,17 +347,20 @@ func (h *StorefrontHandler) ListProducts(c *gin.Context) {
 		return
 	}
 	if lite {
+		stats := h.variantStats(sf.ID)
 		out := make([]productLite, 0, len(items))
 		for _, p := range items {
-			out = append(out, toLite(p))
+			out = append(out, toLite(p, stats[p.ID]))
 		}
 		c.JSON(http.StatusOK, gin.H{"products": out, "max_products": maxProductsPerSite})
 		return
 	}
+	stats := h.variantStats(sf.ID)
 	full := make([]productFull, 0, len(items))
 	for _, p := range items {
 		p.Description = descriptionOut(p.Description)
-		full = append(full, productFull{Product: p, Summary: productSummary(p.Description)})
+		st := stats[p.ID]
+		full = append(full, productFull{Product: p, Summary: productSummary(p.Description), VariantCount: st.N, PriceMax: max(p.Price, st.Max)})
 	}
 	c.JSON(http.StatusOK, gin.H{"products": full, "max_products": maxProductsPerSite})
 }
@@ -316,6 +377,7 @@ func (h *StorefrontHandler) GetProduct(c *gin.Context) {
 		return
 	}
 	p.Description = descriptionOut(p.Description)
+	p.Variants = loadVariants(h.DB, p.ID)
 	c.JSON(http.StatusOK, gin.H{"product": p})
 }
 
@@ -348,9 +410,22 @@ func (h *StorefrontHandler) CreateProduct(c *gin.Context) {
 	}
 	p := models.Product{StorefrontID: sf.ID, UserID: sf.UserID, IsActive: active}
 	req.apply(&p)
-	if err := h.DB.Create(&p).Error; err != nil {
+	err := h.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&p).Error; err != nil {
+			return err
+		}
+		if len(req.vars) > 0 {
+			return syncVariants(tx, &p, req.vars)
+		}
+		return nil
+	})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tạo sản phẩm thất bại."})
 		return
+	}
+	p.Variants = req.vars
+	if p.Variants == nil {
+		p.Variants = []models.ProductVariant{}
 	}
 	c.JSON(http.StatusCreated, gin.H{"product": p})
 }
@@ -379,9 +454,32 @@ func (h *StorefrontHandler) UpdateProduct(c *gin.Context) {
 	if req.IsActive != nil {
 		p.IsActive = *req.IsActive
 	}
-	if err := h.DB.Save(&p).Error; err != nil {
+	if req.keepVars {
+		// Client cũ không gửi biến thể: giữ nguyên, và giá / tồn kho của sản phẩm vẫn là số tổng hợp từ biến thể hiện có
+		if existing := loadVariants(h.DB, p.ID); len(existing) > 0 {
+			p.Price, p.ComparePrice, p.CostPrice, p.Stock = aggregateVariants(existing)
+		}
+	}
+	err := h.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(&p).Error; err != nil {
+			return err
+		}
+		if !req.keepVars {
+			return syncVariants(tx, &p, req.vars) // req.vars rỗng = xoá hết biến thể
+		}
+		return nil
+	})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lưu sản phẩm thất bại."})
 		return
+	}
+	if req.keepVars {
+		p.Variants = loadVariants(h.DB, p.ID)
+	} else {
+		p.Variants = req.vars
+		if p.Variants == nil {
+			p.Variants = []models.ProductVariant{}
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"product": p})
 }
@@ -422,7 +520,7 @@ func (h *StorefrontHandler) PatchProduct(c *gin.Context) {
 	}
 	var p models.Product
 	h.DB.Where("id = ?", c.Param("pid")).First(&p)
-	c.JSON(http.StatusOK, gin.H{"product": toLite(p)})
+	c.JSON(http.StatusOK, gin.H{"product": toLite(p, h.variantStats(sf.ID)[p.ID])})
 }
 
 // DeleteProduct DELETE /api/v1/storefront/sites/:id/products/:pid
@@ -431,12 +529,23 @@ func (h *StorefrontHandler) DeleteProduct(c *gin.Context) {
 	if !ok {
 		return
 	}
-	res := h.DB.Where("id = ? AND storefront_id = ?", c.Param("pid"), sf.ID).Delete(&models.Product{})
-	if res.Error != nil {
+	var removed int64
+	err := h.DB.Transaction(func(tx *gorm.DB) error {
+		res := tx.Where("id = ? AND storefront_id = ?", c.Param("pid"), sf.ID).Delete(&models.Product{})
+		if res.Error != nil {
+			return res.Error
+		}
+		removed = res.RowsAffected
+		if removed == 0 {
+			return nil
+		}
+		return tx.Where("product_id = ? AND storefront_id = ?", c.Param("pid"), sf.ID).Delete(&models.ProductVariant{}).Error
+	})
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Xóa sản phẩm thất bại."})
 		return
 	}
-	if res.RowsAffected == 0 {
+	if removed == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy sản phẩm."})
 		return
 	}
@@ -446,21 +555,29 @@ func (h *StorefrontHandler) DeleteProduct(c *gin.Context) {
 // ----------------------------------------------------------------- Công khai
 
 // publicProductCard: dòng nhẹ trong danh sách web công khai (không kèm mô tả đầy đủ)
-func publicProductCard(p models.Product) gin.H {
+// Sản phẩm có biến thể: price = giá thấp nhất, price_max = giá cao nhất, variant_count = số biến thể (web hiển thị "Từ X").
+func publicProductCard(p models.Product, st variantStat) gin.H {
+	priceMax := p.Price
+	if st.N > 0 && st.Max > priceMax {
+		priceMax = st.Max
+	}
 	return gin.H{
 		"id":            p.ID,
 		"name":          p.Name,
 		"summary":       productSummary(p.Description),
 		"price":         p.Price,
+		"price_max":     priceMax,
+		"variant_count": st.N,
 		"compare_price": p.ComparePrice,
 		"image_url":     p.ImageURL,
 		"in_stock":      p.Stock != 0,
+		"tags":          tagList(p.Tags),
 	}
 }
 
 func (h *StorefrontHandler) publishedProducts(sf uint) []models.Product {
 	var prods []models.Product
-	h.DB.Select("id, storefront_id, name, LEFT(description, 1500) AS description, price, compare_price, image_url, stock, is_active, sort_order").
+	h.DB.Select("id, storefront_id, name, LEFT(description, 1500) AS description, price, compare_price, image_url, stock, tags, is_active, sort_order").
 		Where("storefront_id = ? AND is_active = ?", sf, true).
 		Order("sort_order ASC, id ASC").Find(&prods)
 	return prods
@@ -484,6 +601,11 @@ func (h *StorefrontHandler) GetPublicProduct(c *gin.Context) {
 		}
 		return
 	}
+	// Cùng quy tắc với lúc đặt hàng: chỉ coi là có biến thể khi có cả nhóm phân loại lẫn biến thể
+	opts, vars := p.Options, loadVariants(h.DB, p.ID)
+	if len(opts) == 0 || len(vars) == 0 {
+		opts, vars = []models.ProductOption{}, nil
+	}
 	c.Header("Cache-Control", "public, max-age=30")
 	c.JSON(http.StatusOK, gin.H{"product": gin.H{
 		"id":            p.ID,
@@ -495,5 +617,7 @@ func (h *StorefrontHandler) GetPublicProduct(c *gin.Context) {
 		"media":         p.Media,
 		"sku":           p.SKU,
 		"in_stock":      p.Stock != 0,
+		"options":       opts,
+		"variants":      publicVariants(vars, len(opts)),
 	}})
 }

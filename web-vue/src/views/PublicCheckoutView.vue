@@ -5,9 +5,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { CreditCard, Globe, Loader2, Lock, Minus, Plus, Trash2, Truck, Wallet } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
-import { loadPublicSite, localizeSite } from '../lib/publicSite'
-import { formatVndPlain, isForeignCurrency, locale, money, t } from '../lib/i18n'
-import { useCart } from '../lib/cart'
+import { loadPublicProduct, loadPublicSite, localizeSite } from '../lib/publicSite'
+import { formatVndPlain, isForeignCurrency, locale, money, t, variantLabel } from '../lib/i18n'
+import { lineKey, useCart } from '../lib/cart'
 import { customerHeaders, useCustomer } from '../lib/customer'
 import { safeImg } from '../lib/safeUrl'
 import type { PublicSiteData } from '../types/store'
@@ -26,6 +26,7 @@ function nameOf(l: { product_id: number; name: string }) {
 const loading = ref(true)
 const submitting = ref(false)
 const errorMsg = ref('')
+const cartNote = ref('') // giỏ vừa được làm mới: có dòng đã hết hàng / không còn bán
 const config = ref({ cod: true, vnpay: false, paypal: false, stripe: false, shipping_fee: 0, free_ship_from: 0 })
 type PayMethod = 'cod' | 'vnpay' | 'paypal' | 'stripe'
 const intlMethod = computed(() => form.value.payment_method === 'paypal' || form.value.payment_method === 'stripe')
@@ -64,7 +65,17 @@ async function load() {
   loading.value = true
   try {
     rawSite.value = await loadPublicSite({ slug: slug.value })
-    cart.syncWith(rawSite.value.products)
+    let removed = cart.syncWith(rawSite.value.products)
+    // Dòng có biến thể: lấy giá / tồn kho mới nhất từ chi tiết sản phẩm (bỏ dòng đã hết hàng hoặc bị gỡ)
+    removed += await cart.syncVariants(async (pid) => {
+      try {
+        return await loadPublicProduct(slug.value, pid)
+      } catch (e: any) {
+        if (e?.response?.status === 404) return null
+        throw e
+      }
+    })
+    if (removed > 0) cartNote.value = t('cart_items_removed')
     document.title = `${t('checkout')} – ${rawSite.value.site_title}`
     const { data } = await api.get('/storefront/public/checkout-config', { params: { slug: slug.value } })
     config.value = data
@@ -102,7 +113,7 @@ async function submit() {
   try {
     const { data } = await api.post('/storefront/public/orders', {
       slug: slug.value,
-      items: cart.state.lines.map((l) => ({ product_id: l.product_id, qty: l.qty })),
+      items: cart.state.lines.map((l) => ({ product_id: l.product_id, variant_id: l.variant_id || 0, qty: l.qty })),
       ...f,
       return_base: window.location.origin,
       currency: locale.currency
@@ -131,6 +142,7 @@ onMounted(load)
   <PublicShell v-else :site="site">
     <div class="mx-auto max-w-6xl px-5 py-8 sm:px-8 sm:py-12">
       <h1 class="mb-8 text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">{{ t('checkout') }}</h1>
+      <p v-if="cartNote" class="mb-6 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800" data-testid="cart-note">{{ cartNote }}</p>
 
       <div v-if="!cart.state.lines.length" class="rounded-3xl bg-slate-50 py-16 text-center">
         <p class="font-semibold text-slate-700">{{ t('cart_empty_long') }}</p>
@@ -195,22 +207,23 @@ onMounted(load)
         <aside class="h-fit space-y-4 rounded-3xl bg-slate-50 p-5 sm:p-6 lg:sticky lg:top-24">
           <h2 class="text-lg font-bold text-slate-900">{{ t('order_summary', { n: cart.count.value }) }}</h2>
           <ul class="divide-y divide-slate-200">
-            <li v-for="l in cart.state.lines" :key="l.product_id" class="flex gap-3 py-3">
+            <li v-for="l in cart.state.lines" :key="lineKey(l)" class="flex gap-3 py-3" data-testid="checkout-line">
               <div class="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-white">
                 <img v-if="safeImg(l.image_url)" :src="safeImg(l.image_url)" :alt="nameOf(l)" class="h-full w-full object-cover" />
               </div>
               <div class="min-w-0 flex-1">
                 <div class="line-clamp-2 text-sm font-semibold text-slate-800">{{ nameOf(l) }}</div>
+                <div v-if="l.variant_title" class="text-xs text-slate-500">{{ variantLabel(l.product_id, l.variant_title) }}</div>
                 <div class="mt-1.5 flex items-center justify-between">
                   <div class="flex items-center rounded-full border border-slate-300 bg-white">
-                    <button type="button" class="p-1.5" :aria-label="t('decrease')" @click="cart.setQty(l.product_id, l.qty - 1)"><Minus class="h-3 w-3" /></button>
+                    <button type="button" class="p-1.5" :aria-label="t('decrease')" @click="cart.setQty(l, l.qty - 1)"><Minus class="h-3 w-3" /></button>
                     <span class="w-6 text-center text-xs font-semibold">{{ l.qty }}</span>
-                    <button type="button" class="p-1.5" :aria-label="t('increase')" @click="cart.setQty(l.product_id, l.qty + 1)"><Plus class="h-3 w-3" /></button>
+                    <button type="button" class="p-1.5" :aria-label="t('increase')" @click="cart.setQty(l, l.qty + 1)"><Plus class="h-3 w-3" /></button>
                   </div>
                   <span class="text-sm font-bold">{{ money(l.price * l.qty) }}</span>
                 </div>
               </div>
-              <button type="button" class="self-start p-1 text-slate-400 hover:text-rose-600" :aria-label="t('remove')" @click="cart.remove(l.product_id)"><Trash2 class="h-4 w-4" /></button>
+              <button type="button" class="self-start p-1 text-slate-400 hover:text-rose-600" :aria-label="t('remove')" @click="cart.remove(l)"><Trash2 class="h-4 w-4" /></button>
             </li>
           </ul>
           <div class="space-y-2 border-t border-slate-200 pt-4 text-sm">

@@ -57,7 +57,10 @@ func newProductEnv(t *testing.T) *productEnv {
 		t.Fatalf("TỪ CHỐI chạy trên database %q: tên phải kết thúc bằng _test", name)
 	}
 	h := NewStorefrontHandler(db, &config.Config{FrontendURL: "http://localhost:4173"})
-	db.Exec("TRUNCATE products, site_media, storefronts RESTART IDENTITY CASCADE")
+	db.Exec("TRUNCATE products, product_variants, shop_orders, shop_payment_settings, site_media, storefronts RESTART IDENTITY CASCADE")
+	orderLimiter.Lock()
+	orderLimiter.hits = map[string][]time.Time{} // giới hạn đặt hàng theo IP là biến toàn cục: mỗi test bắt đầu từ đầu
+	orderLimiter.Unlock()
 	sf := models.Storefront{UserID: 7, Slug: "test-shop", SiteTitle: "Shop thử", IsPublished: true, PrimaryColor: "#059669"}
 	if err := db.Create(&sf).Error; err != nil {
 		t.Fatal(err)
@@ -72,11 +75,16 @@ func newProductEnv(t *testing.T) *productEnv {
 	adm.GET("/sites/:id/products/:pid", h.GetProduct)
 	adm.PUT("/sites/:id/products/:pid", h.UpdateProduct)
 	adm.PATCH("/sites/:id/products/:pid", h.PatchProduct)
+	adm.DELETE("/sites/:id/products/:pid", h.DeleteProduct)
 	adm.POST("/sites/:id/media", h.UploadSiteMedia)
 	adm.POST("/sites/:id/media/video", h.UploadSiteVideo)
 	adm.POST("/sites/:id/media/import", h.ImportSiteMedia)
 	adm.GET("/sites/:id/media", h.ListSiteMedia)
 	adm.DELETE("/sites/:id/media/:mid", h.DeleteSiteMedia)
+	adm.GET("/sites/:id/orders", h.ListOrders)
+	adm.PATCH("/sites/:id/orders/:oid", h.UpdateOrderStatus)
+	r.POST("/api/v1/storefront/public/orders", h.CreatePublicOrder)
+	r.GET("/api/v1/storefront/public/orders/:code", h.GetPublicOrder)
 	r.GET("/api/v1/storefront/media/:mid", h.ServeSiteMedia)
 	r.GET("/api/v1/storefront/public", h.GetPublicStorefront)
 	r.GET("/api/v1/storefront/public/products/:pid", h.GetPublicProduct)
