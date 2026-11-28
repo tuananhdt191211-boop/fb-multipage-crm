@@ -144,6 +144,7 @@ async function loadProducts() {
         id: p.id,
         name: p.name,
         description: p.description,
+        summary: p.summary || '',
         price: p.price,
         compare_price: p.compare_price,
         image_url: p.image_url,

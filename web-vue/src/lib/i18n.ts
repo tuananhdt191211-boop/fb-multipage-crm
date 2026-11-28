@@ -5,6 +5,7 @@
 import { reactive } from 'vue'
 import { api } from './api'
 import { MARKET_BY_CODE, type Market } from './markets'
+import { summaryFromHtml } from './richHtml'
 import type { PublicProduct, StoreBlock } from '../types/store'
 
 export const UI_VI = {
@@ -331,12 +332,12 @@ export function localizeBlocks(blocks: StoreBlock[], lang = locale.lang, i18n = 
   })
 }
 
-export function localizeProducts<T extends { id: number; name: string; description?: string }>(products: T[], lang = locale.lang, i18n = locale.i18n): T[] {
+export function localizeProducts<T extends { id: number; name: string; description?: string; summary?: string }>(products: T[], lang = locale.lang, i18n = locale.i18n): T[] {
   const tp = lang !== 'vi' ? i18n.tr[lang]?.p : undefined
   if (!tp) return products
   return products.map((p) => {
     const tr = tp[String(p.id)]
-    return tr ? { ...p, name: tr.name || p.name, description: tr.description ?? p.description } : p
+    return tr ? { ...p, name: tr.name || p.name, description: tr.description ?? p.description, summary: tr.description ? summaryFromHtml(tr.description) : p.summary } : p
   })
 }
 

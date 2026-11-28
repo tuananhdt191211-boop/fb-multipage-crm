@@ -713,7 +713,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   </component>
                   <div class="flex flex-1 flex-col gap-1.5 p-3.5 @3xl:p-4">
                     <component :is="productLink(prod.id) ? 'a' : 'h3'" :href="productLink(prod.id)" class="line-clamp-2 text-sm font-bold leading-snug text-slate-900 hover:underline @3xl:text-[15px]">{{ prod.name }}</component>
-                    <p v-if="prod.description" class="line-clamp-2 text-xs leading-relaxed text-slate-500">{{ prod.description }}</p>
+                    <p v-if="prod.summary" class="line-clamp-2 text-xs leading-relaxed text-slate-500">{{ prod.summary }}</p>
                     <div class="mt-auto flex flex-wrap items-baseline gap-x-2 pt-1.5">
                       <span class="text-base font-extrabold @3xl:text-lg" :style="{ color: accent }">{{ money(prod.price) }}</span>
                       <span v-if="prod.compare_price > prod.price" class="text-xs text-slate-400 line-through">{{ money(prod.compare_price) }}</span>

@@ -4,11 +4,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ChevronRight, Loader2, Minus, Plus, ShieldCheck, ShoppingBag, Truck } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
-import { loadPublicSite, localizeSite } from '../lib/publicSite'
-import { money, t } from '../lib/i18n'
+import ProductGallery from '../components/store/ProductGallery.vue'
+import { loadPublicProduct, loadPublicSite, localizeSite } from '../lib/publicSite'
+import { localizeProducts, money, t } from '../lib/i18n'
+import { toRichHtml } from '../lib/richHtml'
 import { useCart } from '../lib/cart'
 import { safeImg } from '../lib/safeUrl'
-import type { PublicSiteData } from '../types/store'
+import type { PublicProduct, PublicSiteData } from '../types/store'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,7 +21,15 @@ const loading = ref(true)
 const errorMsg = ref('')
 const qty = ref(1)
 
-const product = computed(() => site.value?.products.find((p) => String(p.id) === String(route.params.pid)) || null)
+// Chi tiết (mô tả đầy đủ, ảnh / video) lấy riêng; danh sách của trang chủ chỉ có bản tóm tắt
+const detail = ref<PublicProduct | null>(null)
+const product = computed<PublicProduct | null>(() => {
+  const base = site.value?.products.find((p) => String(p.id) === String(route.params.pid)) || null
+  if (!detail.value || (base && base.id !== detail.value.id)) return base
+  const full = localizeProducts([detail.value])[0]!
+  return base ? { ...base, ...full, name: full.name || base.name } : null
+})
+const descriptionHtml = computed(() => toRichHtml(product.value?.description || ''))
 const discount = computed(() => {
   const p = product.value
   return p && p.compare_price > p.price ? Math.round((1 - p.price / p.compare_price) * 100) : 0
@@ -31,11 +41,21 @@ async function load() {
   loading.value = true
   try {
     rawSite.value = await loadPublicSite({ slug: slug.value })
+    await loadDetail()
     if (product.value) document.title = `${product.value.name} – ${rawSite.value.site_title}`
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || t('shop_not_found')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadDetail() {
+  detail.value = null
+  try {
+    detail.value = await loadPublicProduct(slug.value, String(route.params.pid))
+  } catch {
+    detail.value = null // vẫn xem được bản tóm tắt từ danh sách
   }
 }
 
@@ -49,9 +69,11 @@ function addToCart(go = false) {
   }
 }
 
-watch(() => route.params.pid, () => {
+watch(() => route.params.pid, async () => {
   qty.value = 1
   window.scrollTo({ top: 0 })
+  await loadDetail()
+  if (product.value && rawSite.value) document.title = `${product.value.name} – ${rawSite.value.site_title}`
 })
 onMounted(load)
 </script>
@@ -73,10 +95,9 @@ onMounted(load)
       </div>
 
       <div v-else class="grid grid-cols-1 gap-10 md:grid-cols-2 md:gap-14">
-        <div class="relative aspect-square overflow-hidden rounded-3xl bg-slate-100">
-          <img v-if="safeImg(product.image_url)" :src="safeImg(product.image_url)" :alt="product.name" class="h-full w-full object-cover" />
+        <ProductGallery :media="product.media" :fallback="product.image_url" :name="product.name" :accent="accent">
           <span v-if="discount" class="absolute left-4 top-4 rounded-full bg-rose-500 px-3 py-1 text-sm font-bold text-white">-{{ discount }}%</span>
-        </div>
+        </ProductGallery>
 
         <div class="space-y-5">
           <h1 class="text-2xl font-extrabold leading-tight tracking-tight text-slate-900 sm:text-3xl">{{ product.name }}</h1>
@@ -109,9 +130,11 @@ onMounted(load)
             <span class="flex items-center gap-2"><ShieldCheck class="h-4 w-4" :style="{ color: accent }" /> {{ t('check_on_delivery') }}</span>
           </div>
 
-          <div v-if="product.description" class="border-t border-slate-100 pt-5">
+          <p v-if="product.sku" class="text-xs text-slate-400">SKU: {{ product.sku }}</p>
+
+          <div v-if="descriptionHtml" class="border-t border-slate-100 pt-5">
             <h2 class="mb-2 text-base font-bold text-slate-900">{{ t('description') }}</h2>
-            <p class="whitespace-pre-line text-[15px] leading-relaxed text-slate-600">{{ product.description }}</p>
+            <div class="pp-prose" v-html="descriptionHtml" />
           </div>
         </div>
       </div>

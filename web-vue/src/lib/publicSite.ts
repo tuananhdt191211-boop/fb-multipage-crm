@@ -52,6 +52,12 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
   return p
 }
 
+// Chi tiết một sản phẩm: mô tả đầy đủ + bộ sưu tập ảnh / video (danh sách ở trang chủ chỉ có bản tóm tắt)
+export async function loadPublicProduct(slug: string, pid: string | number): Promise<PublicProduct> {
+  const { data } = await api.get<{ product: PublicProduct }>(`/storefront/public/products/${pid}`, { params: { slug } })
+  return data.product
+}
+
 // Các section dùng làm "khung" cho trang con (sản phẩm, giỏ hàng, đơn hàng)
 export function shellBlocks(blocks: StoreBlock[]) {
   const enabled = blocks.filter((b) => b.enabled)

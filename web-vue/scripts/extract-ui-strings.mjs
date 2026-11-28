@@ -3,6 +3,7 @@
 //   node scripts/extract-ui-strings.mjs             -> ghi backend-go/internal/handlers/uicatalog/{catalog.vi.json,en.json}
 //   node scripts/extract-ui-strings.mjs --check     -> báo chuỗi nào chưa có bản dịch tiếng Anh (thoát mã 1 nếu thiếu)
 //   node scripts/extract-ui-strings.mjs --missing   -> in "số<TAB>chuỗi" của các chuỗi chưa có bản dịch tiếng Anh
+//   node scripts/extract-ui-strings.mjs --prune     -> bỏ khỏi src/i18n/en.json các câu không còn dùng trong giao diện
 //   node scripts/extract-ui-strings.mjs --merge f.tsv -> nạp bản dịch "số<TAB>English" (số theo danh sách --missing) vào src/i18n/en.json
 //
 // Cách hoạt động: trình duyệt chỉ dịch ĐÚNG những chuỗi nằm trong danh mục này (so khớp nguyên văn), nên nội dung của khách
@@ -214,6 +215,13 @@ if (args.includes('--merge')) {
   fs.mkdirSync(path.dirname(EN_FILE), { recursive: true })
   fs.writeFileSync(EN_FILE, JSON.stringify(Object.fromEntries(Object.entries(en).sort(([a], [b]) => (a < b ? -1 : 1))), null, 1) + '\n')
   console.log(`Đã nạp ${ok}/${lines.length} dòng. Còn thiếu: ${catalog.filter((s) => !(s in en)).length}`)
+  process.exit(0)
+}
+
+if (args.includes('--prune')) {
+  const keep = Object.entries(en).filter(([k]) => strings.has(k)).sort(([a], [b]) => (a < b ? -1 : 1))
+  fs.writeFileSync(EN_FILE, JSON.stringify(Object.fromEntries(keep), null, 1) + '\n')
+  console.log(`Đã bỏ ${extra.length} câu tiếng Anh không còn được dùng trong giao diện.`)
   process.exit(0)
 }
 

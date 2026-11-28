@@ -6,6 +6,7 @@ import { CheckCircle2, Languages, Loader2, Search, Sparkles } from 'lucide-vue-n
 import { api } from '../../lib/api'
 import { LANG_NAMES, LANG_VI, MARKET_BY_CODE, MARKET_REGIONS, langsOf } from '../../lib/markets'
 import { UI_VI, collectBlockTexts, collectProductTexts, type SiteI18n } from '../../lib/i18n'
+import { looksLikeHtml, textFromHtml } from '../../lib/richHtml'
 import type { PublicProduct, StoreBlock } from '../../types/store'
 
 const props = defineProps<{ siteId: number | string; blocks: StoreBlock[]; products: PublicProduct[] }>()
@@ -271,7 +272,7 @@ function onEdit(key: string, ev: Event) {
           <div v-for="r in shown" :key="r.key" class="space-y-1 rounded-lg bg-slate-50 p-2">
             <div class="flex items-start gap-1.5 text-[11px] text-slate-500">
               <span class="shrink-0 rounded bg-white px-1 text-[9px] font-bold uppercase text-slate-400">{{ r.group }}</span>
-              <span class="line-clamp-3">{{ r.src }}</span>
+              <span class="line-clamp-3">{{ looksLikeHtml(r.src) ? textFromHtml(r.src) : r.src }}</span>
             </div>
             <textarea
               :value="getTr(editLang, r.key)"

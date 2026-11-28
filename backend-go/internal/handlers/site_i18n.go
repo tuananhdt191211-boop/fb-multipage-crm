@@ -290,6 +290,7 @@ func (h *StorefrontHandler) aiTranslateBatch(langName string, batch map[string]s
 	system := "You are a professional e-commerce translator and copywriter. " +
 		"Translate every value of the given JSON object from Vietnamese into natural, fluent " + langName + " suitable for an online shop. " +
 		"Rules: keep the same keys; keep placeholders like {n}, {name}, {code} exactly; keep brand names, product codes, emoji, numbers, URLs and e-mail addresses unchanged; " +
+		"when a value contains HTML (product descriptions), keep every tag and attribute exactly and translate only the visible text between tags; " +
 		"keep line breaks; do not add explanations. Return ONLY a JSON object with the same keys."
 	reply, err := h.AI.callUniversalChatAI(system, string(src), true)
 	if err != nil {

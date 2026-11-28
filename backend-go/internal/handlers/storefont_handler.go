@@ -10,6 +10,7 @@ import (
 
 	"fb-multipage-crm/internal/config"
 	"fb-multipage-crm/internal/models"
+	"fb-multipage-crm/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -19,6 +20,8 @@ type StorefrontHandler struct {
 	DB  *gorm.DB
 	Cfg *config.Config
 	AI  *AIHandler // dùng để dịch website bằng AI (gán trong main.go)
+	// Store: kho lưu trữ ngoài (R2/S3) cho ảnh & video; nil = chưa cấu hình (ảnh lưu trong PostgreSQL, không nhận video)
+	Store *storage.S3
 }
 
 func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
@@ -309,9 +312,9 @@ func (h *StorefrontHandler) Publish(c *gin.Context) {
 	})
 }
 
-// GetPublicStorefront GET /api/v1/storefront/public?slug=... hoặc ?domain=... (hoặc tự đọc Host)
-// Multi-tenant: nếu có slug mà không thấy thì trả 404, KHÔNG fallback sang site của người khác.
-func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
+// findPublishedSite tìm website đã xuất bản theo ?slug=... hoặc ?domain=... (hoặc Host của yêu cầu).
+// Multi-tenant: có slug mà không thấy thì KHÔNG fallback sang site của người khác.
+func (h *StorefrontHandler) findPublishedSite(c *gin.Context) (*models.Storefront, bool) {
 	qSlug := strings.ToLower(strings.TrimSpace(c.Query("slug")))
 	qDomain := normalizeHost(c.Query("domain"))
 	if qDomain == "" {
@@ -331,27 +334,28 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 			found = h.DB.Where("is_published = ?", true).Order("id ASC").First(&sf).Error == nil
 		}
 	}
+	if !found {
+		return nil, false
+	}
+	return &sf, true
+}
 
+// GetPublicStorefront GET /api/v1/storefront/public?slug=... hoặc ?domain=... (hoặc tự đọc Host)
+// Multi-tenant: nếu có slug mà không thấy thì trả 404, KHÔNG fallback sang site của người khác.
+func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
+	sfp, found := h.findPublishedSite(c)
 	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Chưa có trang bán hàng nào được xuất bản."})
 		return
 	}
+	sf := *sfp
 
-	// Danh sách sản phẩm đang bán (không lộ số lượng tồn kho, chỉ còn/hết hàng)
-	var prods []models.Product
-	h.DB.Where("storefront_id = ? AND is_active = ?", sf.ID, true).
-		Order("sort_order ASC, id ASC").Find(&prods)
+	// Danh sách sản phẩm đang bán (nhẹ: tóm tắt thay vì mô tả đầy đủ, không lộ số lượng tồn kho — chỉ còn/hết hàng).
+	// Mô tả đầy đủ + bộ sưu tập ảnh/video lấy riêng ở GET /storefront/public/products/:pid khi khách mở trang sản phẩm.
+	prods := h.publishedProducts(sf.ID)
 	pub := make([]gin.H, 0, len(prods))
 	for _, p := range prods {
-		pub = append(pub, gin.H{
-			"id":            p.ID,
-			"name":          p.Name,
-			"description":   p.Description,
-			"price":         p.Price,
-			"compare_price": p.ComparePrice,
-			"image_url":     p.ImageURL,
-			"in_stock":      p.Stock != 0,
-		})
+		pub = append(pub, publicProductCard(p))
 	}
 
 	c.Header("Cache-Control", "public, max-age=30")

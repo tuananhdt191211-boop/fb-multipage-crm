@@ -97,23 +97,52 @@ export interface AdminProduct {
   id: number
   storefront_id: number
   name: string
-  description: string
+  description: string // HTML đã lọc
   price: number
   compare_price: number
-  image_url: string
+  image_url: string // ảnh bìa
   stock: number // -1 = không giới hạn, 0 = hết hàng
   is_active: boolean
   sort_order: number
+  media?: import('../lib/productMedia').ProductMedia[]
+  sku?: string
+  barcode?: string
+  cost_price?: number // giá nhập — chỉ chủ shop thấy
+  source_url?: string
+  tags?: string
+  summary?: string // tóm tắt chữ thuần của mô tả (máy chủ tính)
+}
+
+// Dòng nhẹ trong danh sách quản lý sản phẩm (không kèm mô tả đầy đủ)
+export interface AdminProductLite {
+  id: number
+  name: string
+  summary: string
+  price: number
+  compare_price: number
+  image_url: string
+  stock: number
+  is_active: boolean
+  sort_order: number
+  sku: string
+  cost_price: number
+  source_url: string
+  tags: string
+  media_count: number
+  has_video: boolean
 }
 
 export interface PublicProduct {
   id: number
   name: string
-  description: string
+  description?: string // chỉ có ở trang chi tiết (danh sách chỉ có summary)
+  summary?: string
   price: number
   compare_price: number
   image_url: string
   in_stock: boolean
+  media?: import('../lib/productMedia').ProductMedia[]
+  sku?: string
 }
 
 export interface PublicSiteData {

@@ -25,6 +25,7 @@ Giao diện quản trị PagePilot được **viết bằng tiếng Việt** và
 npm run i18n:extract        # cập nhật danh mục (ghi cả file cho backend)
 node scripts/extract-ui-strings.mjs --missing   # xem câu nào chưa có tiếng Anh ("số<TAB>câu")
 node scripts/extract-ui-strings.mjs --merge f.txt  # nạp bản dịch dạng "số|English" vào en.json
+node scripts/extract-ui-strings.mjs --prune        # bỏ các câu tiếng Anh không còn dùng
 npm run i18n:check          # thoát mã 1 nếu còn câu thiếu tiếng Anh
 ```
 

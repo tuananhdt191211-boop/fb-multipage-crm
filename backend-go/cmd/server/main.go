@@ -12,6 +12,7 @@ import (
 	"fb-multipage-crm/internal/handlers"
 	"fb-multipage-crm/internal/inboxrev"
 	"fb-multipage-crm/internal/middleware"
+	"fb-multipage-crm/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -82,6 +83,16 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	storefrontHandler := handlers.NewStorefrontHandler(db, cfg)
 	storefrontHandler.AI = aiHandler
+	// Kho lưu trữ ngoài (R2/S3) cho ảnh & video sản phẩm; chưa cấu hình thì ảnh lưu trong PostgreSQL, tắt tải video lên
+	storefrontHandler.Store = storage.New(storage.Config{
+		Endpoint: cfg.S3Endpoint, Region: cfg.S3Region, Bucket: cfg.S3Bucket,
+		AccessKey: cfg.S3AccessKey, SecretKey: cfg.S3SecretKey, PublicBase: cfg.S3PublicBase,
+	})
+	if storefrontHandler.Store != nil {
+		log.Printf("[media] dùng kho lưu trữ ngoài (bucket %s) cho ảnh & video", cfg.S3Bucket)
+	} else {
+		log.Printf("[media] chưa cấu hình kho lưu trữ (S3_*/R2_*): ảnh lưu trong PostgreSQL, tắt tải video lên")
+	}
 
 	// Đa ngôn ngữ cho giao diện quản trị (bản dịch AI dùng chung, lưu trong translation_caches)
 	uiI18nHandler := handlers.NewUIi18nHandler(db)
@@ -107,6 +118,7 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.POST("/api/v1/ui-i18n/:lang/fill", middleware.JWTAuth(cfg.JWTSecret), uiI18nHandler.Fill)
 
 	r.GET("/api/v1/storefront/public", storefrontHandler.GetPublicStorefront)
+	r.GET("/api/v1/storefront/public/products/:pid", storefrontHandler.GetPublicProduct)
 	r.GET("/api/v1/storefront/media/:mid", storefrontHandler.ServeSiteMedia)
 	// Giỏ hàng & đặt hàng trên web công khai
 	r.GET("/api/v1/storefront/public/checkout-config", storefrontHandler.PublicCheckoutConfig)
@@ -146,11 +158,17 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		storefrontGroup.DELETE("/sites/:id/domain", storefrontHandler.RemoveSiteDomain)
 		storefrontGroup.GET("/sites/:id/products", storefrontHandler.ListProducts)
 		storefrontGroup.POST("/sites/:id/products", storefrontHandler.CreateProduct)
+		storefrontGroup.POST("/sites/:id/products/import", storefrontHandler.ImportProduct)
+		storefrontGroup.GET("/sites/:id/products/:pid", storefrontHandler.GetProduct)
 		storefrontGroup.PUT("/sites/:id/products/:pid", storefrontHandler.UpdateProduct)
+		storefrontGroup.PATCH("/sites/:id/products/:pid", storefrontHandler.PatchProduct)
 		storefrontGroup.DELETE("/sites/:id/products/:pid", storefrontHandler.DeleteProduct)
 		// Thư viện ảnh của website (lưu trong DB)
 		storefrontGroup.GET("/sites/:id/media", storefrontHandler.ListSiteMedia)
 		storefrontGroup.POST("/sites/:id/media", storefrontHandler.UploadSiteMedia)
+		storefrontGroup.POST("/sites/:id/media/video", storefrontHandler.UploadSiteVideo)
+		storefrontGroup.POST("/sites/:id/media/import", storefrontHandler.ImportSiteMedia)
+		storefrontGroup.GET("/media-config", storefrontHandler.MediaConfig)
 		storefrontGroup.DELETE("/sites/:id/media/:mid", storefrontHandler.DeleteSiteMedia)
 		// Đơn hàng, thanh toán, email đăng ký
 		storefrontGroup.GET("/sites/:id/orders", storefrontHandler.ListOrders)
