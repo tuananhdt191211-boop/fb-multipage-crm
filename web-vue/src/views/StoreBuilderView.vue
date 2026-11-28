@@ -16,9 +16,11 @@ import {
   Loader2,
   Monitor,
   Languages,
+  Menu as MenuIcon,
   Palette,
   Plus,
   Redo2,
+  Search as SearchIcon,
   Smartphone,
   Tablet,
   Trash2,
@@ -38,6 +40,10 @@ import { missingCount, translateRows, translationRows } from '../lib/siteTransla
 import LanguagePanel from '../components/store/LanguagePanel.vue'
 import ThemeTypography from '../components/store/ThemeTypography.vue'
 import PageManager from '../components/store/PageManager.vue'
+import MenuEditor from '../components/store/MenuEditor.vue'
+import SeoPanel from '../components/store/SeoPanel.vue'
+import { localizeMenus, menuPseudoBlocks, parseMenus, type SiteMenu } from '../lib/menus'
+import { emptySettings, emptySiteSeo, pageText, parsePageSettings, parseSiteSeo, type PageSettings, type SiteSeo } from '../lib/seo'
 import {
   composeBlocks,
   isSharedType,
@@ -72,12 +78,18 @@ let savedPage: Record<number, string> = {} // nội dung từng trang ở lần 
 const pageTemplates = ref<PageTemplate[]>([])
 const maxPages = ref(30)
 const currentPage = computed(() => pages.value.find((p) => p.id === currentPageId.value) || null)
+// Giai đoạn 2: menu điều hướng quản lý riêng, SEO mặc định của website, cài đặt từng trang (SEO + landing page: ẩn đầu / chân trang)
+const menus = ref<SiteMenu[]>([])
+const siteSeo = ref<SiteSeo>(emptySiteSeo())
+const pageSettings = reactive<Record<number, PageSettings>>({})
+let savedSettings: Record<number, string> = {} // cài đặt từng trang ở lần lưu gần nhất
+const currentSettings = computed(() => pageSettings[currentPageId.value] ?? emptySettings())
 const blocks = ref<StoreBlock[]>([])
 // Kiểu chữ toàn trang (font, cỡ H1–P)
 const theme = ref<SiteTheme>({})
 const products = ref<PublicProduct[]>([])
 const selectedId = ref<string | null>(null)
-const leftTab = ref<'add' | 'sections' | 'theme' | 'lang'>('sections')
+const leftTab = ref<'add' | 'sections' | 'theme' | 'lang' | 'menu' | 'seo'>('sections')
 
 // Bán hàng quốc tế: thị trường + bản dịch (không đưa vào hoàn tác vì có thể rất lớn)
 const i18n = ref<SiteI18n>({ markets: [], tr: {} })
@@ -87,7 +99,7 @@ const i18nDirty = ref(false)
 const otherPageBlocks = computed(() =>
   pages.value.filter((p) => p.id !== currentPageId.value).flatMap((p) => parseBlockList(pageJson[p.id]))
 )
-const i18nBlocks = computed(() => [...blocks.value, ...otherPageBlocks.value])
+const i18nBlocks = computed(() => [...blocks.value, ...otherPageBlocks.value, ...menuPseudoBlocks(menus.value)])
 const trRows = computed(() => (i18n.value.markets.length ? translationRows(i18nBlocks.value, products.value) : []))
 const trMissing = computed(() => (i18n.value.markets.length ? missingCount(i18n.value, trRows.value) : 0))
 const publishNote = ref('')
@@ -95,7 +107,27 @@ const warnMsg = ref('')
 const previewLang = ref('vi')
 watch([previewLang, i18n], () => previewLocale(previewLang.value, i18n.value))
 const previewing = computed(() => previewLang.value !== 'vi')
-const canvasBlocks = computed(() => (previewing.value ? localizeBlocks(blocks.value, previewLang.value, i18n.value) : blocks.value))
+const hiddenByLanding = (b: StoreBlock, st: PageSettings) => (st.hide_header && (b.type === 'announcement' || b.type === 'header')) || (st.hide_footer && b.type === 'footer')
+// Landing page: canvas không vẽ phần bị ẩn (khách cũng không thấy); `map` đổi chỉ số trên canvas về chỉ số thật trong `blocks`
+const canvasView = computed(() => {
+  const list = previewing.value ? localizeBlocks(blocks.value, previewLang.value, i18n.value) : blocks.value
+  const st = currentSettings.value
+  const out: StoreBlock[] = []
+  const map: number[] = []
+  list.forEach((b, i) => {
+    if (hiddenByLanding(b, st)) return
+    out.push(b)
+    map.push(i)
+  })
+  return { out, map }
+})
+const canvasBlocks = computed(() => canvasView.value.out)
+const realIdx = (i: number) => canvasView.value.map[i] ?? blocks.value.length
+const canvasMenus = computed(() => (previewing.value ? localizeMenus(menus.value, previewLang.value, i18n.value) : menus.value))
+// Nội dung riêng của trang đang sửa (không gồm đầu / chân trang) + văn bản của nó, cho tab SEO
+const currentPageBlocks = computed(() => splitBlocks(blocks.value).page)
+const currentPageText = computed(() => pageText(currentPageBlocks.value))
+const pageTextOf = (id: number) => (id === currentPageId.value ? currentPageText.value : pageText(parseBlockList(pageJson[id])))
 const canvasProducts = computed(() => (previewing.value ? localizeProducts(products.value, previewLang.value, i18n.value) : products.value))
 const device = ref<'desktop' | 'tablet' | 'mobile'>('desktop')
 
@@ -148,6 +180,9 @@ function canonSnap(): string {
     l: site.value?.logo_url,
     c: site.value?.primary_color,
     th: theme.value,
+    mn: menus.value,
+    sx: siteSeo.value,
+    st: pages.value.map((p) => pageSettings[p.id] ?? null),
     sh: shared,
     pg: pages.value.map((p) => (p.id === currentPageId.value ? JSON.stringify(page) : (pageJson[p.id] ?? '[]')))
   })
@@ -186,6 +221,14 @@ function applySite(s: Site, serverPages: ServerPage[], keepPageId = 0) {
   currentPageId.value = pages.value.some((p) => p.id === keepPageId) ? keepPageId : home?.id || 0
   blocks.value = composeBlocks(splitBlocks(shared).shared, parseBlockList(next[currentPageId.value]))
   theme.value = parseTheme(s.draft_theme_json)
+  menus.value = parseMenus(s.draft_menus_json)
+  siteSeo.value = parseSiteSeo(s.draft_seo_json)
+  for (const k of Object.keys(pageSettings)) delete pageSettings[Number(k)]
+  savedSettings = {}
+  for (const p of serverPages) {
+    pageSettings[p.id] = parsePageSettings(p.draft_settings_json)
+    savedSettings[p.id] = JSON.stringify(pageSettings[p.id])
+  }
   i18n.value = parseI18n(s.draft_i18n_json)
   i18nDirty.value = false
   const snap = canonSnap()
@@ -257,18 +300,26 @@ async function saveDraft(silent = false): Promise<boolean> {
   try {
     // Phần dùng chung (thông báo / đầu / chân trang) luôn gửi; chỉ gửi nội dung các trang có thay đổi so với lần lưu trước
     const { shared, page } = splitBlocks(cleanList(blocks.value))
-    const changed: { id: number; draft_blocks_json: string }[] = []
+    const changed: { id: number; draft_blocks_json?: string; draft_settings_json?: string }[] = []
     for (const p of pages.value) {
       const isCur = p.id === currentPageId.value
       const raw = isCur ? JSON.stringify(splitBlocks(blocks.value).page) : (pageJson[p.id] ?? '[]')
-      if (raw === savedPage[p.id]) continue
-      changed.push({ id: p.id, draft_blocks_json: isCur ? JSON.stringify(page) : JSON.stringify(cleanList(parseBlockList(raw))) })
+      const setJson = JSON.stringify(pageSettings[p.id] ?? emptySettings())
+      const contentChanged = raw !== savedPage[p.id]
+      const settingsChanged = setJson !== savedSettings[p.id]
+      if (!contentChanged && !settingsChanged) continue
+      const entry: { id: number; draft_blocks_json?: string; draft_settings_json?: string } = { id: p.id }
+      if (contentChanged) entry.draft_blocks_json = isCur ? JSON.stringify(page) : JSON.stringify(cleanList(parseBlockList(raw)))
+      if (settingsChanged) entry.draft_settings_json = setJson
+      changed.push(entry)
     }
     const { data } = await api.put<{ site: Site; pages: ServerPage[] }>(`/storefront/sites/${site.value.id}/draft`, {
       site_title: site.value.site_title,
       logo_url: site.value.logo_url,
       primary_color: site.value.primary_color,
       draft_shared_json: JSON.stringify(shared),
+      draft_menus_json: JSON.stringify(menus.value),
+      draft_seo_json: JSON.stringify(siteSeo.value),
       pages: changed,
       draft_theme_json: JSON.stringify(theme.value),
       draft_i18n_json: JSON.stringify(i18n.value)
@@ -360,7 +411,7 @@ function restore(snap: string) {
 }
 
 watch(
-  [blocks, theme, () => site.value?.site_title, () => site.value?.logo_url, () => site.value?.primary_color],
+  [blocks, theme, menus, siteSeo, pageSettings, () => site.value?.site_title, () => site.value?.logo_url, () => site.value?.primary_color],
   () => {
     if (!site.value) return
     currentSnap.value = canonSnap()
@@ -431,11 +482,15 @@ function onPagesChanged(server: ServerPage[], selectId?: number) {
     const arr = parseBlockList(p.draft_blocks_json)
     upgradeBlocks(arr)
     pageJson[p.id] = savedPage[p.id] = JSON.stringify(splitBlocks(arr).page)
+    pageSettings[p.id] = parsePageSettings(p.draft_settings_json)
+    savedSettings[p.id] = JSON.stringify(pageSettings[p.id])
   }
   for (const id of known) {
     if (ids.has(id)) continue
     delete pageJson[id]
     delete savedPage[id]
+    delete pageSettings[id]
+    delete savedSettings[id]
   }
   const gone = !ids.has(currentPageId.value)
   const shared = splitBlocks(blocks.value).shared
@@ -789,9 +844,9 @@ watch(selectedId, (id) => {
         <aside class="flex max-h-[40vh] w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:max-h-none lg:w-72 lg:border-b-0 lg:border-r">
           <div class="flex shrink-0 border-b border-slate-100 p-1.5">
             <button
-              v-for="t in [{ v: 'sections', i: LayoutList, t: 'Section' }, { v: 'add', i: Plus, t: 'Thêm' }, { v: 'theme', i: Palette, t: 'Giao diện' }, { v: 'lang', i: Languages, t: 'Ngôn ngữ' }] as const"
+              v-for="t in [{ v: 'sections', i: LayoutList, t: 'Section' }, { v: 'add', i: Plus, t: 'Thêm' }, { v: 'theme', i: Palette, t: 'Giao diện' }, { v: 'menu', i: MenuIcon, t: 'Menu' }, { v: 'seo', i: SearchIcon, t: 'SEO' }, { v: 'lang', i: Languages, t: 'Ngôn ngữ' }] as const"
               :key="t.v"
-              class="relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 text-[11px] font-bold leading-none"
+              class="relative flex flex-1 flex-col items-center justify-center gap-0.5 rounded-lg py-1.5 text-[10px] font-bold leading-none"
               :class="leftTab === t.v ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-50'"
               @click="leftTab = t.v"
             >
@@ -830,6 +885,7 @@ watch(selectedId, (id) => {
                       <span class="flex items-center gap-1.5">
                         <span class="truncate font-bold">{{ blockLabels[b.type] || b.type }}</span>
                         <span v-if="isSharedType(b.type)" class="shrink-0 rounded bg-indigo-100 px-1 text-[9px] font-extrabold uppercase text-indigo-700" title="Dùng chung cho mọi trang">Chung</span>
+                        <span v-if="hiddenByLanding(b, currentSettings)" class="shrink-0 rounded bg-amber-100 px-1 text-[9px] font-extrabold uppercase text-amber-700" title="Trang này là landing page: phần này đang bị ẩn">Ẩn ở trang này</span>
                       </span>
                       <span class="block truncate text-[11px] text-slate-400">{{ b.data.title || b.data.heading || b.data.brand_name || '' }}</span>
                     </span>
@@ -857,6 +913,29 @@ watch(selectedId, (id) => {
             <!-- Thư viện section: kéo thả vào trang -->
             <template v-else-if="leftTab === 'lang'">
               <LanguagePanel v-model:i18n="i18n" v-model:preview="previewLang" :site-id="site.id" :blocks="i18nBlocks" :products="products" @changed="i18nDirty = true" />
+            </template>
+
+            <template v-else-if="leftTab === 'menu'">
+              <MenuEditor :menus="menus" :pages="pages" />
+            </template>
+
+            <template v-else-if="leftTab === 'seo'">
+              <SeoPanel
+                v-if="currentPage"
+                :key="currentPageId"
+                :site-id="site.id"
+                :site-title="site.site_title"
+                :site-slug="site.slug"
+                :has-logo="!!site.logo_url"
+                :page="currentPage"
+                :settings="currentSettings"
+                :site-seo="siteSeo"
+                :blocks="currentPageBlocks"
+                :pages="pages"
+                :all-settings="pageSettings"
+                :get-text="pageTextOf"
+                :page-text="currentPageText"
+              />
             </template>
 
             <template v-else-if="leftTab === 'add'">
@@ -956,11 +1035,12 @@ watch(selectedId, (id) => {
               :drag-active="dragActive"
               @select="selectBlock"
               @edit="onInlineEdit"
-              @action="onSectionAction"
-              @drop="dropAt"
-              @section-dragstart="startMoveDrag"
+              :menus="canvasMenus"
+              @action="(k, i) => onSectionAction(k, realIdx(i))"
+              @drop="(i) => dropAt(realIdx(i))"
+              @section-dragstart="(i, e) => startMoveDrag(realIdx(i), e)"
               @section-dragend="endDrag"
-              @add-at="openPicker"
+              @add-at="(i) => openPicker(realIdx(i))"
             />
           </div>
         </div>
@@ -991,7 +1071,7 @@ watch(selectedId, (id) => {
               <p v-else class="rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-500">
                 Mẹo: bấm vào một dòng chữ trên trang để chỉnh cỡ chữ, màu, thẻ H1/H2… và xem code CSS/HTML.
               </p>
-              <SectionSettings :key="selectedBlock.id" :block="selectedBlock" :site-id="site.id" :site-logo="site.logo_url" :site-color="site.primary_color" :products="products" />
+              <SectionSettings :key="selectedBlock.id" :block="selectedBlock" :site-id="site.id" :site-logo="site.logo_url" :site-color="site.primary_color" :products="products" :menus="menus" />
             </div>
           </template>
           <div v-else class="space-y-3 p-5 text-center text-xs text-slate-500">

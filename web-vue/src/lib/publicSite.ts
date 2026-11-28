@@ -3,7 +3,9 @@ import { api } from './api'
 import { parseTheme } from './theme'
 import { initLocale, localizeBlocks, localizeProducts, parseI18n } from './i18n'
 import { startTracking } from './analytics'
-import { parseBlockList, type PageKind, type PublicPageRef } from './pages'
+import { composeForSettings, parseBlockList, type PageKind, type PublicPageRef } from './pages'
+import { localizeMenus, parseMenus } from './menus'
+import { emptySettings, parsePageSettings, parseSiteSeo, type PageSettings } from './seo'
 import type { PublicProduct, PublicSiteData, StoreBlock } from '../types/store'
 
 const cache = new Map<string, Promise<PublicSiteData>>()
@@ -24,6 +26,11 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
       i18n_json?: string
       products?: PublicProduct[]
       pages?: PublicPageRef[]
+      shared_json?: string
+      home_blocks_json?: string
+      home_settings_json?: string
+      menus_json?: string
+      seo_json?: string
     }>('/storefront/public', { params })
     .then(({ data }) => {
       let blocks: StoreBlock[] = []
@@ -33,6 +40,11 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
       } catch {
         blocks = []
       }
+      // Máy chủ mới trả phần dùng chung + nội dung trang chủ riêng + cài đặt landing: trang chủ ghép theo đó (bỏ đầu / chân trang nếu là landing),
+      // còn `shared` luôn đủ để các trang con (sản phẩm, thanh toán...) vẫn có đầu / chân trang. Máy chủ cũ: dùng blocks_json đã ghép sẵn.
+      const shared = data.shared_json !== undefined ? parseBlockList(data.shared_json) : blocks.filter((b) => b.type === 'announcement' || b.type === 'header' || b.type === 'footer')
+      const homeSettings = data.home_settings_json !== undefined ? parsePageSettings(data.home_settings_json) : emptySettings()
+      if (data.home_blocks_json !== undefined) blocks = composeForSettings(shared, parseBlockList(data.home_blocks_json), homeSettings)
       return {
         id: data.id,
         slug: data.slug,
@@ -43,7 +55,10 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
         products: data.products || [],
         theme: parseTheme(data.theme_json),
         i18n: parseI18n(data.i18n_json),
-        pages: Array.isArray(data.pages) ? data.pages : []
+        pages: Array.isArray(data.pages) ? data.pages : [],
+        shared,
+        menus: parseMenus(data.menus_json),
+        seo: parseSiteSeo(data.seo_json)
       }
     })
     .then((site) => {
@@ -70,14 +85,15 @@ export interface PublicPageData {
   title: string
   kind: PageKind
   blocks: StoreBlock[]
+  settings: PageSettings // SEO + landing (ẩn đầu / chân trang)
 }
 
 export async function loadPublicPage(siteSlug: string, pageSlug: string): Promise<PublicPageData> {
-  const { data } = await api.get<{ slug: string; title: string; kind: PageKind; blocks_json?: string }>(
+  const { data } = await api.get<{ slug: string; title: string; kind: PageKind; blocks_json?: string; settings_json?: string }>(
     `/storefront/public/pages/${encodeURIComponent(pageSlug)}`,
     { params: { slug: siteSlug } }
   )
-  return { slug: data.slug, title: data.title, kind: data.kind, blocks: parseBlockList(data.blocks_json) }
+  return { slug: data.slug, title: data.title, kind: data.kind, blocks: parseBlockList(data.blocks_json), settings: parsePageSettings(data.settings_json) }
 }
 
 // Các section dùng làm "khung" cho trang con (sản phẩm, giỏ hàng, đơn hàng)
@@ -91,5 +107,5 @@ export function shellBlocks(blocks: StoreBlock[]) {
 
 // Bản đã dịch theo ngôn ngữ đang chọn (nội dung section + tên/mô tả sản phẩm)
 export function localizeSite(site: PublicSiteData): PublicSiteData {
-  return { ...site, blocks: localizeBlocks(site.blocks), products: localizeProducts(site.products) }
+  return { ...site, blocks: localizeBlocks(site.blocks), shared: localizeBlocks(site.shared), menus: localizeMenus(site.menus), products: localizeProducts(site.products) }
 }

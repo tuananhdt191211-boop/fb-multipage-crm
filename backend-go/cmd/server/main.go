@@ -128,6 +128,8 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.GET("/api/v1/storefront/public", storefrontHandler.GetPublicStorefront)
 	r.GET("/api/v1/storefront/public/products/:pid", storefrontHandler.GetPublicProduct)
 	r.GET("/api/v1/storefront/public/pages/:pslug", storefrontHandler.GetPublicPage)
+	r.GET("/api/v1/storefront/public/seo", storefrontHandler.GetPublicSEO)
+	r.GET("/api/v1/storefront/public/sitemap.xml", storefrontHandler.GetPublicSitemap)
 	r.GET("/api/v1/storefront/media/:mid", storefrontHandler.ServeSiteMedia)
 	// Giỏ hàng & đặt hàng trên web công khai
 	r.GET("/api/v1/storefront/public/checkout-config", storefrontHandler.PublicCheckoutConfig)
@@ -169,6 +171,7 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		storefrontGroup.DELETE("/sites/:id/pages/:pid", storefrontHandler.DeletePage)
 		storefrontGroup.POST("/sites/:id/pages/:pid/duplicate", storefrontHandler.DuplicatePage)
 		storefrontGroup.POST("/sites/:id/translate", storefrontHandler.TranslateStrings)
+		storefrontGroup.POST("/sites/:id/seo/suggest", storefrontHandler.SuggestSEO)
 		storefrontGroup.GET("/sites/:id/domain", storefrontHandler.GetSiteDomain)
 		storefrontGroup.PUT("/sites/:id/domain", middleware.OwnerOnly(), storefrontHandler.SetSiteDomain)
 		storefrontGroup.DELETE("/sites/:id/domain", middleware.OwnerOnly(), storefrontHandler.RemoveSiteDomain)

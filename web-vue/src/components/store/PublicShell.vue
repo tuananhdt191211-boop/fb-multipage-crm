@@ -10,8 +10,9 @@ import { themeCss, usedFonts } from '../../lib/theme'
 import { ensureFonts } from '../../lib/fonts'
 import type { PublicSiteData } from '../../types/store'
 
-const props = defineProps<{ site: PublicSiteData }>()
-const parts = computed(() => shellBlocks(props.site.blocks))
+// hideTop / hideBottom: landing page ẩn dải thông báo + đầu trang / chân trang
+const props = defineProps<{ site: PublicSiteData; hideTop?: boolean; hideBottom?: boolean }>()
+const parts = computed(() => shellBlocks(props.site.shared?.length ? props.site.shared : props.site.blocks))
 // Liên kết neo (#products) của đầu / chân trang đưa về trang chủ, vì trang con không có các phần đó
 const homeBase = computed(() => storePath(props.site.slug, ''))
 // Nội dung trang con (sản phẩm, thanh toán...) cũng theo kiểu chữ toàn trang
@@ -22,7 +23,7 @@ watchEffect(() => ensureFonts(usedFonts(props.site.theme, [])))
 <template>
   <div class="flex min-h-screen flex-col bg-white text-slate-800">
     <StoreRenderer
-      v-if="parts.top.length"
+      v-if="!hideTop && parts.top.length"
       :site-title="site.site_title"
       :primary-color="site.primary_color"
       :theme="site.theme"
@@ -31,13 +32,14 @@ watchEffect(() => ensureFonts(usedFonts(props.site.theme, [])))
       :products="site.products"
       :site-slug="site.slug"
       :anchor-base="homeBase"
+      :menus="site.menus"
     />
     <div class="pp-store @container flex-1">
       <component :is="'style'" v-if="themeStyle">{{ themeStyle }}</component>
       <slot />
     </div>
     <StoreRenderer
-      v-if="parts.bottom.length"
+      v-if="!hideBottom && parts.bottom.length"
       :site-title="site.site_title"
       :primary-color="site.primary_color"
       :theme="site.theme"
@@ -46,6 +48,7 @@ watchEffect(() => ensureFonts(usedFonts(props.site.theme, [])))
       :products="site.products"
       :site-slug="site.slug"
       :anchor-base="homeBase"
+      :menus="site.menus"
     />
     <CartDrawer :slug="site.slug" :accent="site.primary_color" :products="site.products" />
     <CustomerAuthDialog :slug="site.slug" :accent="site.primary_color" :site-title="site.site_title" />

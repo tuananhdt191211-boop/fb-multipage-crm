@@ -6,6 +6,7 @@ import StoreRenderer from '../components/store/StoreRenderer.vue'
 import CartDrawer from '../components/store/CartDrawer.vue'
 import CustomerAuthDialog from '../components/store/CustomerAuthDialog.vue'
 import { loadPublicSite, localizeSite } from '../lib/publicSite'
+import { applyPublicSeo } from '../lib/seoHead'
 import { t } from '../lib/i18n'
 import { useCart } from '../lib/cart'
 import type { PublicSiteData } from '../types/store'
@@ -29,6 +30,7 @@ async function load() {
     const domain = typeof route.query.domain === 'string' && route.query.domain.trim() ? route.query.domain.trim() : window.location.hostname
     rawSite.value = await loadPublicSite(slug ? { slug } : { domain })
     document.title = rawSite.value.site_title
+    void applyPublicSeo(rawSite.value.slug, '/') // tiêu đề / mô tả / ảnh chia sẻ / canonical / JSON-LD theo cài đặt SEO của trang chủ
     useCart(rawSite.value.slug).syncWith(rawSite.value.products)
   } catch (err: any) {
     errorMsg.value = err?.response?.data?.error || t('store_not_found')
@@ -73,6 +75,7 @@ onMounted(load)
         :products="site.products"
         :logo-url="site.logo_url"
         :site-slug="site.slug"
+        :menus="site.menus"
       />
       <CartDrawer :slug="site.slug" :accent="site.primary_color" :products="site.products" />
       <CustomerAuthDialog :slug="site.slug" :accent="site.primary_color" :site-title="site.site_title" />

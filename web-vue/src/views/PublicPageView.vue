@@ -10,6 +10,7 @@ import { currentSlug, storePath } from '../lib/storeHost'
 import { loadPublicPage, loadPublicSite, localizeSite, type PublicPageData } from '../lib/publicSite'
 import { localizeBlocks, t } from '../lib/i18n'
 import { useCart } from '../lib/cart'
+import { applyPublicSeo } from '../lib/seoHead'
 import type { PublicSiteData } from '../types/store'
 
 const route = useRoute()
@@ -31,9 +32,11 @@ async function load() {
     useCart(rawSite.value.slug).syncWith(rawSite.value.products)
     page.value = await loadPublicPage(rawSite.value.slug, String(route.params.page || ''))
     document.title = `${page.value.title} – ${rawSite.value.site_title}`
+    void applyPublicSeo(rawSite.value.slug, '/pages/' + page.value.slug)
     window.scrollTo({ top: 0 })
   } catch (e: any) {
     errorMsg.value = e?.response?.status === 404 ? t('page_not_found') : e?.response?.data?.error || t('shop_not_found')
+    if (rawSite.value) void applyPublicSeo(rawSite.value.slug, '/pages/' + String(route.params.page || '')) // trang không có: noindex
   } finally {
     loading.value = false
   }
@@ -45,7 +48,7 @@ watch(() => [route.params.slug, route.params.page], load, { immediate: true })
 <template>
   <div v-if="loading" class="flex min-h-screen items-center justify-center gap-2 text-sm text-slate-500"><Loader2 class="h-5 w-5 animate-spin" /> {{ t('loading') }}</div>
   <div v-else-if="!site" class="py-24 text-center text-sm font-semibold text-rose-600">{{ errorMsg }}</div>
-  <PublicShell v-else :site="site">
+  <PublicShell v-else :site="site" :hide-top="page?.settings.hide_header" :hide-bottom="page?.settings.hide_footer">
     <div v-if="!page" class="mx-auto max-w-2xl px-6 py-24 text-center" data-testid="page-missing">
       <p class="font-semibold text-slate-700">{{ errorMsg || t('page_not_found') }}</p>
       <router-link :to="storePath(site.slug)" class="mt-4 inline-block rounded-full px-5 py-2.5 text-sm font-bold text-white" :style="{ backgroundColor: site.primary_color }">{{ t('back_home') }}</router-link>

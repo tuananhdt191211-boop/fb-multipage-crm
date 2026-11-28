@@ -243,17 +243,19 @@ func (h *StorefrontHandler) applyLegacyDraft(sf *models.Storefront, raw string) 
 }
 
 type draftPageReq struct {
-	ID         uint   `json:"id"`
-	BlocksJSON string `json:"draft_blocks_json"`
+	ID         uint    `json:"id"`
+	BlocksJSON *string `json:"draft_blocks_json"` // nil = không đổi nội dung (chỉ đổi cài đặt)
+	Settings   *string `json:"draft_settings_json"`
 }
 
 // applyDraftContent áp nội dung của một yêu cầu lưu nháp vào website:
-//   - kiểu mới: draft_shared_json (đầu/chân trang dùng chung) + pages[] (chỉ các trang có thay đổi);
+//   - kiểu mới: draft_shared_json (đầu/chân trang dùng chung), draft_menus_json, draft_seo_json + pages[] (chỉ các trang có thay đổi,
+//     nội dung và / hoặc cài đặt SEO + landing);
 //   - kiểu cũ: draft_blocks_json là mảng "ghép sẵn" → tách thành phần chung + trang chủ.
 //
 // Kiểm tra hết trước khi ghi nên một yêu cầu sai không để lại dữ liệu nửa chừng.
 func (h *StorefrontHandler) applyDraftContent(sf *models.Storefront, req *saveStorefrontDraftReq) error {
-	if req.SharedJSON == nil && len(req.Pages) == 0 {
+	if req.SharedJSON == nil && len(req.Pages) == 0 && req.MenusJSON == nil && req.SEOJSON == nil {
 		if strings.TrimSpace(req.BlocksJSON) == "" {
 			return nil
 		}
@@ -267,17 +269,30 @@ func (h *StorefrontHandler) applyDraftContent(sf *models.Storefront, req *saveSt
 	for _, p := range pages {
 		byID[p.ID] = p
 	}
-	cleaned := make(map[uint]string, len(req.Pages))
+	updates := make(map[uint]map[string]any, len(req.Pages))
+	cleanedBlocks := map[uint]string{}
 	for _, pr := range req.Pages {
 		p, ok := byID[pr.ID]
 		if !ok {
 			return fmt.Errorf("Trang không thuộc website này.")
 		}
-		c, err := sanitizePageBlocksJSON(pr.BlocksJSON)
-		if err != nil {
-			return fmt.Errorf("Trang \"%s\": %s", p.Title, err.Error())
+		u := updates[pr.ID]
+		if u == nil {
+			u = map[string]any{}
+			updates[pr.ID] = u
 		}
-		cleaned[pr.ID] = c
+		if pr.BlocksJSON != nil {
+			c, err := sanitizePageBlocksJSON(*pr.BlocksJSON)
+			if err != nil {
+				return fmt.Errorf("Trang \"%s\": %s", p.Title, err.Error())
+			}
+			u["draft_blocks_json"] = c
+			cleanedBlocks[pr.ID] = c
+		}
+		if pr.Settings != nil {
+			c := sanitizeSettingsJSON(*pr.Settings)
+			u["draft_settings_json"] = c
+		}
 	}
 	shared := sf.DraftSharedJSON
 	if req.SharedJSON != nil {
@@ -287,10 +302,24 @@ func (h *StorefrontHandler) applyDraftContent(sf *models.Storefront, req *saveSt
 		}
 		shared = c
 	}
-	if len(cleaned) > 0 {
+	menus, seo := sf.DraftMenusJSON, sf.DraftSEOJSON
+	if req.MenusJSON != nil {
+		c, err := sanitizeMenusJSON(*req.MenusJSON)
+		if err != nil {
+			return err
+		}
+		menus = c
+	}
+	if req.SEOJSON != nil {
+		seo = sanitizeSiteSEOJSON(*req.SEOJSON)
+	}
+	if len(updates) > 0 {
 		err := h.DB.Transaction(func(tx *gorm.DB) error {
-			for id, c := range cleaned {
-				if err := tx.Model(&models.StorefrontPage{}).Where("id = ?", id).Update("draft_blocks_json", c).Error; err != nil {
+			for id, u := range updates {
+				if len(u) == 0 {
+					continue
+				}
+				if err := tx.Model(&models.StorefrontPage{}).Where("id = ?", id).Updates(u).Error; err != nil {
 					return err
 				}
 			}
@@ -300,47 +329,56 @@ func (h *StorefrontHandler) applyDraftContent(sf *models.Storefront, req *saveSt
 			return fmt.Errorf("Lưu nội dung các trang thất bại.")
 		}
 	}
-	sf.DraftSharedJSON = shared
+	sf.DraftSharedJSON, sf.DraftMenusJSON, sf.DraftSEOJSON = shared, menus, seo
 	for _, p := range pages {
 		if p.Kind == models.PageKindHome {
 			raw := p.DraftBlocksJSON
-			if c, ok := cleaned[p.ID]; ok {
+			if c, ok := cleanedBlocks[p.ID]; ok {
 				raw = c
 			}
+			// Cột cũ của bản nháp luôn ghép ĐỦ phần dùng chung (không áp landing): trình chỉnh sửa bản cũ lưu lại sẽ không làm mất đầu / chân trang
 			sf.DraftBlocksJSON = marshalBlocks(composeBlocks(parseBlocks(shared), parseBlocks(raw)))
 		}
 	}
 	return nil
 }
 
-// publishAllPages sao nháp → xuất bản cho phần dùng chung và mọi trang
+// publishAllPages sao nháp → xuất bản cho phần dùng chung, menu, SEO website và mọi trang (nội dung + cài đặt)
 func (h *StorefrontHandler) publishAllPages(sf *models.Storefront) error {
 	shared, err := sanitizeSharedJSON(sf.DraftSharedJSON)
 	if err != nil {
 		return err
 	}
+	menus, err := sanitizeMenusJSON(sf.DraftMenusJSON)
+	if err != nil {
+		return err
+	}
+	seo := sanitizeSiteSEOJSON(sf.DraftSEOJSON)
 	pages := h.pagesOf(sf)
 	cleaned := make([]string, len(pages))
+	settings := make([]string, len(pages))
 	for i, p := range pages {
 		c, err := sanitizePageBlocksJSON(p.DraftBlocksJSON)
 		if err != nil {
 			return fmt.Errorf("Trang \"%s\": %s", p.Title, err.Error())
 		}
 		cleaned[i] = c
+		settings[i] = sanitizeSettingsJSON(p.DraftSettingsJSON)
 	}
 	return h.DB.Transaction(func(tx *gorm.DB) error {
 		for i, p := range pages {
 			visible := p.IsVisible || p.Kind == models.PageKindHome
 			if err := tx.Model(&models.StorefrontPage{}).Where("id = ?", p.ID).Updates(map[string]any{
 				"published_blocks_json": cleaned[i], "published_title": p.Title, "published_slug": p.Slug, "published_visible": visible,
+				"published_settings_json": settings[i],
 			}).Error; err != nil {
 				return err
 			}
 			if p.Kind == models.PageKindHome {
-				sf.PublishedBlocksJSON = marshalBlocks(composeBlocks(parseBlocks(shared), parseBlocks(cleaned[i])))
+				sf.PublishedBlocksJSON = marshalBlocks(composeForSettings(parseBlocks(shared), parseBlocks(cleaned[i]), parseSettings(settings[i])))
 			}
 		}
-		sf.PublishedSharedJSON = shared
+		sf.PublishedSharedJSON, sf.PublishedMenusJSON, sf.PublishedSEOJSON = shared, menus, seo
 		return nil
 	})
 }
@@ -348,21 +386,23 @@ func (h *StorefrontHandler) publishAllPages(sf *models.Storefront) error {
 // ----------------------------------------------------------------- JSON cho trình chỉnh sửa
 
 type adminPage struct {
-	ID               uint   `json:"id"`
-	Slug             string `json:"slug"`
-	Title            string `json:"title"`
-	Kind             string `json:"kind"`
-	Position         int    `json:"position"`
-	IsVisible        bool   `json:"is_visible"`
-	PublishedVisible bool   `json:"published_visible"`
-	DraftBlocksJSON  string `json:"draft_blocks_json"`
+	ID                    uint   `json:"id"`
+	Slug                  string `json:"slug"`
+	Title                 string `json:"title"`
+	Kind                  string `json:"kind"`
+	Position              int    `json:"position"`
+	IsVisible             bool   `json:"is_visible"`
+	PublishedVisible      bool   `json:"published_visible"`
+	DraftBlocksJSON       string `json:"draft_blocks_json"`
+	DraftSettingsJSON     string `json:"draft_settings_json"`
+	PublishedSettingsJSON string `json:"published_settings_json"`
 }
 
 func (h *StorefrontHandler) adminPages(sf *models.Storefront) []adminPage {
 	pages := h.pagesOf(sf)
 	out := make([]adminPage, 0, len(pages))
 	for _, p := range pages {
-		out = append(out, adminPage{p.ID, p.Slug, p.Title, p.Kind, p.Position, p.IsVisible || p.Kind == models.PageKindHome, p.PublishedVisible, p.DraftBlocksJSON})
+		out = append(out, adminPage{p.ID, p.Slug, p.Title, p.Kind, p.Position, p.IsVisible || p.Kind == models.PageKindHome, p.PublishedVisible, p.DraftBlocksJSON, p.DraftSettingsJSON, p.PublishedSettingsJSON})
 	}
 	return out
 }
@@ -469,7 +509,7 @@ func (h *StorefrontHandler) CreatePage(c *gin.Context) {
 }
 
 func adminPageOf(p models.StorefrontPage) adminPage {
-	return adminPage{p.ID, p.Slug, p.Title, p.Kind, p.Position, p.IsVisible || p.Kind == models.PageKindHome, p.PublishedVisible, p.DraftBlocksJSON}
+	return adminPage{p.ID, p.Slug, p.Title, p.Kind, p.Position, p.IsVisible || p.Kind == models.PageKindHome, p.PublishedVisible, p.DraftBlocksJSON, p.DraftSettingsJSON, p.PublishedSettingsJSON}
 }
 
 type updatePageReq struct {
@@ -581,6 +621,7 @@ func (h *StorefrontHandler) DuplicatePage(c *gin.Context) {
 		StorefrontID: sf.ID, Slug: h.uniquePageSlug(sf.ID, base+"-ban-sao", 0), Title: trimTo(p.Title+" (bản sao)", 160), Kind: kind, Position: pos,
 		IsVisible:       false, // bản sao ẩn cho tới khi chủ shop sửa xong và bật hiển thị
 		DraftBlocksJSON: marshalBlocks(reidBlocks(parseBlocks(p.DraftBlocksJSON))), PublishedBlocksJSON: "[]",
+		DraftSettingsJSON: copySettingsForDuplicate(p.DraftSettingsJSON),
 	}
 	// Lưu ý: cột is_visible có default:true nên GORM đổi false lúc Create thành true → ghi riêng sau khi tạo
 	if err := h.DB.Create(&cp).Error; err != nil {
@@ -655,7 +696,7 @@ func (h *StorefrontHandler) GetPublicPage(c *gin.Context) {
 		return
 	}
 	c.Header("Cache-Control", "public, max-age=30")
-	c.JSON(http.StatusOK, gin.H{"slug": p.PublishedSlug, "title": p.PublishedTitle, "kind": p.Kind, "blocks_json": p.PublishedBlocksJSON})
+	c.JSON(http.StatusOK, gin.H{"slug": p.PublishedSlug, "title": p.PublishedTitle, "kind": p.Kind, "blocks_json": p.PublishedBlocksJSON, "settings_json": p.PublishedSettingsJSON})
 }
 
 // publicPageList: các trang đã xuất bản và đang hiện (trừ trang chủ), để giao diện dựng liên kết

@@ -10,6 +10,7 @@ import { loadPublicProduct, loadPublicSite, localizeSite } from '../lib/publicSi
 import { localizeProducts, money, priceLabel, t } from '../lib/i18n'
 import { toRichHtml } from '../lib/richHtml'
 import { useCart } from '../lib/cart'
+import { applyPublicSeo } from '../lib/seoHead'
 import { safeImg } from '../lib/safeUrl'
 import { findVariant, pickValue, valueState } from '../lib/variants'
 import type { PublicProduct, PublicSiteData } from '../types/store'
@@ -65,6 +66,7 @@ async function load() {
     rawSite.value = await loadPublicSite({ slug: slug.value })
     await loadDetail()
     if (product.value) document.title = `${product.value.name} – ${rawSite.value.site_title}`
+    void applyPublicSeo(rawSite.value.slug, '/p/' + String(route.params.pid))
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || t('shop_not_found')
   } finally {
@@ -103,6 +105,7 @@ watch(() => route.params.pid, async () => {
   window.scrollTo({ top: 0 })
   await loadDetail()
   if (product.value && rawSite.value) document.title = `${product.value.name} – ${rawSite.value.site_title}`
+  if (rawSite.value) void applyPublicSeo(rawSite.value.slug, '/p/' + String(route.params.pid))
 })
 onMounted(load)
 </script>

@@ -86,6 +86,10 @@ export interface Site {
   published_blocks_json: string
   draft_shared_json?: string // dải thông báo / đầu trang / chân trang dùng chung cho mọi trang
   published_shared_json?: string
+  draft_menus_json?: string // menu điều hướng quản lý riêng
+  published_menus_json?: string
+  draft_seo_json?: string // SEO mặc định của cả website
+  published_seo_json?: string
   draft_theme_json?: string
   published_theme_json?: string
   draft_i18n_json?: string
@@ -216,6 +220,9 @@ export interface PublicSiteData {
   theme: SiteTheme
   i18n: import('../lib/i18n').SiteI18n
   pages: import('../lib/pages').PublicPageRef[] // các trang khác trang chủ đang hiện
+  shared: StoreBlock[] // dải thông báo + đầu trang + chân trang dùng chung (luôn đủ, kể cả khi trang chủ là landing page)
+  menus: import('../lib/menus').SiteMenu[]
+  seo: import('../lib/seo').SiteSeo
 }
 
 export interface OrderItem {

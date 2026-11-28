@@ -20,6 +20,8 @@ export interface SitePage {
 // Trang như máy chủ trả về: kèm nội dung nháp
 export interface ServerPage extends SitePage {
   draft_blocks_json: string
+  draft_settings_json?: string // SEO + landing page (JSON)
+  published_settings_json?: string
 }
 
 export function pageMeta(p: ServerPage): SitePage {
@@ -124,4 +126,10 @@ export function pageLinkOptions(pages: Pick<SitePage, 'slug' | 'title' | 'kind'>
 // Đường dẫn công khai của một trang (không gồm tên miền): '' = trang chủ
 export function pageSubPath(page: Pick<SitePage, 'slug' | 'kind'>): string {
   return page.kind === 'home' ? '' : `/pages/${page.slug}`
+}
+
+// Ghép phần dùng chung + nội dung trang, bỏ phần bị ẩn theo cài đặt trang (landing page: ẩn đầu trang / chân trang)
+export function composeForSettings(shared: StoreBlock[], page: StoreBlock[], s: { hide_header?: boolean; hide_footer?: boolean }): StoreBlock[] {
+  const use = shared.filter((b) => !(s.hide_header && (b.type === 'announcement' || b.type === 'header')) && !(s.hide_footer && b.type === 'footer'))
+  return composeBlocks(use, page)
 }

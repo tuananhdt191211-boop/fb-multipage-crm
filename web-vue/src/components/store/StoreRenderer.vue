@@ -32,6 +32,7 @@ import {
 } from 'lucide-vue-next'
 import { safeHref as baseSafeHref, safeImg } from '../../lib/safeUrl'
 import { PAGE_LINK_RE } from '../../lib/pages'
+import { menuById, type SiteMenu } from '../../lib/menus'
 import { money, priceLabel, t } from '../../lib/i18n'
 import { blockLabels } from '../../lib/blockFactory'
 import { useCart } from '../../lib/cart'
@@ -61,6 +62,7 @@ const props = defineProps<{
   selectedId?: string | null
   dragActive?: boolean
   theme?: SiteTheme | null
+  menus?: SiteMenu[] // menu điều hướng của website (đầu trang chọn bằng data.menu_id, cột chân trang bằng col.menu_id)
   anchorBase?: string // trang con: liên kết neo (#products) đưa về đường dẫn này (trang chủ) rồi cuộn tới đúng phần
 }>()
 
@@ -229,13 +231,36 @@ function socials(blk: StoreBlock) {
 }
 
 // ----- Đầu trang -----
-function navItems(blk: StoreBlock): { label: string; link: string; idx: number }[] {
+type NavItem = { label: string; link: string; idx: number; children: { label: string; link: string }[]; fromMenu: boolean }
+function navItems(blk: StoreBlock): NavItem[] {
+  // Đầu trang dùng menu quản lý riêng (menu_id) thì lấy mục + mục con từ menu; không thì dùng danh sách tự nhập
+  const menu = menuById(props.menus, blk.data.menu_id)
+  if (menu) {
+    return menu.items
+      .map((x, idx) => ({ label: x.label, link: x.link, idx, children: (x.children || []).filter((c) => c.label.trim()), fromMenu: true }))
+      .filter((x) => props.editable || x.label.trim())
+  }
   const arr = Array.isArray(blk.data.nav_items) ? blk.data.nav_items : []
   return arr
-    .map((x: any, idx: number) =>
-      typeof x === 'string' ? { label: x, link: '', idx } : { label: String(x?.label || ''), link: String(x?.link || ''), idx }
+    .map((x: any, idx: number): NavItem =>
+      typeof x === 'string' ? { label: x, link: '', idx, children: [], fromMenu: false } : { label: String(x?.label || ''), link: String(x?.link || ''), idx, children: [], fromMenu: false }
     )
     .filter((x: { label: string }) => props.editable || x.label.trim())
+}
+
+// Liên kết của một cột chân trang: cột chọn menu thì lấy từ menu (mục con thụt vào), không thì dùng danh sách tự nhập
+type ColLink = { label: string; link: string; idx: number; fromMenu: boolean; sub: boolean }
+function colLinks(col: any): ColLink[] {
+  const menu = menuById(props.menus, col?.menu_id)
+  if (menu) {
+    const out: ColLink[] = []
+    menu.items.forEach((x, i) => {
+      if (x.label.trim()) out.push({ label: x.label, link: x.link, idx: i, fromMenu: true, sub: false })
+      for (const c of x.children || []) if (c.label.trim()) out.push({ label: c.label, link: c.link, idx: i, fromMenu: true, sub: true })
+    })
+    return out
+  }
+  return (Array.isArray(col?.links) ? col.links : []).map((l: any, idx: number) => ({ label: String(l?.label || ''), link: String(l?.link || ''), idx, fromMenu: false, sub: false }))
 }
 
 function logoSrc(blk: StoreBlock): string {
@@ -567,9 +592,18 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 :class="[headerLayout(blk.data.layout).nav, hdrFg(blk) ? '' : 'text-slate-600']"
               >
                 <template v-for="item in navItems(blk)" :key="item.idx">
-                  <a :href="safeHref(item.link)" class="transition" :class="hdrFg(blk) ? 'opacity-80 hover:opacity-100' : 'hover:opacity-70'">
-                    <EditableText :fx="fx(blk, ['nav_items', item.idx, 'label'])" :model-value="item.label" :editable="editable" placeholder="Mục menu" @update:model-value="set(blk, ['nav_items', item.idx, 'label'], $event)" />
-                  </a>
+                  <div class="group relative">
+                    <a :href="safeHref(item.link)" class="inline-flex items-center gap-1 transition" :class="hdrFg(blk) ? 'opacity-80 hover:opacity-100' : 'hover:opacity-70'">
+                      <EditableText :fx="fx(blk, ['nav_items', item.idx, 'label'])" :model-value="item.label" :editable="editable && !item.fromMenu" placeholder="Mục menu" @update:model-value="set(blk, ['nav_items', item.idx, 'label'], $event)" />
+                      <ChevronDown v-if="item.children.length" class="h-3.5 w-3.5 opacity-60" />
+                    </a>
+                    <!-- Menu con (thả xuống khi rê chuột / bấm phím Tab) -->
+                    <div v-if="item.children.length" class="invisible absolute left-0 top-full z-30 min-w-[11rem] pt-3 opacity-0 transition group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+                      <div class="rounded-xl border border-slate-200 bg-white py-2 text-slate-700 shadow-xl">
+                        <a v-for="(c, ci) in item.children" :key="ci" :href="safeHref(c.link)" class="block whitespace-nowrap px-4 py-2 text-sm font-medium hover:bg-slate-50">{{ c.label }}</a>
+                      </div>
+                    </div>
+                  </div>
                 </template>
               </nav>
 
@@ -702,15 +736,24 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 
             <!-- Menu điện thoại (thả xuống) -->
             <div v-if="openMenus[blk.id] && navItems(blk).length" class="mt-3 space-y-1 border-t border-slate-100 pt-3 @3xl:hidden">
-              <a
-                v-for="item in navItems(blk)"
-                :key="'m' + item.idx"
-                :href="safeHref(item.link)"
-                class="block rounded-lg px-3 py-2.5 text-base font-semibold hover:bg-slate-50"
-                @click="openMenus[blk.id] = false"
-              >
-                {{ item.label }}
-              </a>
+              <template v-for="item in navItems(blk)" :key="'m' + item.idx">
+                <a
+                  :href="safeHref(item.link)"
+                  class="block rounded-lg px-3 py-2.5 text-base font-semibold hover:bg-slate-50"
+                  @click="openMenus[blk.id] = false"
+                >
+                  {{ item.label }}
+                </a>
+                <a
+                  v-for="(c, ci) in item.children"
+                  :key="'mc' + item.idx + '-' + ci"
+                  :href="safeHref(c.link)"
+                  class="block rounded-lg py-2 pl-8 pr-3 text-sm font-medium text-slate-500 hover:bg-slate-50"
+                  @click="openMenus[blk.id] = false"
+                >
+                  {{ c.label }}
+                </a>
+              </template>
               <a
                 v-if="blk.data.show_cta !== false && blk.data.right_mode !== 'account'"
                 :href="safeHref(blk.data.cta_link, '#products')"
@@ -1218,9 +1261,9 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <div v-for="(col, cIdx) in blk.data.columns || []" :key="cIdx" class="space-y-3">
               <EditableText :fx="fx(blk, ['columns', cIdx, 'title'])" tag="p" :model-value="col.title" :editable="editable" placeholder="Tiêu đề cột" class="block text-sm font-bold uppercase tracking-wider text-white" @update:model-value="set(blk, ['columns', cIdx, 'title'], $event)" />
               <ul class="space-y-2 text-sm">
-                <li v-for="(lnk, lIdx) in col.links || []" :key="lIdx">
+                <li v-for="(lnk, lIdx) in colLinks(col)" :key="lIdx" :class="lnk.sub ? 'pl-4 text-[13px]' : ''">
                   <a :href="safeHref(lnk.link)" class="opacity-80 transition hover:opacity-100 hover:underline">
-                    <EditableText :fx="fx(blk, ['columns', cIdx, 'links', lIdx, 'label'])" :model-value="lnk.label" :editable="editable" placeholder="Liên kết" @update:model-value="set(blk, ['columns', cIdx, 'links', lIdx, 'label'], $event)" />
+                    <EditableText :fx="fx(blk, ['columns', cIdx, 'links', lnk.idx, 'label'])" :model-value="lnk.label" :editable="editable && !lnk.fromMenu" placeholder="Liên kết" @update:model-value="set(blk, ['columns', cIdx, 'links', lnk.idx, 'label'], $event)" />
                   </a>
                 </li>
               </ul>

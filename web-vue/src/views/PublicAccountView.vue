@@ -5,6 +5,7 @@ import { useRoute } from 'vue-router'
 import { ChevronRight, Loader2, LogOut, Package, User } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
 import { loadPublicSite, localizeSite } from '../lib/publicSite'
+import { applyPublicSeo } from '../lib/seoHead'
 import { apiError, customerState, useCustomer, type CustomerOrder } from '../lib/customer'
 import { currentSlug, storePath } from '../lib/storeHost'
 import { formatDate, money, t, type UiKey } from '../lib/i18n'
@@ -85,6 +86,7 @@ onMounted(async () => {
   try {
     rawSite.value = await loadPublicSite({ slug: slug.value })
     document.title = `${t('account')} – ${rawSite.value.site_title}`
+    void applyPublicSeo(rawSite.value.slug, '/account')
     await cust.refresh()
     fillProfile()
     await loadOrders()

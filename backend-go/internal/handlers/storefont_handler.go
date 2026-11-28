@@ -229,6 +229,8 @@ type saveStorefrontDraftReq struct {
 	I18nJSON     *string `json:"draft_i18n_json"`  // nil = không đổi
 	// Nhiều trang: phần dùng chung (thông báo / đầu / chân trang) và nội dung riêng của các trang có thay đổi
 	SharedJSON *string        `json:"draft_shared_json"` // nil = không đổi
+	MenusJSON  *string        `json:"draft_menus_json"`  // menu điều hướng; nil = không đổi
+	SEOJSON    *string        `json:"draft_seo_json"`    // SEO mặc định của website; nil = không đổi
 	Pages      []draftPageReq `json:"pages"`
 }
 
@@ -356,8 +358,15 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 		pub = append(pub, publicProductCard(p, stats[p.ID]))
 	}
 
+	// Giao diện mới ghép trang chủ từ phần dùng chung + nội dung riêng + cài đặt landing; bản cũ chỉ đọc blocks_json (đã ghép sẵn)
+	home, homeSet := h.homeSettings(&sf)
 	c.Header("Cache-Control", "public, max-age=30")
 	c.JSON(http.StatusOK, gin.H{
+		"shared_json":        sf.PublishedSharedJSON,
+		"home_blocks_json":   home.PublishedBlocksJSON,
+		"home_settings_json": settingsJSON(homeSet),
+		"menus_json":         firstNonEmpty(sf.PublishedMenusJSON, "[]"),
+		"seo_json":           firstNonEmpty(sf.PublishedSEOJSON, "{}"),
 		"id":            sf.ID,
 		"slug":          sf.Slug,
 		"site_title":    sf.SiteTitle,

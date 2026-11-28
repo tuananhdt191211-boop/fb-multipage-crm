@@ -4,9 +4,35 @@ import { computed, ref } from 'vue'
 import { GripVertical, Plus, Trash2 } from 'lucide-vue-next'
 import ImageField from './ImageField.vue'
 import { iconChoices } from '../../lib/blockFactory'
+import { menuById, newMenuId, type SiteMenu } from '../../lib/menus'
 import type { PublicProduct, StoreBlock } from '../../types/store'
 
-const props = defineProps<{ block: StoreBlock; siteId: number | string; siteLogo?: string; siteColor?: string; products?: PublicProduct[] }>()
+const props = defineProps<{ block: StoreBlock; siteId: number | string; siteLogo?: string; siteColor?: string; products?: PublicProduct[]; menus?: SiteMenu[] }>()
+
+// ----- Menu quản lý riêng: đầu trang / cột chân trang chọn menu thay vì tự nhập danh sách -----
+const menuOf = (id: unknown) => menuById(props.menus, id)
+function uniqueMenuName(base: string) {
+  let name = base
+  for (let i = 2; (props.menus || []).some((m) => m.name === name); i++) name = base + ' ' + i
+  return name
+}
+// Tạo menu từ danh sách tự nhập hiện có rồi chuyển section sang dùng menu đó
+function navToMenu() {
+  if (!props.menus) return
+  const items = (Array.isArray(d().nav_items) ? d().nav_items : [])
+    .map((n: any) => ({ label: String(n?.label ?? n ?? '').trim(), link: String(n?.link || '') }))
+    .filter((n: { label: string }) => n.label)
+  const id = newMenuId()
+  props.menus.push({ id, name: uniqueMenuName('Menu chính'), items })
+  d().menu_id = id
+}
+function colToMenu(col: any) {
+  if (!props.menus) return
+  const items = (col.links || []).map((l: any) => ({ label: String(l?.label || '').trim(), link: String(l?.link || '') })).filter((l: { label: string }) => l.label)
+  const id = newMenuId()
+  props.menus.push({ id, name: uniqueMenuName(String(col.title || 'Menu chân trang')), items })
+  col.menu_id = id
+}
 
 // ----- Sản phẩm: chọn thẻ để chỉ hiện các sản phẩm có thẻ đó trong section -----
 const tagKey = (s: string) => s.trim().toLowerCase()
@@ -280,7 +306,17 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         </select>
       </label>
 
-      <div class="space-y-2">
+      <div class="space-y-1.5">
+        <span :class="lbl">Menu điều hướng</span>
+        <select :value="block.data.menu_id || ''" data-testid="header-menu-select" class="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm" @change="block.data.menu_id = ($event.target as HTMLSelectElement).value">
+          <option value="">Tự nhập (danh sách bên dưới)</option>
+          <option v-for="m in menus || []" :key="m.id" :value="m.id">{{ m.name }}</option>
+        </select>
+        <p v-if="menuOf(block.data.menu_id)" class="rounded-lg bg-indigo-50 px-2.5 py-1.5 text-[11px] text-indigo-800" data-testid="header-menu-note">Đang dùng menu "{{ menuOf(block.data.menu_id)?.name }}" — sửa mục menu ở tab <b>Menu</b>.</p>
+        <button v-else-if="list('nav_items').length" type="button" data-testid="header-nav-to-menu" class="text-[11px] font-bold text-indigo-700 hover:underline" @click="navToMenu">Tạo menu từ danh sách này (dùng lại được ở chân trang)</button>
+      </div>
+
+      <div v-if="!menuOf(block.data.menu_id)" class="space-y-2">
         <span :class="lbl">Menu (kéo để đổi thứ tự)</span>
         <div
           v-for="(n, ni) in list('nav_items')"
@@ -977,12 +1013,22 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
           <input v-model="col.title" placeholder="Tiêu đề cột" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm font-semibold" />
           <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('columns', ci)"><Trash2 class="h-3.5 w-3.5" /></button>
         </div>
-        <div v-for="(lnk, li) in col.links || []" :key="li" class="flex items-center gap-1">
-          <input v-model="lnk.label" placeholder="Chữ" class="w-2/5 rounded-lg border border-slate-200 px-2 py-1 text-xs" />
-          <input v-model="lnk.link" list="pp-page-links" placeholder="Liên kết" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs" />
-          <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="col.links.splice(li, 1)"><Trash2 class="h-3 w-3" /></button>
-        </div>
-        <button type="button" class="text-[11px] font-bold text-indigo-700" @click="(col.links = col.links || []).push({ label: '', link: '' })">+ Thêm liên kết</button>
+        <select :value="col.menu_id || ''" :data-testid="'footer-menu-select-' + ci" class="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs" @change="col.menu_id = ($event.target as HTMLSelectElement).value">
+          <option value="">Tự nhập liên kết</option>
+          <option v-for="m in menus || []" :key="m.id" :value="m.id">Menu: {{ m.name }}</option>
+        </select>
+        <template v-if="menuOf(col.menu_id)">
+          <p class="rounded-lg bg-indigo-50 px-2 py-1 text-[11px] text-indigo-800">Dùng menu "{{ menuOf(col.menu_id)?.name }}" — sửa ở tab <b>Menu</b>.</p>
+        </template>
+        <template v-else>
+          <div v-for="(lnk, li) in col.links || []" :key="li" class="flex items-center gap-1">
+            <input v-model="lnk.label" placeholder="Chữ" class="w-2/5 rounded-lg border border-slate-200 px-2 py-1 text-xs" />
+            <input v-model="lnk.link" list="pp-page-links" placeholder="Liên kết" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs" />
+            <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="col.links.splice(li, 1)"><Trash2 class="h-3 w-3" /></button>
+          </div>
+          <button type="button" class="text-[11px] font-bold text-indigo-700" @click="(col.links = col.links || []).push({ label: '', link: '' })">+ Thêm liên kết</button>
+          <button v-if="(col.links || []).length" type="button" class="block text-[11px] font-bold text-slate-500 hover:text-indigo-700" @click="colToMenu(col)">Chuyển thành menu dùng chung</button>
+        </template>
       </div>
       <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('columns', { title: 'Cột mới', links: [] })">
         <Plus class="h-3.5 w-3.5" /> Thêm cột

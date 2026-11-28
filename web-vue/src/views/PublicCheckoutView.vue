@@ -7,6 +7,7 @@ import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
 import { flushNow, track, trackSid, type TrackType } from '../lib/analytics'
 import { loadPublicProduct, loadPublicSite, localizeSite } from '../lib/publicSite'
+import { applyPublicSeo } from '../lib/seoHead'
 import { formatVndPlain, isForeignCurrency, locale, money, t, variantLabel } from '../lib/i18n'
 import { lineKey, useCart } from '../lib/cart'
 import { customerHeaders, useCustomer } from '../lib/customer'
@@ -101,6 +102,7 @@ async function load() {
     })
     if (removed > 0) cartNote.value = t('cart_items_removed')
     document.title = `${t('checkout')} – ${rawSite.value.site_title}`
+    void applyPublicSeo(rawSite.value.slug, '/checkout') // giỏ hàng / thanh toán: noindex
     const { data } = await api.get('/storefront/public/checkout-config', { params: { slug: slug.value } })
     config.value = data
     // Khách đang xem bằng ngoại tệ -> ưu tiên thẻ quốc tế / PayPal
