@@ -505,9 +505,10 @@ async function handleEditTemplatePaste(e: ClipboardEvent, qr: QuickReplyItem) {
   }
 }
 
-async function pollInboxUpdates() {
-  if (!localStorage.getItem('access_token')) return
-  if (syncing.value || sending.value || loadingList.value) return
+// Trả về true nếu đã tải & áp dụng dữ liệu mới; false nếu bỏ qua (đang bận) hoặc gặp lỗi
+async function pollInboxUpdates(): Promise<boolean> {
+  if (!localStorage.getItem('access_token')) return false
+  if (syncing.value || sending.value || loadingList.value) return false
 
   try {
     const { data } = await api.get<{
@@ -570,8 +571,10 @@ async function pollInboxUpdates() {
         }
       }
     }
+    return true
   } catch {
     // Bỏ qua lỗi nền tạm thời
+    return false
   }
 }
 
@@ -1285,6 +1288,102 @@ async function handleSendMessage() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Theo dõi tin mới — KHÔNG còn tải cả danh sách hội thoại mỗi 3 giây.
+// Trước đây: GET /inbox/conversations (toàn bộ hội thoại, truy vấn database) mỗi 3 giây, kể cả khi tab ẩn hay bạn đi vắng
+// -> database Neon không bao giờ được ngủ và truyền ra hàng GB/ngày => hết hạn mức gói miễn phí (SQLSTATE 53000).
+// Giờ chỉ hỏi "số phiên bản" hộp thư (/inbox/rev — máy chủ đọc từ RAM, không chạm database) và chỉ tải danh sách khi số đó đổi:
+//   • Tab đang hiện + bạn đang thao tác : hỏi mỗi 3 giây (không tốn database)
+//   • Tab ẩn hoặc bạn rảnh > 10 phút    : hỏi mỗi 30 giây và báo "bg" để máy chủ không bật đồng bộ nền
+//   • Lưới an toàn: khi đang xem vẫn tải lại đầy đủ mỗi 2 phút, phòng khi lỡ một thay đổi.
+const IDLE_AFTER_MS = 10 * 60 * 1000
+const FULL_REFRESH_MS = 2 * 60 * 1000
+const ACTIVITY_EVENTS = ['pointerdown', 'mousemove', 'keydown', 'touchstart', 'wheel'] as const
+let inboxRev: number | null = null
+let lastFullPoll = 0
+let lastActivityAt = Date.now()
+let watching = false
+let watchBusy = false
+
+function isBackground() {
+  return document.visibilityState !== 'visible' || Date.now() - lastActivityAt > IDLE_AFTER_MS
+}
+
+async function watchTick() {
+  if (watchBusy) return
+  watchBusy = true
+  try {
+    const bg = isBackground()
+    let rev: number | null = null
+    try {
+      const { data } = await api.get<{ rev: number }>('/inbox/rev', { params: bg ? { bg: 1 } : undefined })
+      rev = typeof data?.rev === 'number' ? data.rev : null
+    } catch {
+      rev = null // máy chủ cũ chưa có /inbox/rev, hoặc lỗi mạng tạm thời
+    }
+
+    const now = Date.now()
+    const needFull =
+      rev === null
+        ? now - lastFullPoll > 15_000 // dự phòng: tải danh sách kiểu cũ nhưng thưa hơn (15 giây)
+        : rev !== inboxRev || (!bg && now - lastFullPoll > FULL_REFRESH_MS)
+
+    if (needFull) {
+      // Chỉ ghi nhận số phiên bản mới SAU khi tải thành công; bị bỏ qua (đang bận) thì lần sau thử lại
+      if (await pollInboxUpdates()) {
+        lastFullPoll = Date.now()
+        if (rev !== null) inboxRev = rev
+      }
+    }
+  } finally {
+    watchBusy = false
+  }
+}
+
+function scheduleWatch(delay?: number) {
+  if (!watching) return
+  if (pollTimer !== null) window.clearTimeout(pollTimer)
+  pollTimer = window.setTimeout(
+    async () => {
+      pollTimer = null
+      await watchTick()
+      scheduleWatch()
+    },
+    delay ?? (isBackground() ? 30_000 : 3_000)
+  )
+}
+
+function onUserActivity() {
+  const wasIdle = Date.now() - lastActivityAt > IDLE_AFTER_MS
+  lastActivityAt = Date.now()
+  if (wasIdle) scheduleWatch(0) // vừa quay lại sau khi vắng -> kiểm tra ngay
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    lastActivityAt = Date.now()
+    scheduleWatch(0)
+  }
+}
+
+function startInboxWatcher() {
+  watching = true
+  lastActivityAt = Date.now()
+  for (const ev of ACTIVITY_EVENTS) window.addEventListener(ev, onUserActivity, { passive: true })
+  document.addEventListener('visibilitychange', onVisibilityChange)
+  scheduleWatch()
+}
+
+function stopInboxWatcher() {
+  watching = false
+  if (pollTimer !== null) {
+    window.clearTimeout(pollTimer)
+    pollTimer = null
+  }
+  for (const ev of ACTIVITY_EVENTS) window.removeEventListener(ev, onUserActivity)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+}
+
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
@@ -1302,14 +1401,11 @@ onMounted(() => {
     Notification.requestPermission().catch(() => {})
   }
   loadConversations()
-  pollTimer = window.setInterval(pollInboxUpdates, 3000)
+  startInboxWatcher()
 })
 
 onUnmounted(() => {
-  if (pollTimer !== null) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
+  stopInboxWatcher()
   if (alertHideTimer !== null) {
     clearTimeout(alertHideTimer)
     alertHideTimer = null

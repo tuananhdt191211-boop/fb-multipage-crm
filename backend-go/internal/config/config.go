@@ -26,7 +26,11 @@ type Config struct {
 }
 
 func Load() *Config {
-	_ = godotenv.Load()
+	// .env.local (nếu có) được nạp TRƯỚC và thắng .env — dùng để chạy dev bằng database trên máy
+	// mà không đụng vào cấu hình / khoá thật trong .env. File này nằm trong .gitignore và không có trên Render.
+	// (Nạp riêng từng file vì godotenv.Load dừng ngay khi một file không tồn tại.)
+	_ = godotenv.Load(".env.local")
+	_ = godotenv.Load(".env")
 
 	return &Config{
 		Port:                getEnv("PORT", "8080"),

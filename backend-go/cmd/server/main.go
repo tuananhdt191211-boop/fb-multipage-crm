@@ -4,13 +4,17 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"fb-multipage-crm/internal/config"
 	"fb-multipage-crm/internal/database"
 	"fb-multipage-crm/internal/handlers"
+	"fb-multipage-crm/internal/inboxrev"
 	"fb-multipage-crm/internal/middleware"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func isOriginAllowed(origin, primaryFrontend string) bool {
@@ -33,7 +37,41 @@ func isOriginAllowed(origin, primaryFrontend string) bool {
 
 func main() {
 	cfg := config.Load()
-	db := database.Connect(cfg.DatabaseURL)
+
+	// Mở cổng HTTP NGAY (chưa cần database). Nếu database đang lỗi (vd. Neon hết hạn mức) thì mọi API
+	// trả 503 kèm lý do rõ ràng (có CORS nên giao diện hiện được thông báo thay vì lỗi mạng khó hiểu),
+	// và máy chủ tự hồi phục khi database sống lại — không cần deploy lại.
+	var current atomic.Pointer[gin.Engine]
+	var lastDBError atomic.Value // string
+	current.Store(maintenanceEngine(cfg, &lastDBError))
+
+	go func() {
+		db := database.ConnectWithRetry(cfg.DatabaseURL, func(err error, attempt int) {
+			msg := database.ExplainError(err)
+			lastDBError.Store(msg)
+			if attempt <= 2 || attempt%5 == 0 {
+				log.Printf("[DB] Chưa kết nối được database (lần %d):\n%s", attempt, msg)
+			}
+		})
+		current.Store(buildRouter(cfg, db))
+		log.Println("[DB] Database sẵn sàng — API đầy đủ đã hoạt động")
+	}()
+
+	log.Printf("Backend Golang đang chạy tại http://localhost:%s", cfg.Port)
+	srv := &http.Server{
+		Addr:              ":" + cfg.Port,
+		Handler:           http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { current.Load().ServeHTTP(w, r) }),
+		ReadHeaderTimeout: 15 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// buildRouter dựng toàn bộ API (chỉ gọi khi database đã sẵn sàng).
+func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
+	// Mọi thay đổi ở bảng hộp thư tự tăng "số phiên bản" trong RAM (xem inboxrev)
+	inboxrev.Register(db)
 
 	authHandler := handlers.NewAuthHandler(db, cfg)
 	postHandler := handlers.NewPostHandler(db, cfg)
@@ -56,41 +94,7 @@ func main() {
 	r.RemoveExtraSlash = true
 	r.HandleMethodNotAllowed = true
 
-	// Chuẩn hóa Frontend URL chính được phép gọi API (loại bỏ dấu '/' ở cuối nếu có)
-	allowedOrigin := strings.TrimRight(strings.TrimSpace(cfg.FrontendURL), "/")
-
-	r.Use(func(c *gin.Context) {
-		origin := c.GetHeader("Origin")
-		c.Header("Vary", "Origin")
-
-		// API công khai của website bán hàng được gọi từ tên miền riêng của khách → cho mọi origin
-		p := c.Request.URL.Path
-		isPublicStore := strings.HasPrefix(p, "/api/v1/storefront/public") || strings.HasPrefix(p, "/api/v1/storefront/media/")
-
-		if isPublicStore && origin != "" {
-			c.Header("Access-Control-Allow-Origin", strings.TrimRight(strings.TrimSpace(origin), "/"))
-		} else if allowedOrigin == "*" {
-			if origin != "" {
-				c.Header("Access-Control-Allow-Origin", origin)
-			} else {
-				c.Header("Access-Control-Allow-Origin", "*")
-			}
-		} else if isOriginAllowed(origin, allowedOrigin) {
-			c.Header("Access-Control-Allow-Origin", strings.TrimRight(strings.TrimSpace(origin), "/"))
-		} else if allowedOrigin != "" {
-			c.Header("Access-Control-Allow-Origin", allowedOrigin)
-		}
-
-		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin, X-Customer-Token")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-
-		if c.Request.Method == http.MethodOptions {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-		c.Next()
-	})
+	r.Use(corsMiddleware(cfg))
 
 	r.Static("/uploads", "./uploads")
 
@@ -201,6 +205,7 @@ func main() {
 
 	inboxGroup := r.Group("/api/v1/inbox", middleware.JWTAuth(cfg.JWTSecret))
 	{
+		inboxGroup.GET("/rev", inboxHandler.InboxRev) // "có tin mới chưa?" — đọc từ RAM, không chạm database
 		inboxGroup.GET("/conversations", inboxHandler.ListConversations)
 		inboxGroup.POST("/sync", inboxHandler.SyncMessages)
 		inboxGroup.POST("/upload", inboxHandler.UploadInboxImages)
@@ -264,8 +269,5 @@ func main() {
 
 	}
 
-	log.Printf("Backend Golang đang chạy tại http://localhost:%s", cfg.Port)
-	if err := r.Run(":" + cfg.Port); err != nil {
-		log.Fatal(err)
-	}
+	return r
 }

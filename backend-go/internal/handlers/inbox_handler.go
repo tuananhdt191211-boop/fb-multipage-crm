@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"fb-multipage-crm/internal/config"
+	"fb-multipage-crm/internal/inboxrev"
 	"fb-multipage-crm/internal/models"
 	"fb-multipage-crm/internal/security"
 
@@ -63,15 +64,20 @@ func NewInboxHandler(db *gorm.DB, cfg *config.Config) *InboxHandler {
 	return h
 }
 
-// startAutoSyncWorker tự động quét tin nhắn mới từ Facebook mỗi 15 giây để hộp thư luôn cập nhật liên tục
+// startAutoSyncWorker kéo tin mới từ Facebook để hộp thư luôn cập nhật (lưới an toàn khi webhook chưa/không chạy).
+//
+// Chỉ chạy khi có người đang XEM hộp thư: tab đang hiện và người dùng đang thao tác (xem InboxRev).
+// Không ai xem thì không chạm database -> Neon được ngủ, không hết hạn mức gói miễn phí.
+// Fanpage đã đăng ký webhook thì tin mới vốn về ngay nên chỉ đối soát thưa hơn (mỗi 60 giây).
 func (h *InboxHandler) startAutoSyncWorker() {
+	const webhookPageEvery = 60 * time.Second
+	lastSync := map[string]time.Time{}
+
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// Chỉ đồng bộ khi có người đang mở hộp thư (tin mới vẫn về tức thì qua webhook).
-		// Không ai dùng thì không hỏi database -> Neon được nghỉ, không hết hạn mức.
-		if !within(&lastInboxUse, 5*time.Minute) {
+		if !within(&lastInboxUse, 2*time.Minute) {
 			continue
 		}
 		var pages []models.FacebookPage
@@ -79,9 +85,24 @@ func (h *InboxHandler) startAutoSyncWorker() {
 			continue
 		}
 		for _, page := range pages {
+			if page.WebhookSubscribed && time.Since(lastSync[page.PageID]) < webhookPageEvery {
+				continue
+			}
+			lastSync[page.PageID] = time.Now()
 			_, _ = h.syncSinglePageConversations(page, 25)
 		}
 	}
+}
+
+// InboxRev GET /api/v1/inbox/rev?bg=1 — "số phiên bản" của hộp thư, đọc từ RAM (KHÔNG truy vấn database).
+// Trình duyệt hỏi số này thường xuyên và chỉ tải lại danh sách khi số đổi.
+// bg=1: tab đang ẩn / người dùng đã rảnh -> không tính là "đang xem", nên không bật đồng bộ nền.
+func (h *InboxHandler) InboxRev(c *gin.Context) {
+	if c.Query("bg") != "1" {
+		markInboxUse()
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"rev": inboxrev.Current()})
 }
 
 func (h *InboxHandler) encKey() string {
@@ -115,8 +136,14 @@ func (h *InboxHandler) ListConversations(c *gin.Context) {
 		query = query.Where("customer_name ILIKE ? OR customer_phone ILIKE ? OR last_message ILIKE ?", like, like, like)
 	}
 
+	// Trần an toàn để một lần tải không kéo ra lượng dữ liệu khổng lồ (băng thông Neon gói miễn phí chỉ 5 GB/tháng)
+	limit := 2000
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 && v <= 5000 {
+		limit = v
+	}
+
 	var conversations []conversationWithCRM
-	if err := query.Order("last_message_time DESC").Find(&conversations).Error; err != nil {
+	if err := query.Order("last_message_time DESC").Limit(limit).Find(&conversations).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tải danh sách hội thoại"})
 		return
 	}
@@ -345,8 +372,9 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 		return 0, page.Name + ": " + fbData.Error.Message
 	}
 
-	synced := 0
-	for _, thread := range fbData.Data {
+	// Khách (id, tên) của hội thoại thứ i
+	custOf := func(i int) (string, string) {
+		thread := fbData.Data[i]
 		customerID := ""
 		customerName := "Khách hàng Facebook"
 		for _, p := range thread.Participants.Data {
@@ -369,13 +397,64 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 				}
 			}
 		}
+		return customerID, customerName
+	}
+
+	// ---- Tải sẵn dữ liệu đã có bằng 2 truy vấn gộp ----
+	// Trước đây: với MỖI hội thoại có 1 SELECT + 1 UPDATE (luôn ghi, kể cả khi không có gì mới) và với MỖI tin nhắn có 1 SELECT
+	// -> ~300 truy vấn cho 1 Fanpage mỗi 15 giây. Đó là nguyên nhân chính làm Neon không bao giờ ngủ và hết hạn mức.
+	threadIDs := make([]string, 0, len(fbData.Data))
+	psids := make([]string, 0, len(fbData.Data))
+	msgIDs := make([]string, 0, len(fbData.Data)*10)
+	for i, thread := range fbData.Data {
+		if id, _ := custOf(i); id != "" {
+			threadIDs = append(threadIDs, thread.ID)
+			psids = append(psids, id)
+		}
+		for _, m := range thread.Messages.Data {
+			if m.ID != "" {
+				msgIDs = append(msgIDs, m.ID)
+			}
+		}
+	}
+
+	convByThread := map[string]*models.Conversation{}
+	convByPSID := map[string]*models.Conversation{}
+	if len(threadIDs) > 0 {
+		// Chỉ nạp các cột cần so sánh; cập nhật bên dưới dùng Updates(map) nên không ghi đè cột nào khác
+		var existing []models.Conversation
+		h.DB.Select("id", "page_id", "page_name", "thread_id", "customer_ps_id", "customer_name",
+			"customer_avatar", "last_message", "last_message_time", "unread_count").
+			Where("thread_id IN ? OR (page_id = ? AND customer_ps_id IN ?)", threadIDs, page.PageID, psids).
+			Find(&existing)
+		for i := range existing {
+			c := &existing[i]
+			convByThread[c.ThreadID] = c
+			if c.PageID == page.PageID {
+				convByPSID[c.CustomerPSID] = c
+			}
+		}
+	}
+	msgByFBID := map[string]*models.Message{}
+	if len(msgIDs) > 0 {
+		var existing []models.Message
+		h.DB.Select("id", "fb_message_id", "content", "attachment_url", "attachment_type").
+			Where("fb_message_id IN ?", msgIDs).Find(&existing)
+		for i := range existing {
+			msgByFBID[existing[i].FBMessageID] = &existing[i]
+		}
+	}
+
+	synced := 0
+	for i, thread := range fbData.Data {
+		customerID, customerName := custOf(i)
 		if customerID == "" {
 			continue
 		}
 
-		updatedAt := time.Now()
+		updatedAt, updatedOK := time.Now(), false
 		if t, err := time.Parse("2006-01-02T15:04:05-0700", thread.UpdatedTime); err == nil {
-			updatedAt = t
+			updatedAt, updatedOK = t, true
 		}
 
 		lastMsgText := ""
@@ -386,19 +465,40 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 			}
 		}
 
-		var conv models.Conversation
-		convRes := h.DB.Where("thread_id = ? OR (page_id = ? AND customer_ps_id = ?)", thread.ID, page.PageID, customerID).Limit(1).Find(&conv)
-		if convRes.RowsAffected > 0 {
-			conv.PageName = page.Name
-			conv.CustomerPSID = customerID
-			conv.CustomerName = customerName
-			conv.CustomerAvatar = sanitizeAvatarURL(conv.CustomerAvatar)
-			conv.LastMessage = lastMsgText
-			conv.LastMessageTime = updatedAt
-			conv.UnreadCount = thread.UnreadCount
-			_ = h.DB.Save(&conv).Error
+		conv := convByThread[thread.ID]
+		if conv == nil {
+			conv = convByPSID[customerID]
+		}
+		if conv != nil {
+			// Chỉ ghi những cột THỰC SỰ thay đổi (trước đây ghi lại cả dòng mỗi 15 giây dù không có gì mới)
+			changes := map[string]any{}
+			if conv.PageName != page.Name {
+				changes["page_name"], conv.PageName = page.Name, page.Name
+			}
+			if conv.CustomerPSID != customerID {
+				changes["customer_ps_id"], conv.CustomerPSID = customerID, customerID
+			}
+			if conv.CustomerName != customerName {
+				changes["customer_name"], conv.CustomerName = customerName, customerName
+			}
+			if av := sanitizeAvatarURL(conv.CustomerAvatar); av != conv.CustomerAvatar {
+				changes["customer_avatar"], conv.CustomerAvatar = av, av
+			}
+			if conv.LastMessage != lastMsgText {
+				changes["last_message"], conv.LastMessage = lastMsgText, lastMsgText
+			}
+			// Không đọc được updated_time thì giữ nguyên giờ cũ (không ghi "bây giờ" mỗi lần như trước)
+			if updatedOK && !conv.LastMessageTime.Equal(updatedAt) {
+				changes["last_message_time"], conv.LastMessageTime = updatedAt, updatedAt
+			}
+			if conv.UnreadCount != thread.UnreadCount {
+				changes["unread_count"], conv.UnreadCount = thread.UnreadCount, thread.UnreadCount
+			}
+			if len(changes) > 0 {
+				_ = h.DB.Model(&models.Conversation{}).Where("id = ?", conv.ID).Updates(changes).Error
+			}
 		} else {
-			conv = models.Conversation{
+			nc := models.Conversation{
 				PageID:          page.PageID,
 				PageName:        page.Name,
 				ThreadID:        thread.ID,
@@ -409,7 +509,18 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 				LastMessageTime: updatedAt,
 				UnreadCount:     thread.UnreadCount,
 			}
-			_ = h.DB.Create(&conv).Error
+			if err := h.DB.Create(&nc).Error; err != nil {
+				// Có thể webhook vừa tạo đúng hội thoại này: lấy lại bản đó, không có thì bỏ qua
+				var ex models.Conversation
+				if h.DB.Where("thread_id = ? OR (page_id = ? AND customer_ps_id = ?)", thread.ID, page.PageID, customerID).
+					Limit(1).Find(&ex).RowsAffected == 0 {
+					continue
+				}
+				nc = ex
+			}
+			conv = &nc
+			convByThread[thread.ID] = conv
+			convByPSID[customerID] = conv
 		}
 
 		var newestCustomerText string
@@ -449,14 +560,14 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 				content = "[Đính kèm / Hình ảnh]"
 			}
 
-			var existMsg models.Message
-			msgRes := h.DB.Where("fb_message_id = ?", m.ID).Limit(1).Find(&existMsg)
-			if msgRes.RowsAffected > 0 {
-				if attURL != "" && (existMsg.AttachmentURL != attURL || existMsg.Content == "[Đính kèm / Hình ảnh]") {
-					existMsg.AttachmentURL = attURL
-					existMsg.AttachmentType = attType
-					existMsg.Content = content
-					_ = h.DB.Save(&existMsg).Error
+			if ex := msgByFBID[m.ID]; ex != nil {
+				if attURL != "" && (ex.AttachmentURL != attURL || ex.Content == "[Đính kèm / Hình ảnh]") {
+					_ = h.DB.Model(&models.Message{}).Where("id = ?", ex.ID).Updates(map[string]any{
+						"attachment_url":  attURL,
+						"attachment_type": attType,
+						"content":         content,
+					}).Error
+					ex.AttachmentURL, ex.AttachmentType, ex.Content = attURL, attType, content
 				}
 				continue
 			}
@@ -487,7 +598,12 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 		}
 
 		if newestCustomerText != "" {
-			_ = TryAutoReplyWithTemplates(h.DB, h.encKey(), &conv, newestCustomerText)
+			// TryAutoReplyWithTemplates lưu lại TOÀN BỘ dòng hội thoại -> phải nạp bản đầy đủ
+			// (ở trên chỉ nạp vài cột cho nhẹ; lưu bản thiếu sẽ xoá ghi chú / trạng thái chăm sóc khách)
+			var full models.Conversation
+			if h.DB.First(&full, conv.ID).Error == nil {
+				_ = TryAutoReplyWithTemplates(h.DB, h.encKey(), &full, newestCustomerText)
+			}
 		}
 		synced++
 	}
