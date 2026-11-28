@@ -337,7 +337,9 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 </script>
 
 <template>
+  <!-- data-i18n="skip": nội dung website của khách không bị bộ dịch giao diện quản trị đụng tới (chỉ khi đang chỉnh sửa); nút/thanh công cụ của trình chỉnh sửa bật lại bằng data-i18n="on". Cố ý KHÔNG dùng translate="no" để trình duyệt của khách vẫn tự dịch được web công khai. -->
   <main
+    :data-i18n="editable ? 'skip' : undefined"
     class="pp-store @container w-full bg-white text-slate-800 antialiased"
     :class="editable ? 'min-h-full pb-24 pt-4' : ''"
     @click.capture="onCanvasClickCapture"
@@ -350,6 +352,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
     <!-- Trang trống trong trình chỉnh sửa -->
     <div
       v-if="editable && !blocks.length"
+      data-i18n="on"
       class="m-6 flex flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed py-24 text-center text-sm"
       :class="dragActive && dropIndex === 0 ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-300 text-slate-500'"
     >
@@ -381,6 +384,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           />
           <div
             v-if="(selectedId === blk.id || hoverId === blk.id) && !dragActive"
+            data-i18n="on"
             class="absolute left-3 top-0 z-40 flex -translate-y-1/2 items-center gap-0.5 rounded-lg bg-indigo-600 px-1 py-0.5 text-white shadow-lg"
             @click.stop
           >
@@ -397,6 +401,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           </div>
           <button
             v-if="selectedId === blk.id && !dragActive"
+            data-i18n="on"
             type="button"
             class="absolute -bottom-3 left-1/2 z-40 flex h-6 -translate-x-1/2 items-center gap-1 rounded-full bg-indigo-600 px-2.5 text-[11px] font-bold text-white shadow-lg hover:bg-indigo-700"
             title="Thêm section bên dưới"
@@ -673,7 +678,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
             <div v-if="safeImg(blk.data.image_url)" class="overflow-hidden rounded-3xl shadow-2xl shadow-slate-900/10 ring-1 ring-slate-900/5">
               <img :src="safeImg(blk.data.image_url)" :alt="blk.data.title" class="aspect-[4/3] h-full w-full object-cover" />
             </div>
-            <div v-else-if="editable" class="flex aspect-[4/3] items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-white/60 text-xs text-slate-400">
+            <div v-else-if="editable" data-i18n="on" class="flex aspect-[4/3] items-center justify-center rounded-3xl border-2 border-dashed border-slate-200 bg-white/60 text-xs text-slate-400">
               Chọn ảnh banner ở bảng bên phải
             </div>
           </div>
@@ -861,7 +866,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           <div :class="inner" class="py-8">
             <component :is="blk.data.link ? 'a' : 'div'" :href="blk.data.link ? safeHref(blk.data.link) : undefined" class="block overflow-hidden rounded-3xl">
               <img v-if="safeImg(blk.data.image_url)" :src="safeImg(blk.data.image_url)" :alt="blk.data.alt || ''" loading="lazy" class="w-full object-cover" />
-              <div v-else class="flex h-48 items-center justify-center bg-slate-100 text-sm text-slate-400">{{ editable ? 'Chọn ảnh ở bảng bên phải' : '' }}</div>
+              <div v-else data-i18n="on" class="flex h-48 items-center justify-center bg-slate-100 text-sm text-slate-400">{{ editable ? 'Chọn ảnh ở bảng bên phải' : '' }}</div>
             </component>
           </div>
         </section>
@@ -953,7 +958,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                 <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full" :style="{ backgroundColor: tint(12), color: accent }"><MapPin class="h-5 w-5" /></span>
                 <span><span class="block text-xs text-slate-500">{{ t('address') }}</span><span class="block text-[15px] font-bold leading-snug text-slate-900">{{ blk.data.address }}</span></span>
               </div>
-              <p v-if="editable && !blk.data.phone && !blk.data.email && !blk.data.address && !blk.data.zalo_link" class="text-center text-xs text-slate-400 @xl:col-span-2">
+              <p v-if="editable && !blk.data.phone && !blk.data.email && !blk.data.address && !blk.data.zalo_link" data-i18n="on" class="text-center text-xs text-slate-400 @xl:col-span-2">
                 Nhập số điện thoại, email, địa chỉ, Zalo ở bảng bên phải
               </p>
             </div>
@@ -979,7 +984,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
           <div :class="inner" class="grid grid-cols-1 items-center gap-10 py-16 @3xl:grid-cols-2 @3xl:gap-16 @3xl:py-20">
             <div v-if="safeImg(blk.data.image_url) || editable" class="overflow-hidden rounded-3xl bg-slate-100" :class="blk.data.image_side === 'right' ? '@3xl:order-2' : ''">
               <img v-if="safeImg(blk.data.image_url)" :src="safeImg(blk.data.image_url)" :alt="blk.data.heading || ''" loading="lazy" class="aspect-[4/5] h-full w-full object-cover @3xl:aspect-square" />
-              <div v-else class="flex aspect-[4/3] items-center justify-center text-xs text-slate-400" :style="{ background: tint(10) }">{{ editable ? 'Chọn ảnh ở bảng bên phải' : '' }}</div>
+              <div v-else data-i18n="on" class="flex aspect-[4/3] items-center justify-center text-xs text-slate-400" :style="{ background: tint(10) }">{{ editable ? 'Chọn ảnh ở bảng bên phải' : '' }}</div>
             </div>
             <div class="space-y-5" :class="safeImg(blk.data.image_url) || editable ? '' : '@3xl:col-span-2 mx-auto max-w-3xl'">
               <EditableText :fx="fx(blk, ['eyebrow'])" v-if="blk.data.eyebrow || editable" tag="p" :model-value="blk.data.eyebrow" :editable="editable" placeholder="Dòng chữ nhỏ phía trên" class="block text-xs font-bold uppercase tracking-[0.18em]" :style="{ color: accent }" @update:model-value="set(blk, ['eyebrow'], $event)" />

@@ -26,6 +26,7 @@ import {
   TrendingUp
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import { uiLocaleTag } from '../lib/uiI18n'
 import CompetitorMaketResearch from './CompetitorMaketResearch.vue'
 import ContentExplorer from '../components/research/ContentExplorer.vue'
 
@@ -166,7 +167,7 @@ function formatNumber(n: number) {
 
 function formatDate(iso: string) {
   if (!iso || iso.startsWith('0001-')) return 'Chưa quét'
-  return new Date(iso).toLocaleString('vi-VN', {
+  return new Date(iso).toLocaleString(uiLocaleTag(), {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',

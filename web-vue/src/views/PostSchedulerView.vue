@@ -27,6 +27,7 @@ import {
   Video
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import { uiLocaleTag } from '../lib/uiI18n'
 import type { FacebookPageItem } from '../types/page'
 
 interface ScheduledPostItem {
@@ -803,7 +804,7 @@ function parseResults(raw?: string): Array<{ page_name: string; success: boolean
 
 function formatDateTime(iso: string) {
   if (!iso) return ''
-  return new Date(iso).toLocaleString('vi-VN', {
+  return new Date(iso).toLocaleString(uiLocaleTag(), {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',

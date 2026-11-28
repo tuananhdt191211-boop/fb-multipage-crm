@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { AlertCircle, Eye, EyeOff, Loader2, Lock, Mail, MessageSquare, User } from 'lucide-vue-next'
 import { useAuthStore } from './../stores/auth.stores'
 import SocialAuthButtons from '@/components/SocialAuthButtons.vue'
+import UiLangSwitcher from '@/components/UiLangSwitcher.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -44,7 +45,8 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <div class="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+  <div class="relative flex min-h-screen items-center justify-center bg-slate-50 p-6">
+    <div class="absolute right-4 top-4 z-10"><UiLangSwitcher variant="compact" /></div>
     <div class="w-full max-w-md space-y-6 rounded-2xl bg-white p-8 shadow-sm border border-slate-200">
       <div class="space-y-1.5 text-center">
         <div class="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-xl bg-blue-600 text-white">

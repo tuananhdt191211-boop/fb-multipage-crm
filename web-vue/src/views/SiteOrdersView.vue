@@ -4,7 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Copy, CreditCard, Loader2, Mail, Package, Phone, RefreshCw, Search, X } from 'lucide-vue-next'
 import { api } from '../lib/api'
-import { formatVnd } from '../lib/format'
+import { adminMoney, adminMoneyTitle, uiLocaleTag } from '../lib/uiI18n'
 import type { ShopOrder } from '../types/store'
 
 const route = useRoute()
@@ -71,7 +71,7 @@ async function updateOrder(o: ShopOrder, body: Record<string, string>) {
 }
 
 function fmtTime(s: string) {
-  return new Date(s).toLocaleString('vi-VN', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })
+  return new Date(s).toLocaleString(uiLocaleTag(), { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
@@ -240,7 +240,7 @@ onMounted(loadOrders)
               </div>
               <div class="flex items-center justify-between gap-2 text-sm">
                 <span class="min-w-0 truncate">{{ o.customer_name }} · <span class="text-slate-500">{{ o.phone }}</span></span>
-                <span class="shrink-0 font-bold">{{ formatVnd(o.total) }}</span>
+                <span class="shrink-0 font-bold" :title="adminMoneyTitle(o.total)">{{ adminMoney(o.total) }}</span>
               </div>
               <div class="flex items-center justify-between text-xs text-slate-500">
                 <span>
@@ -270,7 +270,7 @@ onMounted(loadOrders)
                     <div class="font-semibold">{{ o.customer_name }}</div>
                     <div class="text-xs text-slate-500">{{ o.phone }}</div>
                   </td>
-                  <td class="px-4 py-3 text-right font-bold">{{ formatVnd(o.total) }}</td>
+                  <td class="px-4 py-3 text-right font-bold" :title="adminMoneyTitle(o.total)">{{ adminMoney(o.total) }}</td>
                   <td class="px-4 py-3">
                     <div class="text-xs font-semibold">{{ payLabel(o.payment_method) }}</div>
                     <div class="text-xs" :class="o.payment_status === 'paid' ? 'text-emerald-600' : o.payment_status === 'failed' ? 'text-rose-600' : 'text-slate-500'">{{ payLabels[o.payment_status] }}</div>
@@ -431,10 +431,10 @@ onMounted(loadOrders)
           <section class="space-y-2 rounded-xl bg-slate-50 p-4 text-sm">
             <div v-for="it in detail.items" :key="it.product_id" class="flex justify-between gap-3">
               <span>{{ it.name }} <span class="text-slate-400">× {{ it.qty }}</span></span>
-              <span class="font-semibold">{{ formatVnd(it.line_total) }}</span>
+              <span class="font-semibold" :title="adminMoneyTitle(it.line_total)">{{ adminMoney(it.line_total) }}</span>
             </div>
-            <div class="flex justify-between border-t border-slate-200 pt-2 text-slate-500"><span>Phí ship</span><span>{{ formatVnd(detail.shipping_fee) }}</span></div>
-            <div class="flex justify-between text-base font-extrabold"><span>Tổng</span><span>{{ formatVnd(detail.total) }}</span></div>
+            <div class="flex justify-between border-t border-slate-200 pt-2 text-slate-500"><span>Phí ship</span><span :title="adminMoneyTitle(detail.shipping_fee)">{{ adminMoney(detail.shipping_fee) }}</span></div>
+            <div class="flex justify-between text-base font-extrabold"><span>Tổng</span><span :title="adminMoneyTitle(detail.total)">{{ adminMoney(detail.total) }}</span></div>
             <div class="flex justify-between text-xs">
               <span>{{ payLabel(detail.payment_method) }}{{ detail.vnp_transaction_no ? ' · GD ' + detail.vnp_transaction_no : '' }}{{ detail.gateway_txn ? ' · GD ' + detail.gateway_txn : '' }}{{ fmtForeign(detail) }}</span>
               <span :class="detail.payment_status === 'paid' ? 'font-bold text-emerald-600' : 'text-slate-500'">{{ payLabels[detail.payment_status] }}</span>

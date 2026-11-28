@@ -10,6 +10,7 @@ import {
   Sparkles
 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth.stores'
+import UiLangSwitcher from '../components/UiLangSwitcher.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -62,7 +63,8 @@ function loginWithProvider(provider: 'google' | 'facebook') {
 </script>
 
 <template>
-  <div class="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-10 text-slate-900">
+  <div class="relative min-h-screen flex items-center justify-center bg-slate-50 px-4 py-10 text-slate-900">
+    <div class="absolute right-4 top-4 z-10"><UiLangSwitcher variant="compact" /></div>
     <div class="w-full max-w-md space-y-6 rounded-3xl border border-slate-200/90 bg-white p-8 shadow-sm">
       <!-- Brand Header -->
       <div class="flex flex-col items-center text-center">

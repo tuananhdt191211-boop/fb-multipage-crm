@@ -29,6 +29,7 @@ import {
   Zap
 } from 'lucide-vue-next'
 import { api } from '../lib/api'
+import { uiLocaleTag } from '../lib/uiI18n'
 import AIConfigModal from '../components/AIConfigModal.vue'
 import type { FacebookPageItem } from '../types/page'
 
@@ -702,15 +703,15 @@ function formatTime(iso: string) {
   const now = new Date()
   const isToday = d.toDateString() === now.toDateString()
   if (isToday) {
-    return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+    return d.toLocaleTimeString(uiLocaleTag(), { hour: '2-digit', minute: '2-digit' })
   }
-  return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })
+  return d.toLocaleDateString(uiLocaleTag(), { day: '2-digit', month: '2-digit' })
 }
 
 function formatFullTime(iso: string) {
   if (!iso) return ''
   const d = new Date(iso)
-  return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleTimeString(uiLocaleTag(), { hour: '2-digit', minute: '2-digit' })
 }
 
 async function copyText(text: string, label: string) {
@@ -1651,6 +1652,7 @@ onUnmounted(() => {
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between gap-2">
                 <p
+                  data-i18n="skip"
                   class="truncate text-[13px] !text-slate-900"
                   :class="conv.unread_count > 0 ? 'font-bold' : 'font-semibold'"
                 >
@@ -1662,6 +1664,7 @@ onUnmounted(() => {
               </div>
 
               <p
+                :data-i18n="conv.last_message ? 'skip' : undefined"
                 class="mt-0.5 truncate text-xs"
                 :class="conv.unread_count > 0 ? 'font-semibold text-slate-800' : 'text-slate-500'"
               >
@@ -1911,7 +1914,7 @@ onUnmounted(() => {
                       <span>Tệp đính kèm từ Facebook</span>
                     </a>
 
-                    <p v-if="msg.content" :class="{ 'mt-2': msg.attachment_url }" class="whitespace-pre-wrap break-words">
+                    <p v-if="msg.content" data-i18n="skip" :class="{ 'mt-2': msg.attachment_url }" class="whitespace-pre-wrap break-words">
                       {{ msg.content }}
                     </p>
                   </div>

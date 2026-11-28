@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Loader2, Pencil, Plus, Trash2 } from 'lucide-vue-next'
 import { api } from '../lib/api'
-import { formatVnd } from '../lib/format'
+import { adminMoney, adminMoneyTitle } from '../lib/uiI18n'
 import type { AdminProduct, Site } from '../types/store'
 
 const route = useRoute()
@@ -185,8 +185,8 @@ onMounted(load)
             <div class="min-w-0">
               <div class="truncate text-sm font-extrabold">{{ p.name }}</div>
               <div class="text-xs text-slate-500">
-                {{ formatVnd(p.price) }}
-                <span v-if="p.compare_price > p.price" class="ml-1 line-through text-slate-400">{{ formatVnd(p.compare_price) }}</span>
+                <span :title="adminMoneyTitle(p.price)">{{ adminMoney(p.price) }}</span>
+                <span v-if="p.compare_price > p.price" class="ml-1 line-through text-slate-400" :title="adminMoneyTitle(p.compare_price)">{{ adminMoney(p.compare_price) }}</span>
                 · Tồn kho: {{ stockLabel(p) }}
               </div>
             </div>

@@ -83,6 +83,10 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	storefrontHandler := handlers.NewStorefrontHandler(db, cfg)
 	storefrontHandler.AI = aiHandler
 
+	// Đa ngôn ngữ cho giao diện quản trị (bản dịch AI dùng chung, lưu trong translation_caches)
+	uiI18nHandler := handlers.NewUIi18nHandler(db)
+	uiI18nHandler.AI = aiHandler
+
 	inboxHandler := handlers.NewInboxHandler(db, cfg)
 	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
 	roleHandler := handlers.NewRoleHandler(db)
@@ -97,6 +101,10 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.Use(corsMiddleware(cfg))
 
 	r.Static("/uploads", "./uploads")
+
+	// Bản dịch giao diện quản trị: công khai để cả trang đăng nhập dùng được; dịch thêm bằng AI cần đăng nhập
+	r.GET("/api/v1/ui-i18n/:lang", uiI18nHandler.Get)
+	r.POST("/api/v1/ui-i18n/:lang/fill", middleware.JWTAuth(cfg.JWTSecret), uiI18nHandler.Fill)
 
 	r.GET("/api/v1/storefront/public", storefrontHandler.GetPublicStorefront)
 	r.GET("/api/v1/storefront/media/:mid", storefrontHandler.ServeSiteMedia)

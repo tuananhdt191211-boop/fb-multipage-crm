@@ -24,6 +24,7 @@ import {
 import { api } from '../lib/api'
 import { useAuthStore } from './../stores/auth.stores'
 import type { FacebookPageItem } from '../types/page'
+import UiLangSwitcher from '../components/UiLangSwitcher.vue'
 
 interface ConversationSummary {
   id: number
@@ -291,6 +292,8 @@ onMounted(fetchOverviewData)
             <p v-if="userEmail" class="mt-0.5 truncate text-[11px] text-slate-400">{{ userEmail }}</p>
           </div>
         </div>
+
+        <UiLangSwitcher variant="sidebar" />
 
         <button
           @click="handleLogout"

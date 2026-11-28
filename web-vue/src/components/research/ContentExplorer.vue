@@ -23,6 +23,7 @@ import {
   X
 } from 'lucide-vue-next'
 import { api } from '../../lib/api'
+import { uiLocaleTag } from '../../lib/uiI18n'
 import { safeHref, safeImg } from '../../lib/safeUrl'
 import { exploreTikTokInBrowser, type TikTokTarget } from '../../lib/tiktokBrowser'
 
@@ -320,9 +321,11 @@ function resetResults() {
   query.value = ''
 }
 
-const compact = new Intl.NumberFormat('vi-VN', { notation: 'compact', maximumFractionDigits: 1 })
+let compactFmt: { tag: string; f: Intl.NumberFormat } | null = null
 function fmtNum(n: number) {
-  return compact.format(Math.max(0, n || 0))
+  const tag = uiLocaleTag()
+  if (!compactFmt || compactFmt.tag !== tag) compactFmt = { tag, f: new Intl.NumberFormat(tag, { notation: 'compact', maximumFractionDigits: 1 }) }
+  return compactFmt.f.format(Math.max(0, n || 0))
 }
 
 function fmtDuration(s: number) {
@@ -339,7 +342,7 @@ function fmtDate(ts: number) {
   if (diff < 3600) return `${Math.max(1, Math.round(diff / 60))} phút trước`
   if (diff < 86400) return `${Math.round(diff / 3600)} giờ trước`
   if (diff < 86400 * 30) return `${Math.round(diff / 86400)} ngày trước`
-  return new Date(ts * 1000).toLocaleDateString('vi-VN')
+  return new Date(ts * 1000).toLocaleDateString(uiLocaleTag())
 }
 
 function thumbRatio(it: ExploreItem) {

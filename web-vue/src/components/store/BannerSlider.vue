@@ -79,7 +79,7 @@ function onTouchEnd(e: TouchEvent) {
           <img v-if="safeImg(s.mobile_image_url)" :src="safeImg(s.mobile_image_url)" :alt="s.heading || ''" class="absolute inset-0 h-full w-full object-cover @3xl:hidden" loading="lazy" />
         </template>
         <div v-else class="absolute inset-0" :style="{ background: `linear-gradient(120deg, color-mix(in srgb, ${accent} 85%, black) 0%, ${accent} 55%, color-mix(in srgb, ${accent} 55%, white) 100%)` }">
-          <span v-if="editable" class="absolute right-4 top-4 rounded-lg bg-black/30 px-2 py-1 text-[11px] text-white">Chọn ảnh ở bảng bên phải</span>
+          <span v-if="editable" data-i18n="on" class="absolute right-4 top-4 rounded-lg bg-black/30 px-2 py-1 text-[11px] text-white">Chọn ảnh ở bảng bên phải</span>
         </div>
         <div v-if="blk.data.overlay !== false && safeImg(s.image_url)" class="absolute inset-0 bg-gradient-to-r from-black/55 via-black/25 to-transparent" />
 

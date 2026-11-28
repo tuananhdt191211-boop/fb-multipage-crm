@@ -100,6 +100,7 @@ function onBlur(e: FocusEvent) {
     ref="el"
     contenteditable="true"
     spellcheck="false"
+    :data-i18n="current() ? 'skip' : 'on'"
     class="pp-editable"
     :class="[attrs.class, fxAttrs.cls]"
     :style="[attrs.style as any, fxAttrs.style]"
