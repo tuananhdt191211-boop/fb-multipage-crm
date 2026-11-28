@@ -8,6 +8,7 @@ import { MARKET_BY_CODE, type Market } from './markets'
 import { summaryFromHtml } from './richHtml'
 import type { ProductOption, PublicProduct, PublicVariant, StoreBlock } from '../types/store'
 import { UI_EN } from './i18nEn'
+import { setMarketCtx, track } from './analytics'
 
 export const UI_VI = {
   loading: 'Đang tải...',
@@ -234,6 +235,7 @@ function applyMarket(code: string) {
   locale.lang = mk.lang
   locale.currency = mk.currency
   locale.tag = mk.locale
+  setMarketCtx(mk.lang, mk.code)
   if (typeof document !== 'undefined') document.documentElement.lang = mk.lang
   if (mk.currency !== 'VND') loadRates()
 }
@@ -272,6 +274,7 @@ export function initLocale(slug: string, i18n: SiteI18n) {
 export function setMarket(code: string) {
   if (!locale.markets.includes(code)) return
   applyMarket(code)
+  track('market_change', { l: code })
   try {
     localStorage.setItem(mkKey(locale.slug), code)
   } catch {

@@ -83,6 +83,7 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	storefrontHandler := handlers.NewStorefrontHandler(db, cfg)
 	storefrontHandler.AI = aiHandler
+	storefrontHandler.RunAnalyticsJanitor() // dọn thống kê cũ mỗi ngày
 	// Kho lưu trữ ngoài (R2/S3) cho ảnh & video sản phẩm; chưa cấu hình thì ảnh lưu trong PostgreSQL, tắt tải video lên
 	storefrontHandler.Store = storage.New(storage.Config{
 		Endpoint: cfg.S3Endpoint, Region: cfg.S3Region, Bucket: cfg.S3Bucket,
@@ -127,6 +128,7 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.POST("/api/v1/storefront/public/orders/:code/pay", storefrontHandler.RetryVnpPayment)
 	r.GET("/api/v1/storefront/public/vnpay-return", storefrontHandler.VnpayReturnCheck)
 	r.POST("/api/v1/storefront/public/subscribe", storefrontHandler.PublicSubscribe)
+	r.POST("/api/v1/storefront/public/track", storefrontHandler.TrackEvents)
 	// Tài khoản khách hàng của từng website
 	r.POST("/api/v1/storefront/public/customers/register", storefrontHandler.CustomerRegister)
 	r.POST("/api/v1/storefront/public/customers/login", storefrontHandler.CustomerLogin)
@@ -171,6 +173,9 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		storefrontGroup.GET("/media-config", storefrontHandler.MediaConfig)
 		storefrontGroup.DELETE("/sites/:id/media/:mid", storefrontHandler.DeleteSiteMedia)
 		// Đơn hàng, thanh toán, email đăng ký
+		storefrontGroup.GET("/sites/:id/analytics", storefrontHandler.AnalyticsOverview)
+		storefrontGroup.GET("/sites/:id/analytics/live", storefrontHandler.AnalyticsLive)
+		storefrontGroup.GET("/sites/:id/analytics/abandoned", storefrontHandler.AnalyticsAbandoned)
 		storefrontGroup.GET("/sites/:id/orders", storefrontHandler.ListOrders)
 		storefrontGroup.PATCH("/sites/:id/orders/:oid", storefrontHandler.UpdateOrderStatus)
 		storefrontGroup.GET("/sites/:id/payment-settings", storefrontHandler.GetPaymentSettings)

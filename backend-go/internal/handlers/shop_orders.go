@@ -95,6 +95,7 @@ type ShopOrder struct {
 	GatewayRef   string     `gorm:"size:120;index" json:"-"` // mã đơn PayPal / mã phiên Stripe
 	GatewayTxn   string     `gorm:"size:120" json:"gateway_txn"`
 	PaidAt       *time.Time `json:"paid_at"`
+	TrackSID     string     `gorm:"column:track_sid;size:40;index" json:"-"` // phiên theo dõi (thống kê) đã tạo đơn này
 	StockApplied bool       `json:"-"`
 	CreatedAt    time.Time  `gorm:"index" json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
@@ -317,6 +318,7 @@ type createOrderReq struct {
 	PaymentMethod string `json:"payment_method"`
 	ReturnBase    string `json:"return_base"` // origin của web công khai, để VNPay chuyển khách về
 	Currency      string `json:"currency"`    // tiền tệ khách đang xem (PayPal / Stripe)
+	TrackSID      string `json:"track_sid"`   // mã phiên của bộ thống kê (không bắt buộc)
 }
 
 func trimTo(s string, n int) string {
@@ -536,6 +538,9 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 		PaymentStatus: "unpaid",
 		Status:        "new",
 	}
+	if trackIDRe.MatchString(req.TrackSID) {
+		o.TrackSID = req.TrackSID
+	}
 	if o.PaymentMethod == "vnpay" || o.PaymentMethod == "paypal" || o.PaymentMethod == "stripe" {
 		o.PaymentStatus = "pending"
 	}
@@ -565,6 +570,8 @@ func (h *StorefrontHandler) CreatePublicOrder(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
+
+	h.sessionOrdered(sf.ID, o.TrackSID)
 
 	resp := gin.H{"code": o.Code, "token": o.AccessToken, "total": o.Total, "payment_method": o.PaymentMethod}
 	if o.PaymentMethod == "vnpay" {

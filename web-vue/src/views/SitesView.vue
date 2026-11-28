@@ -205,6 +205,13 @@ onMounted(loadSites)
               Đơn hàng
             </button>
             <button
+              class="rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold hover:bg-slate-50"
+              data-testid="site-analytics-link"
+              @click="router.push({ name: 'site-analytics', params: { id: s.id } })"
+            >
+              Thống kê
+            </button>
+            <button
               class="inline-flex items-center gap-1 rounded-xl border border-slate-200 px-3 py-1.5 text-xs font-bold hover:bg-slate-50"
               @click="router.push({ name: 'site-edit', params: { id: s.id } })"
             >

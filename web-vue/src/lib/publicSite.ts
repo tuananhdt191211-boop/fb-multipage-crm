@@ -2,6 +2,7 @@
 import { api } from './api'
 import { parseTheme } from './theme'
 import { initLocale, localizeBlocks, localizeProducts, parseI18n } from './i18n'
+import { startTracking } from './analytics'
 import type { PublicProduct, PublicSiteData, StoreBlock } from '../types/store'
 
 const cache = new Map<string, Promise<PublicSiteData>>()
@@ -45,6 +46,7 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
     .then((site) => {
       // Chọn thị trường (ngôn ngữ + tiền tệ) cho khách
       initLocale(site.slug, site.i18n)
+      startTracking(site.slug) // thống kê: bắt đầu gửi sự kiện đã xếp hàng
       return site
     })
   p.catch(() => cache.delete(key))

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { currentSlug, storePath } from '../lib/storeHost'
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { CreditCard, Globe, Loader2, Lock, Minus, Plus, Trash2, Truck, Wallet } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
 import { api } from '../lib/api'
+import { flushNow, track, trackSid, type TrackType } from '../lib/analytics'
 import { loadPublicProduct, loadPublicSite, localizeSite } from '../lib/publicSite'
 import { formatVndPlain, isForeignCurrency, locale, money, t, variantLabel } from '../lib/i18n'
 import { lineKey, useCart } from '../lib/cart'
@@ -41,6 +42,29 @@ const shipping = computed(() => {
   return c.shipping_fee
 })
 const total = computed(() => cart.subtotal.value + shipping.value)
+
+// ----- Thống kê: nhận biết khách đang ở bước nào của thanh toán (không gửi họ tên / số điện thoại / địa chỉ) -----
+const reached = new Set<string>()
+function once(type: TrackType, props: { l?: string; v?: number } = {}) {
+  if (reached.has(type)) return
+  reached.add(type)
+  track(type, { ...props, path: '/checkout' })
+}
+function infoComplete() {
+  const f = form.value
+  return f.customer_name.trim().length > 1 && f.phone.replace(/\D/g, '').length >= 8 && f.address.trim().length > 3
+}
+// Khách gõ vào ô thông tin: bắt đầu nhập → đã điền đủ
+function onInfoInput() {
+  once('checkout_info')
+  if (infoComplete()) once('checkout_info_done')
+}
+// Khách chọn phương thức thanh toán
+async function onPay() {
+  await nextTick()
+  reached.add('checkout_payment')
+  track('checkout_payment', { l: form.value.payment_method, path: '/checkout' })
+}
 
 // Ghi nhớ thông tin giao hàng cho lần sau (chỉ trên máy của khách)
 const infoKey = 'pp_checkout_info'
@@ -83,6 +107,7 @@ async function load() {
     if (locale.currency !== 'VND' && (data.stripe || data.paypal)) form.value.payment_method = data.stripe ? 'stripe' : 'paypal'
     else form.value.payment_method = data.cod ? 'cod' : data.vnpay ? 'vnpay' : data.stripe ? 'stripe' : 'paypal'
     restoreInfo()
+    if (cart.state.lines.length) once('checkout_start', { v: cart.subtotal.value })
     // Đã đăng nhập: điền thông tin tài khoản vào ô còn trống
     const c = useCustomer(slug.value).state.customer
     if (c) {
@@ -103,6 +128,7 @@ async function submit() {
   const f = form.value
   if (!f.customer_name.trim() || !f.phone.trim() || !f.address.trim()) {
     errorMsg.value = t('fill_required')
+    track('checkout_error', { l: 'validation', path: '/checkout' })
     return
   }
   if (!cart.state.lines.length) {
@@ -110,15 +136,22 @@ async function submit() {
     return
   }
   submitting.value = true
+  // Bù các bước khách đã qua mà không gõ (thông tin điền sẵn, phương thức mặc định) rồi báo "đang đặt hàng"
+  once('checkout_info')
+  once('checkout_info_done')
+  once('checkout_payment', { l: f.payment_method })
+  track('checkout_submit', { l: f.payment_method, v: total.value, path: '/checkout' })
   try {
     const { data } = await api.post('/storefront/public/orders', {
       slug: slug.value,
       items: cart.state.lines.map((l) => ({ product_id: l.product_id, variant_id: l.variant_id || 0, qty: l.qty })),
       ...f,
       return_base: window.location.origin,
-      currency: locale.currency
+      currency: locale.currency,
+      track_sid: trackSid()
     }, { headers: customerHeaders(slug.value) })
     rememberInfo()
+    flushNow()
     if (data.payment_url) {
       // Giữ giỏ hàng tới khi VNPay báo thành công (khách có thể quay lại)
       window.location.href = data.payment_url
@@ -128,6 +161,7 @@ async function submit() {
     router.replace({ name: 'public-order', params: { slug: slug.value, code: data.code }, query: { t: data.token } })
   } catch (e: any) {
     errorMsg.value = e?.response?.data?.error || t('order_failed')
+    track('checkout_error', { l: 'order_failed', path: '/checkout' })
   } finally {
     submitting.value = false
   }
@@ -157,46 +191,46 @@ onMounted(load)
             <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label class="space-y-1">
                 <span class="text-sm font-semibold text-slate-700">{{ t('full_name_req') }}</span>
-                <input v-model="form.customer_name" autocomplete="name" required class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
+                <input v-model="form.customer_name" @input="onInfoInput" autocomplete="name" required class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
               </label>
               <label class="space-y-1">
                 <span class="text-sm font-semibold text-slate-700">{{ t('phone_req') }}</span>
-                <input v-model="form.phone" type="tel" autocomplete="tel" inputmode="tel" required class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
+                <input v-model="form.phone" @input="onInfoInput" type="tel" autocomplete="tel" inputmode="tel" required class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
               </label>
             </div>
             <label class="block space-y-1">
               <span class="text-sm font-semibold text-slate-700">{{ t('address_req') }}</span>
-              <textarea v-model="form.address" rows="2" autocomplete="street-address" required :placeholder="t('address_ph')" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
+              <textarea v-model="form.address" @input="onInfoInput" rows="2" autocomplete="street-address" required :placeholder="t('address_ph')" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
             </label>
             <label class="block space-y-1">
               <span class="text-sm font-semibold text-slate-700">{{ t('email_optional') }}</span>
-              <input v-model="form.email" type="email" autocomplete="email" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
+              <input v-model="form.email" @input="onInfoInput" type="email" autocomplete="email" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
             </label>
             <label class="block space-y-1">
               <span class="text-sm font-semibold text-slate-700">{{ t('note') }}</span>
-              <textarea v-model="form.note" rows="2" :placeholder="t('note_ph')" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
+              <textarea v-model="form.note" @input="onInfoInput" rows="2" :placeholder="t('note_ph')" class="w-full rounded-xl border border-slate-300 px-4 py-3 text-[15px] outline-none focus:border-slate-500" />
             </label>
           </section>
 
           <section class="space-y-3 rounded-3xl border border-slate-200 p-5 sm:p-6">
             <h2 class="text-lg font-bold text-slate-900">{{ t('payment_method') }}</h2>
             <label v-if="config.cod" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'cod' ? { borderColor: accent } : undefined" :class="form.payment_method === 'cod' ? '' : 'border-slate-200'">
-              <input v-model="form.payment_method" type="radio" value="cod" class="h-4 w-4" />
+              <input v-model="form.payment_method" type="radio" value="cod" class="h-4 w-4" @change="onPay" />
               <Truck class="h-5 w-5 text-slate-500" />
               <span><span class="block font-semibold text-slate-900">{{ t('cod') }}</span><span class="block text-xs text-slate-500">{{ t('cod_desc') }}</span></span>
             </label>
             <label v-if="config.vnpay" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'vnpay' ? { borderColor: accent } : undefined" :class="form.payment_method === 'vnpay' ? '' : 'border-slate-200'">
-              <input v-model="form.payment_method" type="radio" value="vnpay" class="h-4 w-4" />
+              <input v-model="form.payment_method" type="radio" value="vnpay" class="h-4 w-4" @change="onPay" />
               <CreditCard class="h-5 w-5 text-slate-500" />
               <span><span class="block font-semibold text-slate-900">{{ t('vnpay') }}</span><span class="block text-xs text-slate-500">{{ t('vnpay_desc') }}</span></span>
             </label>
             <label v-if="config.stripe" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'stripe' ? { borderColor: accent } : undefined" :class="form.payment_method === 'stripe' ? '' : 'border-slate-200'">
-              <input v-model="form.payment_method" type="radio" value="stripe" class="h-4 w-4" />
+              <input v-model="form.payment_method" type="radio" value="stripe" class="h-4 w-4" @change="onPay" />
               <Globe class="h-5 w-5 text-slate-500" />
               <span><span class="block font-semibold text-slate-900">{{ t('card_intl') }}</span><span class="block text-xs text-slate-500">{{ t('card_intl_desc') }}</span></span>
             </label>
             <label v-if="config.paypal" class="flex cursor-pointer items-center gap-3 rounded-2xl border-2 p-4 transition" :style="form.payment_method === 'paypal' ? { borderColor: accent } : undefined" :class="form.payment_method === 'paypal' ? '' : 'border-slate-200'">
-              <input v-model="form.payment_method" type="radio" value="paypal" class="h-4 w-4" />
+              <input v-model="form.payment_method" type="radio" value="paypal" class="h-4 w-4" @change="onPay" />
               <Wallet class="h-5 w-5 text-slate-500" />
               <span><span class="block font-semibold text-slate-900">PayPal</span><span class="block text-xs text-slate-500">{{ t('paypal_desc') }}</span></span>
             </label>

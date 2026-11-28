@@ -2,6 +2,7 @@
 // Mỗi dòng là một (sản phẩm, biến thể): cùng sản phẩm nhưng khác phân loại là hai dòng riêng.
 import { computed, reactive, watch } from 'vue'
 import type { PublicProduct, PublicVariant } from '../types/store'
+import { markCartDirty, setCartProvider, track } from './analytics'
 
 export interface CartLine {
   product_id: number
@@ -44,9 +45,13 @@ function load(slug: string) {
   }
 }
 
+// Thống kê: giỏ hàng gần nhất được gửi kèm lô sự kiện (chỉ tên, giá, số lượng — không có thông tin cá nhân)
+setCartProvider(() => state.lines.map((l) => ({ product_id: l.product_id, variant_id: l.variant_id, qty: l.qty, price: l.price, name: l.name })))
+
 watch(
   () => state.lines,
   (lines) => {
+    markCartDirty()
     if (!state.slug) return
     try {
       localStorage.setItem(storageKey(state.slug), JSON.stringify(lines))
@@ -78,6 +83,7 @@ function add(p: PublicProduct, qty = 1, v?: PublicVariant) {
     })
   }
   state.open = true
+  track('add_to_cart', { pid: p.id, v: (v ? v.price : p.price) * qty, l: p.name })
 }
 
 function setQty(ref: LineRef, qty: number) {
@@ -89,6 +95,7 @@ function setQty(ref: LineRef, qty: number) {
 
 function remove(ref: LineRef) {
   const k = lineKey(ref)
+  track('remove_from_cart', { pid: ref.product_id })
   state.lines = state.lines.filter((l) => lineKey(l) !== k)
 }
 

@@ -30,6 +30,7 @@ func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
 	migrateShopTables(db)
 	migrateSiteCustomers(db)
 	migrateTranslationCache(db)
+	migrateAnalytics(db)
 	return &StorefrontHandler{
 		DB:  db,
 		Cfg: cfg,

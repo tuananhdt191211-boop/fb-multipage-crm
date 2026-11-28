@@ -1,6 +1,8 @@
 <script setup lang="ts">
 // Giỏ hàng trượt ra từ bên phải
+import { watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { track } from '../../lib/analytics'
 import { Minus, Plus, ShoppingBag, Trash2, X } from 'lucide-vue-next'
 import { lineKey, useCart } from '../../lib/cart'
 import { money, t, variantLabel } from '../../lib/i18n'
@@ -15,6 +17,8 @@ function nameOf(l: { product_id: number; name: string }) {
 }
 const router = useRouter()
 const cart = useCart(props.slug)
+// Thống kê: khách mở giỏ hàng
+watch(() => cart.state.open, (open) => open && track('cart_open', { v: cart.subtotal.value }))
 
 function checkout() {
   cart.state.open = false

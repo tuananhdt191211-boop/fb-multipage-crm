@@ -759,6 +759,12 @@ watch(selectedId, (id) => {
                 >
                   Đơn hàng & thanh toán
                 </router-link>
+                <router-link
+                  :to="{ name: 'site-analytics', params: { id: site.id } }"
+                  class="block rounded-xl border border-slate-200 px-3 py-2 text-center text-xs font-bold text-slate-700 hover:border-indigo-400 hover:text-indigo-700"
+                >
+                  Thống kê & khách đang online
+                </router-link>
               </div>
             </template>
           </div>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { currentSlug, storePath } from '../lib/storeHost'
 import { computed, onMounted, ref, watch } from 'vue'
+import { track } from '../lib/analytics'
 import { useRoute, useRouter } from 'vue-router'
 import { ChevronRight, Loader2, Minus, Plus, ShieldCheck, ShoppingBag, Truck } from 'lucide-vue-next'
 import PublicShell from '../components/store/PublicShell.vue'
@@ -78,6 +79,8 @@ async function loadDetail() {
   } catch {
     detail.value = null // vẫn xem được bản tóm tắt từ danh sách
   }
+  // Thống kê: khách xem sản phẩm (chỉ khi sản phẩm có thật)
+  if (product.value) track('product_view', { pid: product.value.id, l: detail.value?.name || product.value.name })
 }
 
 function addToCart(go = false) {

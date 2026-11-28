@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/stores/auth.stores'
 import { onCustomDomain } from '@/lib/storeHost'
+import { trackPage } from '@/lib/analytics'
 
 const appRoutes: RouteRecordRaw[] = [
     {
@@ -93,6 +94,12 @@ const appRoutes: RouteRecordRaw[] = [
   component: () => import('../views/PublicStoreView.vue')
 },
 {
+  path: '/sites/:id/analytics',
+  name: 'site-analytics',
+  component: () => import('../views/SiteAnalyticsView.vue'),
+  meta: { requiresAuth: true }
+},
+{
   path: '/sites/:id/orders',
   name: 'site-orders',
   component: () => import('../views/SiteOrdersView.vue'),
@@ -149,6 +156,11 @@ const storeRoutes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(),
   routes: onCustomDomain ? storeRoutes : appRoutes
+})
+
+// Thống kê: mỗi lần khách mở một trang của web bán hàng
+router.afterEach((to) => {
+  if (typeof to.name === 'string' && to.name.startsWith('public-')) trackPage(to.path)
 })
 
 router.beforeEach(async (to) => {

@@ -5,7 +5,7 @@
 // Bố cục dùng container query (@container) nên xem trước chế độ điện thoại/máy tính bảng hiển thị đúng.
 // Nền mỗi section trải hết chiều ngang, nội dung nằm trong khung max-w-6xl ở giữa.
 import { storePath } from '../../lib/storeHost'
-import { computed, nextTick, onMounted, ref, watchEffect } from 'vue'
+import { computed, nextTick, onMounted, ref, watch, watchEffect } from 'vue'
 import {
   ArrowDown,
   ArrowUp,
@@ -41,6 +41,7 @@ import NewsletterForm from './NewsletterForm.vue'
 import AccountMenu from './AccountMenu.vue'
 import ProductCarousel from './ProductCarousel.vue'
 import { readableOn } from '../../lib/color'
+import { trackSearch } from '../../lib/analytics'
 import MarketSwitcher from './MarketSwitcher.vue'
 import StoreIcon from './StoreIcon.vue'
 import { pathKey, scopedSectionCss } from '../../lib/textStyle'
@@ -175,6 +176,13 @@ const searchResults = computed(() => {
   const q = searchText.value.trim().toLowerCase()
   if (!q) return []
   return (props.products || []).filter((p) => p.name.toLowerCase().includes(q)).slice(0, 6)
+})
+// Thống kê: từ khoá khách tìm (ghi sau khi ngừng gõ)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+watch(searchText, (q) => {
+  if (props.editable) return
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => trackSearch(q, searchResults.value.length), 900)
 })
 function toggleSearch(id: string) {
   searchOpen.value = searchOpen.value === id ? null : id
@@ -442,6 +450,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
       <div
         :data-block-id="blk.id"
         :data-pp-sec="blk.id"
+        :data-pp-type="blk.type"
         :style="wrapStyle(blk)"
         :class="editable ? ['relative transition-opacity', !blk.enabled ? 'opacity-40' : ''] : ''"
         @click="onSectionClick(blk)"
@@ -566,7 +575,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               >
                 <!-- Quốc gia / ngôn ngữ / tiền tệ (chỉ hiện khi website bật từ 2 thị trường) -->
                 <MarketSwitcher v-if="!editable" compact />
-                <button v-if="blk.data.show_search" type="button" class="rounded-full p-2 transition hover:bg-current/10" :aria-label="t('search')" @click.stop="toggleSearch(blk.id)">
+                <button v-if="blk.data.show_search" type="button" data-track="header_search" class="rounded-full p-2 transition hover:bg-current/10" :aria-label="t('search')" @click.stop="toggleSearch(blk.id)">
                   <Search :class="iconCls(blk)" />
                 </button>
 
@@ -601,7 +610,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                   </button>
                 </template>
 
-                <button v-if="blk.data.show_cart || blk.data.right_mode === 'account'" type="button" class="relative rounded-full p-2 transition hover:bg-current/10" :aria-label="t('cart')" @click.stop="openCart">
+                <button v-if="blk.data.show_cart || blk.data.right_mode === 'account'" type="button" data-track="header_cart" class="relative rounded-full p-2 transition hover:bg-current/10" :aria-label="t('cart')" @click.stop="openCart">
                   <ShoppingBag :class="iconCls(blk)" />
                   <span
                     v-if="cartCount > 0"
@@ -766,6 +775,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
               <div class="pt-2">
                 <a
                   :href="safeHref(blk.data.cta_link, '#products')"
+                  data-track="hero_cta"
                   class="inline-flex items-center justify-center rounded-full px-7 py-3.5 text-base font-bold text-white shadow-lg transition hover:-translate-y-0.5 hover:brightness-110"
                   :style="{ backgroundColor: accent, boxShadow: `0 10px 25px -8px ${accent}` }"
                 >
@@ -830,6 +840,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                       <a
                         v-else-if="(prod.variant_count || 0) > 0"
                         :href="productLink(prod.id)"
+                        data-track="product_choose_options"
                         class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-bold text-white transition hover:brightness-110"
                         :style="{ backgroundColor: accent }"
                       >
@@ -838,6 +849,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
                       <button
                         v-else
                         type="button"
+                        data-track="product_add_to_cart"
                         class="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl py-2.5 text-sm font-bold text-white transition hover:brightness-110"
                         :style="{ backgroundColor: accent }"
                         @click.stop="addToCart(prod)"
