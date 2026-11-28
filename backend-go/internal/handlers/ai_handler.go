@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -46,12 +47,27 @@ func NewAIHandler(db *gorm.DB, cfg *config.Config) *AIHandler {
 	}
 }
 
+// markdownLinkRe khớp liên kết markdown dạng [chữ](url) — hay bị dán nhầm vào ô Base URL
+// khi copy từ chat/tài liệu, khiến URL gọi AI thành "[https://...](https://...)/chat/completions".
+var markdownLinkRe = regexp.MustCompile(`\[[^\]]*\]\(\s*([^)\s]+)\s*\)`)
+
+// normalizeAIBaseURL làm sạch Base URL của nhà cung cấp AI: bóc liên kết markdown,
+// bỏ dấu ngoặc/nháy bao quanh, khoảng trắng và dấu "/" ở cuối.
+func normalizeAIBaseURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if m := markdownLinkRe.FindStringSubmatch(s); m != nil {
+		s = m[1]
+	}
+	s = strings.Trim(s, " \t\r\n<>\"'`")
+	return strings.TrimRight(s, "/")
+}
+
 func (h *AIHandler) resolveAIConfig() (baseURL string, apiKeys []string, model string) {
 	// 1. Ưu tiên đọc cấu hình đã lưu từ giao diện web trong Database
 	var dbCfg SystemAIConfig
 	if h.DB != nil {
 		if err := h.DB.First(&dbCfg, 1).Error; err == nil && strings.TrimSpace(dbCfg.APIKeys) != "" {
-			baseURL = strings.TrimRight(strings.TrimSpace(dbCfg.BaseURL), "/")
+			baseURL = normalizeAIBaseURL(dbCfg.BaseURL)
 			model = strings.TrimSpace(dbCfg.Model)
 			for _, k := range strings.Split(dbCfg.APIKeys, ",") {
 				if trimmed := strings.TrimSpace(k); trimmed != "" {
@@ -64,7 +80,7 @@ func (h *AIHandler) resolveAIConfig() (baseURL string, apiKeys []string, model s
 	// 2. Nếu Database chưa cấu hình thì đọc từ file .env
 	if len(apiKeys) == 0 {
 		if baseURL == "" {
-			baseURL = strings.TrimRight(strings.TrimSpace(os.Getenv("AI_BASE_URL")), "/")
+			baseURL = normalizeAIBaseURL(os.Getenv("AI_BASE_URL"))
 		}
 		if model == "" {
 			model = strings.TrimSpace(os.Getenv("AI_MODEL"))
@@ -144,9 +160,13 @@ func (h *AIHandler) SaveGlobalAIConfig(c *gin.Context) {
 		return
 	}
 
-	baseURL := strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	baseURL := normalizeAIBaseURL(req.BaseURL)
 	if baseURL == "" {
 		baseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+	}
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Base URL phải bắt đầu bằng http:// hoặc https:// (ví dụ: https://api.openai.com/v1)"})
+		return
 	}
 	model := strings.TrimSpace(req.Model)
 	if model == "" {

@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 
 const emit = defineEmits<{ (e: 'close'): void }>()
 
-const baseURL = ref('[https://generativelanguage.googleapis.com/v1beta/openai](https://generativelanguage.googleapis.com/v1beta/openai)')
+const baseURL = ref('https://generativelanguage.googleapis.com/v1beta/openai')
 const apiKeys = ref('')
 const model = ref('gemini-3.5-flash-lite')
 const keyCount = ref(0)
@@ -18,21 +18,21 @@ const errorMsg = ref('')
 const presets = [
   {
     name: 'Google Gemini (Miễn phí - Khuyên dùng)',
-    baseURL: '[https://generativelanguage.googleapis.com/v1beta/openai](https://generativelanguage.googleapis.com/v1beta/openai)',
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai',
     model: 'gemini-3.5-flash-lite',
-    placeholder: 'Dán mã AIzaSy... từ [aistudio.google.com/apikey](https://aistudio.google.com/apikey) (mỗi dòng 1 key để xoay vòng)'
+    placeholder: 'Dán mã AIzaSy... từ aistudio.google.com/apikey (mỗi dòng 1 key để xoay vòng)'
   },
   {
     name: 'Groq Cloud (Miễn phí - Phản hồi < 1s)',
-    baseURL: '[https://api.groq.com/openai/v1](https://api.groq.com/openai/v1)',
+    baseURL: 'https://api.groq.com/openai/v1',
     model: 'llama-3.3-70b-versatile',
-    placeholder: 'Dán mã gsk_... từ [console.groq.com/keys](https://console.groq.com/keys)'
+    placeholder: 'Dán mã gsk_... từ console.groq.com/keys'
   },
   {
     name: 'OpenAI (GPT-4o mini)',
-    baseURL: '[https://api.openai.com/v1](https://api.openai.com/v1)',
+    baseURL: 'https://api.openai.com/v1',
     model: 'gpt-4o-mini',
-    placeholder: 'Dán mã sk-... từ [platform.openai.com/api-keys](https://platform.openai.com/api-keys)'
+    placeholder: 'Dán mã sk-... từ platform.openai.com/api-keys'
   }
 ]
 
