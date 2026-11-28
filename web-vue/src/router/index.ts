@@ -129,6 +129,11 @@ const appRoutes: RouteRecordRaw[] = [
   component: () => import('../views/PublicProductView.vue')
 },
 {
+  path: '/s/:slug/pages/:page',
+  name: 'public-page',
+  component: () => import('../views/PublicPageView.vue')
+},
+{
   path: '/s/:slug/checkout',
   name: 'public-checkout',
   component: () => import('../views/PublicCheckoutView.vue')
@@ -154,6 +159,7 @@ const appRoutes: RouteRecordRaw[] = [
 const storeRoutes: RouteRecordRaw[] = [
   { path: '/', name: 'public-site', component: () => import('../views/PublicStoreView.vue') },
   { path: '/p/:pid', name: 'public-product', component: () => import('../views/PublicProductView.vue') },
+  { path: '/pages/:page', name: 'public-page', component: () => import('../views/PublicPageView.vue') },
   { path: '/checkout', name: 'public-checkout', component: () => import('../views/PublicCheckoutView.vue') },
   { path: '/order/:code', name: 'public-order', component: () => import('../views/PublicOrderView.vue') },
   { path: '/account', name: 'public-account', component: () => import('../views/PublicAccountView.vue') },
@@ -161,6 +167,7 @@ const storeRoutes: RouteRecordRaw[] = [
   { path: '/s/:slug/account', redirect: '/account' },
   { path: '/s/:slug', redirect: '/' },
   { path: '/s/:slug/p/:pid', redirect: (to) => `/p/${to.params.pid}` },
+  { path: '/s/:slug/pages/:page', redirect: (to) => `/pages/${to.params.page}` },
   { path: '/s/:slug/checkout', redirect: '/checkout' },
   { path: '/s/:slug/order/:code', redirect: (to) => ({ path: `/order/${to.params.code}`, query: to.query }) },
   { path: '/:pathMatch(.*)*', redirect: '/' }

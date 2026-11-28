@@ -3,6 +3,7 @@ import { api } from './api'
 import { parseTheme } from './theme'
 import { initLocale, localizeBlocks, localizeProducts, parseI18n } from './i18n'
 import { startTracking } from './analytics'
+import { parseBlockList, type PageKind, type PublicPageRef } from './pages'
 import type { PublicProduct, PublicSiteData, StoreBlock } from '../types/store'
 
 const cache = new Map<string, Promise<PublicSiteData>>()
@@ -22,6 +23,7 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
       theme_json?: string
       i18n_json?: string
       products?: PublicProduct[]
+      pages?: PublicPageRef[]
     }>('/storefront/public', { params })
     .then(({ data }) => {
       let blocks: StoreBlock[] = []
@@ -40,7 +42,8 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
         blocks,
         products: data.products || [],
         theme: parseTheme(data.theme_json),
-        i18n: parseI18n(data.i18n_json)
+        i18n: parseI18n(data.i18n_json),
+        pages: Array.isArray(data.pages) ? data.pages : []
       }
     })
     .then((site) => {
@@ -58,6 +61,23 @@ export function loadPublicSite(params: { slug?: string; domain?: string }): Prom
 export async function loadPublicProduct(slug: string, pid: string | number): Promise<PublicProduct> {
   const { data } = await api.get<{ product: PublicProduct }>(`/storefront/public/products/${pid}`, { params: { slug } })
   return data.product
+}
+
+// Một trang của website (giới thiệu, liên hệ, chính sách...): chỉ có section riêng của trang,
+// đầu / chân trang dùng chung lấy từ dữ liệu website (PublicShell)
+export interface PublicPageData {
+  slug: string
+  title: string
+  kind: PageKind
+  blocks: StoreBlock[]
+}
+
+export async function loadPublicPage(siteSlug: string, pageSlug: string): Promise<PublicPageData> {
+  const { data } = await api.get<{ slug: string; title: string; kind: PageKind; blocks_json?: string }>(
+    `/storefront/public/pages/${encodeURIComponent(pageSlug)}`,
+    { params: { slug: siteSlug } }
+  )
+  return { slug: data.slug, title: data.title, kind: data.kind, blocks: parseBlockList(data.blocks_json) }
 }
 
 // Các section dùng làm "khung" cho trang con (sản phẩm, giỏ hàng, đơn hàng)

@@ -116,6 +116,14 @@ func safeLink(raw string) string {
 	if v == "" || strings.HasPrefix(v, "#") || (strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "//")) {
 		return v
 	}
+	// page:<đường-dẫn-trang> — liên kết tới một trang khác của cùng website (giao diện đổi thành đường dẫn thật khi hiển thị)
+	if len(v) > 5 && strings.EqualFold(v[:5], "page:") {
+		slug := strings.ToLower(strings.TrimSpace(v[5:]))
+		if slug == homeSlug || (len(slug) <= 60 && pageSlugRe.MatchString(slug)) {
+			return "page:" + slug
+		}
+		return ""
+	}
 	u, err := url.Parse(v)
 	if err != nil {
 		return ""
@@ -421,16 +429,17 @@ func (h *StorefrontHandler) CreateSite(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Tạo website thất bại."})
 		return
 	}
+	_ = seedHomePage(h.DB, &sf) // tách đầu / chân trang dùng chung + tạo trang chủ
 	if useTpl {
 		createTemplateProducts(h.DB, &sf, tpl)
 	}
 	c.JSON(http.StatusCreated, gin.H{"site": sf})
 }
 
-// GetSite GET /api/v1/storefront/sites/:id
+// GetSite GET /api/v1/storefront/sites/:id — kèm danh sách trang (nội dung nháp) và các mẫu trang
 func (h *StorefrontHandler) GetSite(c *gin.Context) {
 	if sf, ok := h.loadOwned(c); ok {
-		c.JSON(http.StatusOK, gin.H{"site": sf})
+		c.JSON(http.StatusOK, h.siteWithPages(sf))
 	}
 }
 
@@ -452,13 +461,9 @@ func (h *StorefrontHandler) SaveSiteDraft(c *gin.Context) {
 	if col := strings.TrimSpace(req.PrimaryColor); colorRe.MatchString(col) {
 		sf.PrimaryColor = col
 	}
-	if strings.TrimSpace(req.BlocksJSON) != "" {
-		clean, err := sanitizeBlocksJSON(req.BlocksJSON)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		sf.DraftBlocksJSON = clean
+	if err := h.applyDraftContent(sf, &req); err != nil { // phần dùng chung + nội dung từng trang (hoặc mảng cũ "ghép sẵn")
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	if req.ThemeJSON != nil {
 		sf.DraftThemeJSON = sanitizeThemeJSON(*req.ThemeJSON)
@@ -470,7 +475,10 @@ func (h *StorefrontHandler) SaveSiteDraft(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Lưu bản nháp thất bại."})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Đã lưu bản nháp.", "site": sf})
+	// Trả cả danh sách trang (nội dung nháp đã lọc) để trình chỉnh sửa dựng lại đúng như máy chủ lưu
+	out := h.siteWithPages(sf)
+	out["message"] = "Đã lưu bản nháp."
+	c.JSON(http.StatusOK, out)
 }
 
 // PublishSite POST /api/v1/storefront/sites/:id/publish
@@ -479,15 +487,10 @@ func (h *StorefrontHandler) PublishSite(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if strings.TrimSpace(sf.DraftBlocksJSON) == "" {
-		sf.DraftBlocksJSON = defaultBlocksJSON()
-	}
-	clean, err := sanitizeBlocksJSON(sf.DraftBlocksJSON)
-	if err != nil {
+	if err := h.publishAllPages(sf); err != nil { // sao nháp → đã xuất bản cho phần dùng chung và mọi trang
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	sf.PublishedBlocksJSON = clean
 	sf.PublishedThemeJSON = sanitizeThemeJSON(sf.DraftThemeJSON)
 	sf.PublishedI18nJSON = sanitizeI18nJSON(sf.DraftI18nJSON)
 	sf.IsPublished = true
@@ -495,7 +498,9 @@ func (h *StorefrontHandler) PublishSite(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Xuất bản thất bại."})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Đã xuất bản website.", "site": sf})
+	out := h.siteWithPages(sf)
+	out["message"] = "Đã xuất bản website."
+	c.JSON(http.StatusOK, out)
 }
 
 // UnpublishSite POST /api/v1/storefront/sites/:id/unpublish
@@ -524,6 +529,7 @@ func (h *StorefrontHandler) DeleteSite(c *gin.Context) {
 	h.DB.Where("storefront_id = ?", sf.ID).Delete(&StoreSession{})
 	h.DB.Where("storefront_id = ?", sf.ID).Delete(&models.ProductVariant{})
 	h.DB.Where("storefront_id = ?", sf.ID).Delete(&models.Product{})
+	h.DB.Where("storefront_id = ?", sf.ID).Delete(&models.StorefrontPage{})
 	if err := h.DB.Delete(sf).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Xóa website thất bại."})
 		return

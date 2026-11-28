@@ -16,6 +16,7 @@ export const UI_VI = {
   loading_order: 'Đang tải đơn hàng...',
   store_not_found: 'Không tìm thấy trang bán hàng đã xuất bản.',
   shop_not_found: 'Không tìm thấy cửa hàng.',
+  page_not_found: 'Không tìm thấy trang này.',
   home: 'Trang chủ',
   back_home: 'Về trang chủ',
   continue_shopping: 'Tiếp tục mua sắm',

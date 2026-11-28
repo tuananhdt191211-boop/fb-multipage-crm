@@ -31,6 +31,7 @@ func NewStorefrontHandler(db *gorm.DB, cfg *config.Config) *StorefrontHandler {
 	migrateSiteCustomers(db)
 	migrateTranslationCache(db)
 	migrateAnalytics(db)
+	migrateStorefrontPages(db) // website cũ (một mảng section) → trang chủ + phần dùng chung
 	return &StorefrontHandler{
 		DB:  db,
 		Cfg: cfg,
@@ -173,6 +174,7 @@ func (h *StorefrontHandler) getOrCreateForUser(userID uint, requestHost string) 
 	if createErr := h.DB.Create(&sf).Error; createErr != nil {
 		return nil, createErr
 	}
+	_ = seedHomePage(h.DB, &sf)
 	return &sf, nil
 }
 
@@ -225,6 +227,9 @@ type saveStorefrontDraftReq struct {
 	BlocksJSON   string `json:"draft_blocks_json"`
 	ThemeJSON    *string `json:"draft_theme_json"` // nil = không đổi
 	I18nJSON     *string `json:"draft_i18n_json"`  // nil = không đổi
+	// Nhiều trang: phần dùng chung (thông báo / đầu / chân trang) và nội dung riêng của các trang có thay đổi
+	SharedJSON *string        `json:"draft_shared_json"` // nil = không đổi
+	Pages      []draftPageReq `json:"pages"`
 }
 
 // SaveDraft PUT /api/v1/storefront/draft
@@ -257,13 +262,9 @@ func (h *StorefrontHandler) SaveDraft(c *gin.Context) {
 	if strings.TrimSpace(req.PrimaryColor) != "" {
 		sf.PrimaryColor = strings.TrimSpace(req.PrimaryColor)
 	}
-	if strings.TrimSpace(req.BlocksJSON) != "" {
-		clean, sanErr := sanitizeBlocksJSON(req.BlocksJSON)
-		if sanErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": sanErr.Error()})
-			return
-		}
-		sf.DraftBlocksJSON = clean
+	if sanErr := h.applyDraftContent(sf, &req); sanErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": sanErr.Error()})
+		return
 	}
 
 	if err := h.DB.Save(sf).Error; err != nil {
@@ -291,15 +292,10 @@ func (h *StorefrontHandler) Publish(c *gin.Context) {
 		return
 	}
 
-	if strings.TrimSpace(sf.DraftBlocksJSON) == "" {
-		sf.DraftBlocksJSON = defaultBlocksJSON()
-	}
-	cleanPub, sanErr := sanitizeBlocksJSON(sf.DraftBlocksJSON)
-	if sanErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": sanErr.Error()})
+	if pubErr := h.publishAllPages(sf); pubErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": pubErr.Error()})
 		return
 	}
-	sf.PublishedBlocksJSON = cleanPub
 	sf.IsPublished = true
 
 	if err := h.DB.Save(sf).Error; err != nil {
@@ -367,7 +363,8 @@ func (h *StorefrontHandler) GetPublicStorefront(c *gin.Context) {
 		"site_title":    sf.SiteTitle,
 		"logo_url":      sf.LogoURL,
 		"primary_color": sf.PrimaryColor,
-		"blocks_json":   sf.PublishedBlocksJSON,
+		"blocks_json":   sf.PublishedBlocksJSON, // trang chủ (đã ghép đầu / chân trang dùng chung)
+		"pages":         h.publicPageList(sf.ID), // các trang khác đang hiện: {slug, title, kind}
 		"theme_json":    sf.PublishedThemeJSON,
 		"i18n_json":     sf.PublishedI18nJSON,
 		"products":      pub,

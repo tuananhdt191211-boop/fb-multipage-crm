@@ -82,8 +82,10 @@ export interface Site {
   site_title: string
   logo_url: string
   primary_color: string
-  draft_blocks_json: string
+  draft_blocks_json: string // trang chủ "ghép sẵn" (giữ cho bản cũ); nguồn thật: draft_shared_json + các trang
   published_blocks_json: string
+  draft_shared_json?: string // dải thông báo / đầu trang / chân trang dùng chung cho mọi trang
+  published_shared_json?: string
   draft_theme_json?: string
   published_theme_json?: string
   draft_i18n_json?: string
@@ -213,6 +215,7 @@ export interface PublicSiteData {
   products: PublicProduct[]
   theme: SiteTheme
   i18n: import('../lib/i18n').SiteI18n
+  pages: import('../lib/pages').PublicPageRef[] // các trang khác trang chủ đang hiện
 }
 
 export interface OrderItem {

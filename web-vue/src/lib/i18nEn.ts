@@ -10,6 +10,7 @@ export const UI_EN: Record<UiKey, string> = {
   loading_order: 'Loading order...',
   store_not_found: 'No published store found.',
   shop_not_found: 'Store not found.',
+  page_not_found: 'Page not found.',
   home: 'Home',
   back_home: 'Back to home',
   continue_shopping: 'Continue shopping',

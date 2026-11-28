@@ -57,7 +57,7 @@ func newProductEnv(t *testing.T) *productEnv {
 		t.Fatalf("TỪ CHỐI chạy trên database %q: tên phải kết thúc bằng _test", name)
 	}
 	h := NewStorefrontHandler(db, &config.Config{FrontendURL: "http://localhost:4173"})
-	db.Exec("TRUNCATE products, product_variants, shop_orders, shop_payment_settings, site_media, storefronts RESTART IDENTITY CASCADE")
+	db.Exec("TRUNCATE products, product_variants, shop_orders, shop_payment_settings, site_media, storefront_pages, storefronts RESTART IDENTITY CASCADE")
 	orderLimiter.Lock()
 	orderLimiter.hits = map[string][]time.Time{} // giới hạn đặt hàng theo IP là biến toàn cục: mỗi test bắt đầu từ đầu
 	orderLimiter.Unlock()

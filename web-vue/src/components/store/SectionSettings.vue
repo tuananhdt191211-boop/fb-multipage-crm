@@ -294,7 +294,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
               <GripVertical class="h-4 w-4" />
             </span>
             <input v-model="n.label" placeholder="Chữ" class="w-2/5 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
-            <input v-model="n.link" placeholder="#products, https://..." class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+            <input v-model="n.link" list="pp-page-links" placeholder="#products, https://..." class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-sm" />
             <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('nav_items', ni)"><Trash2 class="h-3.5 w-3.5" /></button>
           </div>
         </div>
@@ -345,7 +345,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         </label>
         <label v-if="block.data.show_cta !== false" class="space-y-1">
           <span :class="lbl">Liên kết nút</span>
-          <input v-model="block.data.cta_link" placeholder="#products" :class="inp" />
+          <input v-model="block.data.cta_link" list="pp-page-links" placeholder="#products" :class="inp" />
         </label>
       </template>
       <div class="flex flex-wrap items-center gap-4">
@@ -489,7 +489,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
       <label class="space-y-1"><span :class="lbl">Mô tả</span><textarea v-model="block.data.subtitle" rows="3" :class="inp" /></label>
       <div class="grid grid-cols-2 gap-2">
         <label class="space-y-1"><span :class="lbl">Chữ trên nút</span><input v-model="block.data.cta_label" :class="inp" /></label>
-        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.cta_link" :class="inp" /></label>
+        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.cta_link" list="pp-page-links" :class="inp" /></label>
       </div>
     </template>
 
@@ -599,7 +599,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         <div class="grid grid-cols-2 gap-2">
           <label class="space-y-1"><span :class="lbl">Chữ trên nút</span><input v-model="block.data.buy_label" :placeholder="block.data.buy_mode === 'link' || block.data.source !== 'catalog' ? 'Đặt mua' : 'Thêm vào giỏ'" :class="inp" /></label>
           <label v-if="block.data.buy_mode === 'link' || block.data.source !== 'catalog'" class="space-y-1">
-            <span :class="lbl">Liên kết nút</span><input v-model="block.data.buy_link" placeholder="#contact, https://m.me/..." :class="inp" />
+            <span :class="lbl">Liên kết nút</span><input v-model="block.data.buy_link" list="pp-page-links" placeholder="#contact, https://m.me/..." :class="inp" />
           </label>
         </div>
       </template>
@@ -694,7 +694,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
       <label class="space-y-1"><span :class="lbl">Mô tả</span><textarea v-model="block.data.subtitle" rows="2" :class="inp" /></label>
       <div class="grid grid-cols-2 gap-2">
         <label class="space-y-1"><span :class="lbl">Chữ trên nút</span><input v-model="block.data.button_text" :class="inp" /></label>
-        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.button_link" placeholder="tel:, https://..." :class="inp" /></label>
+        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.button_link" list="pp-page-links" placeholder="tel:, https://..." :class="inp" /></label>
       </div>
       <label class="space-y-1"><span :class="lbl">Ghi chú chân trang</span><input v-model="block.data.footer_note" :class="inp" /></label>
     </template>
@@ -703,6 +703,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
     <template v-else-if="block.type === 'richtext'">
       <label class="space-y-1"><span :class="lbl">Tiêu đề</span><input v-model="block.data.heading" :class="inp" /></label>
       <label class="space-y-1"><span :class="lbl">Nội dung</span><textarea v-model="block.data.body" rows="7" :class="inp" /></label>
+      <label class="flex items-center gap-2 text-xs font-bold text-slate-600"><input v-model="block.data.compact" type="checkbox" /> Thu gọn khoảng cách trên / dưới</label>
       <div class="flex gap-1">
         <button
           v-for="a in [{ v: 'left', t: 'Trái' }, { v: 'center', t: 'Giữa' }, { v: 'right', t: 'Phải' }]"
@@ -721,7 +722,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
     <template v-else-if="block.type === 'image'">
       <ImageField v-model="block.data.image_url" :site-id="siteId" label="Ảnh" />
       <label class="space-y-1"><span :class="lbl">Mô tả ảnh (SEO)</span><input v-model="block.data.alt" :class="inp" /></label>
-      <label class="space-y-1"><span :class="lbl">Liên kết khi bấm ảnh</span><input v-model="block.data.link" placeholder="https://..." :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Liên kết khi bấm ảnh</span><input v-model="block.data.link" list="pp-page-links" placeholder="https://..." :class="inp" /></label>
     </template>
 
     <!-- ===== Thư viện ảnh ===== -->
@@ -795,7 +796,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
     <!-- ===== Dải thông báo ===== -->
     <template v-else-if="block.type === 'announcement'">
       <label class="space-y-1"><span :class="lbl">Nội dung</span><input v-model="block.data.text" :class="inp" /></label>
-      <label class="space-y-1"><span :class="lbl">Liên kết (không bắt buộc)</span><input v-model="block.data.link" placeholder="#products" :class="inp" /></label>
+      <label class="space-y-1"><span :class="lbl">Liên kết (không bắt buộc)</span><input v-model="block.data.link" list="pp-page-links" placeholder="#products" :class="inp" /></label>
       <label class="flex items-center gap-2 text-xs font-bold text-slate-600">
         Màu chữ
         <input type="color" :value="block.data.text_color || '#ffffff'" class="h-7 w-9 rounded border border-slate-200" @input="block.data.text_color = ($event.target as HTMLInputElement).value" />
@@ -850,7 +851,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         <textarea v-model="s.text" rows="2" placeholder="Mô tả" class="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm" />
         <div class="grid grid-cols-2 gap-2">
           <input v-model="s.button_label" placeholder="Chữ trên nút" class="rounded-lg border border-slate-200 px-2 py-1 text-sm" />
-          <input v-model="s.link" placeholder="Liên kết" class="rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+          <input v-model="s.link" list="pp-page-links" placeholder="Liên kết" class="rounded-lg border border-slate-200 px-2 py-1 text-sm" />
         </div>
       </div>
       <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('slides', { image_url: '', mobile_image_url: '', heading: '', text: '', button_label: 'Mua ngay', link: '#products' })">
@@ -897,7 +898,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
       </button>
       <div class="grid grid-cols-2 gap-2">
         <label class="space-y-1"><span :class="lbl">Chữ trên nút</span><input v-model="block.data.button_label" :class="inp" /></label>
-        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.button_link" :class="inp" /></label>
+        <label class="space-y-1"><span :class="lbl">Liên kết nút</span><input v-model="block.data.button_link" list="pp-page-links" :class="inp" /></label>
       </div>
     </template>
 
@@ -918,7 +919,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
           <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="removeFrom('items', ci)"><Trash2 class="h-3.5 w-3.5" /></button>
         </div>
         <ImageField v-model="col.image_url" :site-id="siteId" compact />
-        <input v-model="col.link" placeholder="Liên kết (#products, https://...)" class="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm" />
+        <input v-model="col.link" list="pp-page-links" placeholder="Liên kết (#products, https://...)" class="w-full rounded-lg border border-slate-200 px-2 py-1 text-sm" />
       </div>
       <button type="button" class="inline-flex items-center gap-1 text-xs font-bold text-indigo-700" @click="addTo('items', { image_url: '', title: 'Danh mục mới', link: '#products' })">
         <Plus class="h-3.5 w-3.5" /> Thêm ô danh mục
@@ -978,7 +979,7 @@ function setStyle(key: 'bg' | 'pad' | 'css', val: string) {
         </div>
         <div v-for="(lnk, li) in col.links || []" :key="li" class="flex items-center gap-1">
           <input v-model="lnk.label" placeholder="Chữ" class="w-2/5 rounded-lg border border-slate-200 px-2 py-1 text-xs" />
-          <input v-model="lnk.link" placeholder="Liên kết" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs" />
+          <input v-model="lnk.link" list="pp-page-links" placeholder="Liên kết" class="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs" />
           <button type="button" class="rounded p-1 text-rose-600 hover:bg-rose-50" @click="col.links.splice(li, 1)"><Trash2 class="h-3 w-3" /></button>
         </div>
         <button type="button" class="text-[11px] font-bold text-indigo-700" @click="(col.links = col.links || []).push({ label: '', link: '' })">+ Thêm liên kết</button>

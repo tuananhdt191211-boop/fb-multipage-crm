@@ -3,7 +3,7 @@
 // - Cột trái: thư viện section (kéo thả vào trang) / danh sách section / cài đặt chung
 // - Giữa: trang thật, click để chọn, gõ chữ trực tiếp, kéo để đổi vị trí
 // - Cột phải: cài đặt chi tiết của section đang chọn
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft,
@@ -37,6 +37,19 @@ import { localizeBlocks, localizeProducts, parseI18n, previewLocale, type SiteI1
 import { missingCount, translateRows, translationRows } from '../lib/siteTranslate'
 import LanguagePanel from '../components/store/LanguagePanel.vue'
 import ThemeTypography from '../components/store/ThemeTypography.vue'
+import PageManager from '../components/store/PageManager.vue'
+import {
+  composeBlocks,
+  isSharedType,
+  pageLinkOptions,
+  pageMeta,
+  pageSubPath,
+  parseBlockList,
+  splitBlocks,
+  type PageTemplate,
+  type ServerPage,
+  type SitePage
+} from '../lib/pages'
 
 const route = useRoute()
 const router = useRouter()
@@ -50,6 +63,15 @@ const toast = ref<{ text: string; undo?: boolean } | null>(null)
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
 const site = ref<Site | null>(null)
+// Nhiều trang: `blocks` luôn là trang ĐANG SỬA đã ghép sẵn (dải thông báo + đầu trang ở trên, chân trang ở dưới — dùng chung mọi trang).
+// Nội dung riêng của các trang khác giữ ở pageJson (chuỗi JSON) cho tới khi chuyển sang trang đó hoặc lưu nháp.
+const pages = ref<SitePage[]>([])
+const currentPageId = ref(0)
+const pageJson = reactive<Record<number, string>>({})
+let savedPage: Record<number, string> = {} // nội dung từng trang ở lần lưu gần nhất (để chỉ gửi trang có thay đổi)
+const pageTemplates = ref<PageTemplate[]>([])
+const maxPages = ref(30)
+const currentPage = computed(() => pages.value.find((p) => p.id === currentPageId.value) || null)
 const blocks = ref<StoreBlock[]>([])
 // Kiểu chữ toàn trang (font, cỡ H1–P)
 const theme = ref<SiteTheme>({})
@@ -61,7 +83,12 @@ const leftTab = ref<'add' | 'sections' | 'theme' | 'lang'>('sections')
 const i18n = ref<SiteI18n>({ markets: [], tr: {} })
 const i18nDirty = ref(false)
 // Các câu tiếng Việt cần dịch + số câu còn thiếu bản dịch (hiện ở tab "Ngôn ngữ", tự dịch nốt khi xuất bản)
-const trRows = computed(() => (i18n.value.markets.length ? translationRows(blocks.value, products.value) : []))
+// Bản dịch gắn theo id section: phải xét cả nội dung các trang khác (trang đang sửa đã gồm đầu / chân trang dùng chung)
+const otherPageBlocks = computed(() =>
+  pages.value.filter((p) => p.id !== currentPageId.value).flatMap((p) => parseBlockList(pageJson[p.id]))
+)
+const i18nBlocks = computed(() => [...blocks.value, ...otherPageBlocks.value])
+const trRows = computed(() => (i18n.value.markets.length ? translationRows(i18nBlocks.value, products.value) : []))
 const trMissing = computed(() => (i18n.value.markets.length ? missingCount(i18n.value, trRows.value) : 0))
 const publishNote = ref('')
 const warnMsg = ref('')
@@ -75,6 +102,11 @@ const device = ref<'desktop' | 'tablet' | 'mobile'>('desktop')
 const deviceWidth = computed(() => (device.value === 'mobile' ? '390px' : device.value === 'tablet' ? '768px' : '100%'))
 const selectedBlock = computed(() => blocks.value.find((b) => b.id === selectedId.value) || null)
 const publicUrl = computed(() => (site.value ? `${window.location.origin}/s/${site.value.slug}` : ''))
+// Địa chỉ của trang đang sửa; chỉ mở được khi bản đã xuất bản của trang đó đang hiện
+const pageUrl = computed(() => (currentPage.value ? publicUrl.value + pageSubPath(currentPage.value) : publicUrl.value))
+const pageLive = computed(() => !!site.value?.is_published && (!currentPage.value || currentPage.value.kind === 'home' || currentPage.value.published_visible))
+// Gợi ý trong ô liên kết: trang khác của website (page:<đường-dẫn>)
+const pageLinks = computed(() => pageLinkOptions(pages.value))
 
 const catalogGroups = computed(() => {
   const groups: { name: string; items: typeof blockCatalog }[] = []
@@ -108,6 +140,18 @@ function snapshot(): string {
     b: blocks.value
   })
 }
+// Dấu vết để biết "có thay đổi chưa lưu": không phụ thuộc đang sửa trang nào (chuyển trang không làm đổi), gồm phần dùng chung + MỌI trang
+function canonSnap(): string {
+  const { shared, page } = splitBlocks(blocks.value)
+  return JSON.stringify({
+    t: site.value?.site_title,
+    l: site.value?.logo_url,
+    c: site.value?.primary_color,
+    th: theme.value,
+    sh: shared,
+    pg: pages.value.map((p) => (p.id === currentPageId.value ? JSON.stringify(page) : (pageJson[p.id] ?? '[]')))
+  })
+}
 const savedSnapshot = ref('')
 const dirty = computed(() => !!site.value && (currentSnap.value !== savedSnapshot.value || i18nDirty.value))
 const currentSnap = ref('')
@@ -122,21 +166,29 @@ function upgradeBlocks(arr: StoreBlock[]) {
   }
 }
 
-function applySite(s: Site) {
+// Dựng lại toàn bộ trình chỉnh sửa từ dữ liệu máy chủ (tải lần đầu, sau khi lưu nháp, sau khi xuất bản).
+// keepPageId: trang đang sửa được giữ nguyên nếu vẫn còn, không thì về trang chủ.
+function applySite(s: Site, serverPages: ServerPage[], keepPageId = 0) {
   site.value = s
-  let parsed: StoreBlock[] = []
-  try {
-    const v = JSON.parse(s.draft_blocks_json || '[]')
-    parsed = Array.isArray(v) ? v : []
-  } catch {
-    parsed = []
+  const shared = parseBlockList(s.draft_shared_json)
+  upgradeBlocks(shared)
+  const next: Record<number, string> = {}
+  for (const p of serverPages) {
+    const arr = parseBlockList(p.draft_blocks_json)
+    upgradeBlocks(arr)
+    next[p.id] = JSON.stringify(splitBlocks(arr).page) // phần riêng của trang (đầu / chân trang nằm ở phần dùng chung)
   }
-  upgradeBlocks(parsed)
-  blocks.value = parsed
+  for (const k of Object.keys(pageJson)) delete pageJson[Number(k)]
+  Object.assign(pageJson, next)
+  savedPage = { ...next }
+  pages.value = [...serverPages].sort((a, b) => a.position - b.position || a.id - b.id).map(pageMeta)
+  const home = pages.value.find((p) => p.kind === 'home') || pages.value[0]
+  currentPageId.value = pages.value.some((p) => p.id === keepPageId) ? keepPageId : home?.id || 0
+  blocks.value = composeBlocks(splitBlocks(shared).shared, parseBlockList(next[currentPageId.value]))
   theme.value = parseTheme(s.draft_theme_json)
   i18n.value = parseI18n(s.draft_i18n_json)
   i18nDirty.value = false
-  const snap = snapshot()
+  const snap = canonSnap()
   savedSnapshot.value = snap
   currentSnap.value = snap
 }
@@ -169,19 +221,23 @@ async function load() {
   loading.value = true
   errorMsg.value = ''
   try {
-    const { data } = await api.get<{ site: Site }>(`/storefront/sites/${siteId.value}`)
-    applySite(data.site)
+    const { data } = await api.get<{ site: Site; pages?: ServerPage[]; page_templates?: PageTemplate[]; max_pages?: number }>(`/storefront/sites/${siteId.value}`)
+    if (!data.pages?.length) throw new Error('outdated-server') // máy chủ chưa hỗ trợ nhiều trang: không mở để tránh ghi đè nhầm
+    pageTemplates.value = data.page_templates || []
+    maxPages.value = data.max_pages || 30
+    applySite(data.site, data.pages)
     resetHistory()
     await loadProducts()
   } catch (err) {
-    errorMsg.value = apiError(err, 'Không tải được website.')
+    errorMsg.value = (err as Error)?.message === 'outdated-server' ? 'Máy chủ đang được cập nhật. Hãy tải lại trang sau ít phút.' : apiError(err, 'Không tải được website.')
   } finally {
     loading.value = false
   }
 }
 
-function cleanBlocks(): StoreBlock[] {
-  const copy: StoreBlock[] = JSON.parse(JSON.stringify(blocks.value))
+// Làm sạch một danh sách section trước khi lưu (bỏ mục menu / mục cam kết trống)
+function cleanList(list: StoreBlock[]): StoreBlock[] {
+  const copy: StoreBlock[] = JSON.parse(JSON.stringify(list))
   for (const b of copy) {
     if (b.type === 'header' && Array.isArray(b.data.nav_items)) {
       b.data.nav_items = b.data.nav_items.filter((x: any) => String(x?.label || '').trim())
@@ -199,15 +255,25 @@ async function saveDraft(silent = false): Promise<boolean> {
   errorMsg.value = ''
   const selected = selectedId.value
   try {
-    const { data } = await api.put<{ site: Site }>(`/storefront/sites/${site.value.id}/draft`, {
+    // Phần dùng chung (thông báo / đầu / chân trang) luôn gửi; chỉ gửi nội dung các trang có thay đổi so với lần lưu trước
+    const { shared, page } = splitBlocks(cleanList(blocks.value))
+    const changed: { id: number; draft_blocks_json: string }[] = []
+    for (const p of pages.value) {
+      const isCur = p.id === currentPageId.value
+      const raw = isCur ? JSON.stringify(splitBlocks(blocks.value).page) : (pageJson[p.id] ?? '[]')
+      if (raw === savedPage[p.id]) continue
+      changed.push({ id: p.id, draft_blocks_json: isCur ? JSON.stringify(page) : JSON.stringify(cleanList(parseBlockList(raw))) })
+    }
+    const { data } = await api.put<{ site: Site; pages: ServerPage[] }>(`/storefront/sites/${site.value.id}/draft`, {
       site_title: site.value.site_title,
       logo_url: site.value.logo_url,
       primary_color: site.value.primary_color,
-      draft_blocks_json: JSON.stringify(cleanBlocks()),
+      draft_shared_json: JSON.stringify(shared),
+      pages: changed,
       draft_theme_json: JSON.stringify(theme.value),
       draft_i18n_json: JSON.stringify(i18n.value)
     })
-    applySite(data.site)
+    applySite(data.site, data.pages, currentPageId.value)
     resetHistory()
     selectedId.value = blocks.value.some((b) => b.id === selected) ? selected : null
     if (!silent) showToast('Đã lưu bản nháp')
@@ -250,9 +316,9 @@ async function publish() {
       }
     }
     if (!(await saveDraft(true))) return
-    const { data } = await api.post<{ site: Site }>(`/storefront/sites/${site.value.id}/publish`)
+    const { data } = await api.post<{ site: Site; pages: ServerPage[] }>(`/storefront/sites/${site.value.id}/publish`)
     const selected = selectedId.value
-    applySite(data.site)
+    applySite(data.site, data.pages, currentPageId.value)
     resetHistory()
     selectedId.value = selected
     if (untranslated) {
@@ -289,7 +355,7 @@ function restore(snap: string) {
   theme.value = s.th || {}
   blocks.value = s.b
   if (selectedId.value && !blocks.value.some((b) => b.id === selectedId.value)) selectedId.value = null
-  currentSnap.value = snap
+  currentSnap.value = canonSnap()
   nextTick(() => (applyingHistory = false))
 }
 
@@ -297,7 +363,7 @@ watch(
   [blocks, theme, () => site.value?.site_title, () => site.value?.logo_url, () => site.value?.primary_color],
   () => {
     if (!site.value) return
-    currentSnap.value = snapshot()
+    currentSnap.value = canonSnap()
     if (applyingHistory) return
     if (historyTimer) clearTimeout(historyTimer)
     historyTimer = setTimeout(() => {
@@ -337,10 +403,83 @@ function redo() {
   restore(snap)
 }
 
+// ---------------------------------------------------------------- Nhiều trang
+// Đổi trang đang sửa: nội dung riêng của trang cũ cất vào pageJson, phần dùng chung (đầu / chân trang) mang sang trang mới
+function switchPage(id: number) {
+  if (id === currentPageId.value || !pages.value.some((p) => p.id === id)) return
+  const { shared, page } = splitBlocks(blocks.value)
+  pageJson[currentPageId.value] = JSON.stringify(page)
+  currentPageId.value = id
+  blocks.value = composeBlocks(shared, parseBlockList(pageJson[id]))
+  selectedId.value = null
+  activeText.value = null
+  resetHistory() // hoàn tác chỉ trong phạm vi một trang
+}
+
+// Mọi thao tác thêm / nhân bản / xoá / đổi tên trang đều lưu nháp trước, để danh sách trang khớp máy chủ
+async function ensureSaved(): Promise<boolean> {
+  return dirty.value ? await saveDraft(true) : true
+}
+
+// Danh sách trang vừa đổi ở máy chủ (đã lưu nháp trước đó nên nội dung các trang đang có không đổi)
+function onPagesChanged(server: ServerPage[], selectId?: number) {
+  const known = new Set(pages.value.map((p) => p.id))
+  const ids = new Set(server.map((p) => p.id))
+  if (ids.has(currentPageId.value)) pageJson[currentPageId.value] = JSON.stringify(splitBlocks(blocks.value).page)
+  for (const p of server) {
+    if (known.has(p.id)) continue
+    const arr = parseBlockList(p.draft_blocks_json)
+    upgradeBlocks(arr)
+    pageJson[p.id] = savedPage[p.id] = JSON.stringify(splitBlocks(arr).page)
+  }
+  for (const id of known) {
+    if (ids.has(id)) continue
+    delete pageJson[id]
+    delete savedPage[id]
+  }
+  const gone = !ids.has(currentPageId.value)
+  const shared = splitBlocks(blocks.value).shared
+  pages.value = [...server].sort((a, b) => a.position - b.position || a.id - b.id).map(pageMeta)
+  if (gone) {
+    // trang đang sửa vừa bị xoá → về trang chủ
+    const home = pages.value.find((p) => p.kind === 'home') || pages.value[0]
+    if (home) {
+      currentPageId.value = home.id
+      blocks.value = composeBlocks(shared, parseBlockList(pageJson[home.id]))
+      selectedId.value = null
+      activeText.value = null
+      resetHistory()
+    }
+  }
+  if (selectId) switchPage(selectId)
+  const snap = canonSnap() // đã lưu nháp trước thao tác nên cấu trúc mới không tính là "chưa lưu"
+  savedSnapshot.value = snap
+  currentSnap.value = snap
+}
+
+// Đầu trang, chân trang, dải thông báo dùng chung cho mọi trang: luôn nằm cố định ở trên / dưới cùng, mỗi loại chỉ có một
+function normalizeLayout(announce = false) {
+  const { shared, page } = splitBlocks(blocks.value)
+  const next = composeBlocks(shared, page)
+  if (next.length === blocks.value.length && next.every((b, i) => b === blocks.value[i])) return
+  blocks.value = next
+  if (announce) showToast('Đầu trang, dải thông báo và chân trang luôn nằm cố định ở trên cùng / dưới cùng')
+}
+
 // ---------------------------------------------------------------- Thao tác section
 function insertBlock(type: BlockType, index: number) {
+  if (isSharedType(type)) {
+    const existing = blocks.value.find((x) => x.type === type)
+    if (existing) {
+      showToast('Website chỉ có một đầu trang, một chân trang và một dải thông báo (dùng chung cho mọi trang). Đã chọn mục hiện có.')
+      selectedId.value = existing.id
+      nextTick(() => scrollToBlock(existing.id))
+      return
+    }
+  }
   const b = newBlock(type)
   blocks.value.splice(Math.max(0, Math.min(index, blocks.value.length)), 0, b)
+  normalizeLayout()
   selectedId.value = b.id
   nextTick(() => scrollToBlock(b.id))
 }
@@ -387,10 +526,15 @@ function onSectionAction(kind: 'up' | 'down' | 'duplicate' | 'hide' | 'delete', 
       const j = kind === 'up' ? index - 1 : index + 1
       if (j < 0 || j >= arr.length) return
       ;[arr[index], arr[j]] = [arr[j]!, arr[index]!]
+      normalizeLayout(true)
       nextTick(() => scrollToBlock(b.id))
       break
     }
     case 'duplicate': {
+      if (isSharedType(b.type)) {
+        showToast('Đầu trang, chân trang và dải thông báo chỉ có một bản, dùng chung cho mọi trang.')
+        return
+      }
       const copy: StoreBlock = JSON.parse(JSON.stringify(b))
       copy.id = `${b.type}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
       arr.splice(index + 1, 0, copy)
@@ -404,7 +548,8 @@ function onSectionAction(kind: 'up' | 'down' | 'duplicate' | 'hide' | 'delete', 
     case 'delete':
       arr.splice(index, 1)
       if (selectedId.value === b.id) selectedId.value = null
-      showToast(`Đã xoá "${blockLabels[b.type] || b.type}"`, true)
+      if (isSharedType(b.type)) showToast('Đã xoá khỏi tất cả các trang', true)
+      else showToast(`Đã xoá "${blockLabels[b.type] || b.type}"`, true)
       break
   }
 }
@@ -462,6 +607,7 @@ function dropAt(index: number) {
   const [item] = blocks.value.splice(from, 1)
   if (item) {
     blocks.value.splice(to, 0, item)
+    normalizeLayout(true)
     selectedId.value = item.id
   }
 }
@@ -544,6 +690,10 @@ watch(selectedId, (id) => {
 
 <template>
   <div class="flex h-screen flex-col bg-slate-100 text-slate-900">
+    <!-- Gợi ý cho mọi ô liên kết: các trang khác của website (page:<đường-dẫn>) -->
+    <datalist id="pp-page-links">
+      <option v-for="o in pageLinks" :key="o.value" :value="o.value">{{ o.label }}</option>
+    </datalist>
     <div v-if="loading" class="flex flex-1 items-center justify-center gap-2 text-sm text-slate-500">
       <Loader2 class="h-5 w-5 animate-spin text-indigo-600" /> Đang tải trình chỉnh sửa...
     </div>
@@ -566,6 +716,17 @@ watch(selectedId, (id) => {
               {{ saving ? 'Đang lưu...' : dirty ? 'Có thay đổi chưa lưu' : 'Đã lưu' }}
             </div>
           </div>
+          <PageManager
+            :site-id="site.id"
+            :site-slug="site.slug"
+            :pages="pages"
+            :current-id="currentPageId"
+            :templates="pageTemplates"
+            :max-pages="maxPages"
+            :ensure-saved="ensureSaved"
+            @select="switchPage"
+            @changed="onPagesChanged"
+          />
         </div>
 
         <div class="flex items-center gap-1 rounded-xl bg-slate-100 p-1">
@@ -589,8 +750,8 @@ watch(selectedId, (id) => {
             <Redo2 class="h-4 w-4" />
           </button>
           <a
-            v-if="site.is_published"
-            :href="publicUrl"
+            v-if="pageLive"
+            :href="pageUrl"
             target="_blank"
             rel="noopener"
             class="hidden items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 sm:inline-flex"
@@ -666,7 +827,10 @@ watch(selectedId, (id) => {
                       <GripVertical class="h-4 w-4" />
                     </span>
                     <span class="min-w-0 flex-1">
-                      <span class="block truncate font-bold">{{ blockLabels[b.type] || b.type }}</span>
+                      <span class="flex items-center gap-1.5">
+                        <span class="truncate font-bold">{{ blockLabels[b.type] || b.type }}</span>
+                        <span v-if="isSharedType(b.type)" class="shrink-0 rounded bg-indigo-100 px-1 text-[9px] font-extrabold uppercase text-indigo-700" title="Dùng chung cho mọi trang">Chung</span>
+                      </span>
                       <span class="block truncate text-[11px] text-slate-400">{{ b.data.title || b.data.heading || b.data.brand_name || '' }}</span>
                     </span>
                     <button class="rounded p-1 opacity-0 hover:bg-slate-200 group-hover:opacity-100" :title="b.enabled ? 'Ẩn' : 'Hiện'" @click.stop="onSectionAction('hide', i)">
@@ -692,7 +856,7 @@ watch(selectedId, (id) => {
 
             <!-- Thư viện section: kéo thả vào trang -->
             <template v-else-if="leftTab === 'lang'">
-              <LanguagePanel v-model:i18n="i18n" v-model:preview="previewLang" :site-id="site.id" :blocks="blocks" :products="products" @changed="i18nDirty = true" />
+              <LanguagePanel v-model:i18n="i18n" v-model:preview="previewLang" :site-id="site.id" :blocks="i18nBlocks" :products="products" @changed="i18nDirty = true" />
             </template>
 
             <template v-else-if="leftTab === 'add'">
@@ -812,6 +976,9 @@ watch(selectedId, (id) => {
               <button class="rounded-lg p-1 hover:bg-slate-100" title="Bỏ chọn (Esc)" @click="selectBlock(null)"><X class="h-4 w-4" /></button>
             </div>
             <div class="space-y-4 p-4">
+              <p v-if="isSharedType(selectedBlock.type)" data-testid="shared-note" class="rounded-lg bg-indigo-50 px-3 py-2 text-[11px] font-semibold text-indigo-800">
+                Phần này dùng chung cho mọi trang của website — sửa một lần, hiện ở tất cả các trang.
+              </p>
               <TextStylePanel
                 v-if="activeText && activeText.block === selectedBlock.id"
                 :key="activeText.key"

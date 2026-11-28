@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Loader2 } from 'lucide-vue-next'
 import StoreRenderer from '../components/store/StoreRenderer.vue'
@@ -34,7 +34,22 @@ async function load() {
     errorMsg.value = err?.response?.data?.error || t('store_not_found')
   } finally {
     loading.value = false
+    scrollToHash()
   }
+}
+
+// Từ trang con bấm liên kết neo (vd. /s/shop#products) về trang chủ: nội dung hiện ra sau khi tải xong nên cuộn thủ công tới đúng phần
+async function scrollToHash() {
+  const h = window.location.hash
+  if (h.length < 2) return
+  await nextTick()
+  let id = h.slice(1)
+  try {
+    id = decodeURIComponent(id)
+  } catch {
+    /* giữ nguyên */
+  }
+  setTimeout(() => document.getElementById(id)?.scrollIntoView(), 60)
 }
 
 onMounted(load)

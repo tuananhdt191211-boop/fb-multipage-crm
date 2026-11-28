@@ -30,7 +30,8 @@ import {
   User,
   X
 } from 'lucide-vue-next'
-import { safeHref, safeImg } from '../../lib/safeUrl'
+import { safeHref as baseSafeHref, safeImg } from '../../lib/safeUrl'
+import { PAGE_LINK_RE } from '../../lib/pages'
 import { money, priceLabel, t } from '../../lib/i18n'
 import { blockLabels } from '../../lib/blockFactory'
 import { useCart } from '../../lib/cart'
@@ -60,7 +61,22 @@ const props = defineProps<{
   selectedId?: string | null
   dragActive?: boolean
   theme?: SiteTheme | null
+  anchorBase?: string // trang con: liên kết neo (#products) đưa về đường dẫn này (trang chủ) rồi cuộn tới đúng phần
 }>()
+
+// Liên kết trong section. "page:<đường-dẫn>" (liên kết tới một trang khác của website) → đường dẫn thật khi khách xem;
+// trong trình chỉnh sửa chỉ hiển thị, không chuyển trang. Mọi chỗ trong mẫu dùng hàm này thay cho safeHref gốc.
+function safeHref(raw?: string, fallback = '#'): string {
+  const v = (raw || '').trim()
+  const m = PAGE_LINK_RE.exec(v)
+  if (m) {
+    if (props.editable || !props.siteSlug) return '#'
+    const slug = m[1]!.toLowerCase()
+    return storePath(props.siteSlug, slug === 'home' ? '' : `/pages/${slug}`)
+  }
+  if (v.length > 1 && v.startsWith('#') && props.anchorBase && !props.editable) return props.anchorBase + v
+  return baseSafeHref(raw, fallback)
+}
 
 // Kiểu chữ toàn trang + tải font Google đang dùng
 const themeStyle = computed(() => themeCss(props.theme))
@@ -957,7 +973,7 @@ const inner = 'mx-auto w-full max-w-6xl px-5 @3xl:px-8'
 
         <!-- ===================== VĂN BẢN ===================== -->
         <section v-else-if="blk.type === 'richtext'">
-          <div :class="inner" class="py-14">
+          <div :class="[inner, blk.data.compact ? 'py-5' : 'py-14']">
             <div class="max-w-3xl space-y-4" :class="alignOf(blk.data.align) === 'center' ? 'mx-auto' : alignOf(blk.data.align) === 'right' ? 'ml-auto' : ''" :style="{ textAlign: alignOf(blk.data.align) }">
               <EditableText :fx="fx(blk, ['heading'])"
                 v-if="blk.data.heading || editable"
