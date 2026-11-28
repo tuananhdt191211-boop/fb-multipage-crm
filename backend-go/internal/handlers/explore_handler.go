@@ -334,7 +334,7 @@ func (h *CompetitorHandler) ExploreContent(c *gin.Context) {
 	case "youtube":
 		err = h.exploreYouTube(target, cursor, res)
 	case "facebook":
-		err = h.exploreFacebook(target, cursor, res)
+		err = h.exploreFacebook(uint(wsID(c)), target, cursor, res)
 	}
 	if err != nil {
 		// Máy chủ hay bị tikwm chặn (IP đám mây). Trả kèm mục tiêu đã nhận diện
@@ -1310,12 +1310,12 @@ func (h *CompetitorHandler) exploreYouTubeNoKey(t exploreTarget, res *exploreRes
 const fbNoAccess = "Facebook không cho đọc bài của Page không thuộc bạn qua API chính thức (cần quyền Page Public Content Access). Bạn chỉ quét được các Page đã gộp; với Page khác hãy dùng mục 'Dán bài / link mẫu' để lưu tay."
 
 // pageTokenFor trả token của đúng Page đã gộp (nếu có)
-func (h *CompetitorHandler) pageTokenFor(pageID string) string {
+func (h *CompetitorHandler) pageTokenFor(ws uint, pageID string) string {
 	if pageID == "" {
 		return ""
 	}
 	var page models.FacebookPage
-	if err := h.DB.Where("page_id = ? AND encrypted_page_token <> ''", pageID).First(&page).Error; err != nil {
+	if err := h.DB.Where("page_id = ? AND workspace_id = ? AND encrypted_page_token <> ''", pageID, ws).First(&page).Error; err != nil {
 		return ""
 	}
 	tok, err := security.DecryptSecret(page.EncryptedPageToken, h.encKey())
@@ -1391,9 +1391,9 @@ func (p fbPost) toItem(pageID, pageName, avatar string) exploreItem {
 	}
 }
 
-func (h *CompetitorHandler) exploreFacebook(t exploreTarget, cursor string, res *exploreResult) error {
+func (h *CompetitorHandler) exploreFacebook(ws uint, t exploreTarget, cursor string, res *exploreResult) error {
 	var pages []models.FacebookPage
-	_ = h.DB.Where("is_connected = ? AND encrypted_page_token <> ''", true).Find(&pages).Error
+	_ = h.DB.Where("is_connected = ? AND workspace_id = ? AND encrypted_page_token <> ''", true, ws).Find(&pages).Error
 	if len(pages) == 0 {
 		return badInput("Cần gộp ít nhất 1 Fanpage của bạn trước khi quét Facebook.")
 	}
@@ -1414,11 +1414,11 @@ func (h *CompetitorHandler) exploreFacebook(t exploreTarget, cursor string, res 
 		}
 		token := ""
 		if own != nil {
-			token = h.pageTokenFor(own.PageID)
+			token = h.pageTokenFor(ws, own.PageID)
 		}
 		if own == nil {
 			// Thử hỏi Facebook ID thật của username, rồi so với Page đã gộp
-			anyTok := h.getAnyConnectedPageToken()
+			anyTok := h.getAnyConnectedPageToken(ws)
 			var meta struct {
 				ID string `json:"id"`
 			}
@@ -1426,7 +1426,7 @@ func (h *CompetitorHandler) exploreFacebook(t exploreTarget, cursor string, res 
 				for i := range pages {
 					if pages[i].PageID == meta.ID {
 						own = &pages[i]
-						token = h.pageTokenFor(own.PageID)
+						token = h.pageTokenFor(ws, own.PageID)
 						break
 					}
 				}
@@ -1516,7 +1516,7 @@ func (h *CompetitorHandler) exploreFacebook(t exploreTarget, cursor string, res 
 			wg.Add(1)
 			go func(i int, p models.FacebookPage) {
 				defer wg.Done()
-				tok := h.pageTokenFor(p.PageID)
+				tok := h.pageTokenFor(ws, p.PageID)
 				if tok == "" {
 					return
 				}
@@ -1583,6 +1583,7 @@ func (h *CompetitorHandler) SaveExploreItems(c *gin.Context) {
 	if len(req.Items) > 200 {
 		req.Items = req.Items[:200]
 	}
+	ws := uint(wsID(c))
 	keyword := strings.TrimSpace(req.Keyword)
 	saved := 0
 	for _, it := range req.Items {
@@ -1613,6 +1614,7 @@ func (h *CompetitorHandler) SaveExploreItems(c *gin.Context) {
 			pub = time.Unix(it.PublishedAt, 0)
 		}
 		post := models.CompetitorPost{
+			WorkspaceID: ws,
 			Platform:         it.Platform,
 			CompetitorPageID: truncateRunes(pageKey, 120),
 			CompetitorName:   truncateRunes(name, 255),
@@ -1627,7 +1629,7 @@ func (h *CompetitorHandler) SaveExploreItems(c *gin.Context) {
 			PublishedAt:      pub,
 		}
 		err := h.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "fb_post_id"}},
+			Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "permalink_url", "views_count", "likes_count", "comments_count", "shares_count", "updated_at"}),
 		}).Create(&post).Error
 		if err == nil {

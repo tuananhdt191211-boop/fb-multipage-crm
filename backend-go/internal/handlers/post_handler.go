@@ -391,14 +391,15 @@ func (h *PostHandler) uploadVideoToPage(pageID, pageToken, description, videoSou
 
 // ListScheduledPosts trả về danh sách lịch đăng bài và danh sách Fanpage đang bật
 func (h *PostHandler) ListScheduledPosts(c *gin.Context) {
+	ws := wsID(c)
 	var posts []models.ScheduledPost
-	if err := h.DB.Order("scheduled_at DESC, id DESC").Limit(100).Find(&posts).Error; err != nil {
+	if err := h.DB.Where("workspace_id = ?", ws).Order("scheduled_at DESC, id DESC").Limit(100).Find(&posts).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tải danh sách bài đăng"})
 		return
 	}
 
 	var pages []models.FacebookPage
-	_ = h.DB.Where("is_connected = ?", true).Order("name ASC").Find(&pages).Error
+	_ = h.DB.Where("is_connected = ? AND workspace_id = ?", true, ws).Order("name ASC").Find(&pages).Error
 
 	c.JSON(http.StatusOK, gin.H{
 		"posts": posts,
@@ -430,11 +431,19 @@ func (h *PostHandler) CreateScheduledPost(c *gin.Context) {
 		return
 	}
 
+	// Chỉ đăng lên các Fanpage thuộc tài khoản này (không bao giờ dùng token của khách khác)
+	ws := wsID(c)
 	var pages []models.FacebookPage
-	_ = h.DB.Where("page_id IN ?", req.PageIDs).Find(&pages).Error
+	_ = h.DB.Where("page_id IN ? AND workspace_id = ?", req.PageIDs, ws).Find(&pages).Error
+	if len(pages) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Không tìm thấy Fanpage hợp lệ để đăng bài"})
+		return
+	}
 	var pageNames []string
+	req.PageIDs = req.PageIDs[:0]
 	for _, p := range pages {
 		pageNames = append(pageNames, p.Name)
+		req.PageIDs = append(req.PageIDs, p.PageID)
 	}
 
 	schedTime := time.Now()
@@ -461,6 +470,7 @@ func (h *PostHandler) CreateScheduledPost(c *gin.Context) {
 	}
 
 	post := models.ScheduledPost{
+		WorkspaceID:   uint(ws),
 		Content:       content,
 		MediaType:     mediaType,
 		MediaURL:      mediaURL,
@@ -502,7 +512,7 @@ func (h *PostHandler) PublishNowPost(c *gin.Context) {
 	}
 
 	var post models.ScheduledPost
-	if err := h.DB.First(&post, id).Error; err != nil {
+	if err := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).First(&post).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy bài viết"})
 		return
 	}
@@ -525,7 +535,7 @@ func (h *PostHandler) DeleteScheduledPost(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID bài viết không hợp lệ"})
 		return
 	}
-	if err := h.DB.Delete(&models.ScheduledPost{}, id).Error; err != nil {
+	if err := h.DB.Where("workspace_id = ?", wsID(c)).Delete(&models.ScheduledPost{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể xóa bài viết"})
 		return
 	}

@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowUpRight,
   Bell,
+  Rocket,
   CalendarClock,
   CheckCircle2,
   Facebook,
@@ -24,6 +25,7 @@ import {
 import { api } from '../lib/api'
 import { useAuthStore } from './../stores/auth.stores'
 import type { FacebookPageItem } from '../types/page'
+import type { Feature } from '../types/auth'
 import UiLangSwitcher from '../components/UiLangSwitcher.vue'
 
 interface ConversationSummary {
@@ -37,7 +39,10 @@ interface ConversationSummary {
 }
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
+const sitesCount = ref(0)
+const deniedNotice = computed(() => route.query.denied === '1')
 
 const pages = ref<FacebookPageItem[]>([])
 const conversations = ref<ConversationSummary[]>([])
@@ -49,12 +54,21 @@ const mobileMenuOpen = ref(false)
 const currentUser = computed(() => (authStore.user || {}) as Record<string, any>)
 const userName = computed(() => currentUser.value.full_name || currentUser.value.name || 'Quản trị viên')
 const userEmail = computed(() => currentUser.value.email || '')
-const userRole = computed(() => String(currentUser.value.role || 'admin').toUpperCase())
+const roleNames: Record<string, string> = { admin: 'ADMIN', customer: 'KHÁCH HÀNG', staff: 'NHÂN VIÊN' }
+const userRole = computed(() => roleNames[String(currentUser.value.system_role || '')] || 'KHÁCH HÀNG')
 
-const canManageRoles = computed(() => {
-  const role = String(currentUser.value.role || 'admin').toLowerCase()
-  return role === 'admin' || role === 'manager'
+// Khách hàng mới có dữ liệu trống: hướng dẫn nhập dữ liệu đầu tiên (kết nối Fanpage, tạo website bán hàng)
+const onboardingSteps = computed(() => {
+  const steps: { key: string; title: string; desc: string; path: string; done: boolean }[] = []
+  if (authStore.can('pages') && authStore.isOwner) {
+    steps.push({ key: 'pages', title: 'Kết nối Fanpage Facebook', desc: 'Gộp Fanpage của bạn để nhận tin nhắn, đăng bài và chăm sóc khách tại một nơi.', path: '/pages', done: pages.value.length > 0 })
+  }
+  if (authStore.can('sites') && authStore.isOwner) {
+    steps.push({ key: 'sites', title: 'Tạo website bán hàng', desc: 'Dựng web bán hàng của bạn, thêm sản phẩm và nhận đơn hàng.', path: '/sites', done: sitesCount.value > 0 })
+  }
+  return steps
 })
+const showOnboarding = computed(() => !loadingStats.value && !authStore.viewing && onboardingSteps.value.some((s) => !s.done))
 
 const activePagesCount = computed(() => pages.value.filter((p) => p.is_connected).length)
 const totalUnreadCount = computed(() =>
@@ -65,18 +79,19 @@ const recentUnreadConversations = computed(() =>
 )
 
 const navItems = computed(() => {
-  const list = [
-    { label: 'Tổng quan', path: '/', icon: LayoutDashboard, active: true, badge: 0 },
-    { label: 'Hộp thư đa Page', path: '/inbox', icon: MessageSquare, active: false, badge: totalUnreadCount.value },
-    { label: 'CSKH tự động', path: '/broadcasts', icon: Send, active: false, badge: 0 },
-    { label: 'Phân tích đối thủ', path: '/competitors', icon: TrendingUp, active: false, badge: 0 },
-    { label: 'Lên lịch đăng bài', path: '/posts', icon: CalendarClock, active: false, badge: 0 },
-    { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0 },
-    { label: 'Website bán hàng', path: '/sites', icon: Globe, active: false, badge: 0 }
+  const all = [
+    { label: 'Tổng quan', path: '/', icon: LayoutDashboard, active: true, badge: 0, feature: '' },
+    { label: 'Hộp thư đa Page', path: '/inbox', icon: MessageSquare, active: false, badge: totalUnreadCount.value, feature: 'inbox' },
+    { label: 'CSKH tự động', path: '/broadcasts', icon: Send, active: false, badge: 0, feature: 'broadcasts' },
+    { label: 'Phân tích đối thủ', path: '/competitors', icon: TrendingUp, active: false, badge: 0, feature: 'competitors' },
+    { label: 'Lên lịch đăng bài', path: '/posts', icon: CalendarClock, active: false, badge: 0, feature: 'posts' },
+    { label: 'Gộp Fanpage', path: '/pages', icon: Layers, active: false, badge: 0, feature: 'pages' },
+    { label: 'Website bán hàng', path: '/sites', icon: Globe, active: false, badge: 0, feature: 'sites' }
   ]
-  if (canManageRoles.value) {
-    list.push({ label: 'Phân cấp & Phân quyền', path: '/roles', icon: Users, active: false, badge: 0 })
-  }
+  // Chỉ hiện các trang tài khoản này được dùng
+  const list = all.filter((i) => !i.feature || authStore.can(i.feature as Feature))
+  if (authStore.isAdmin && !authStore.viewing) list.push({ label: 'Khách hàng', path: '/admin/customers', icon: Users, active: false, badge: 0, feature: '' })
+  else if (authStore.isOwner) list.push({ label: 'Nhân viên', path: '/team', icon: Users, active: false, badge: 0, feature: '' })
   return list
 })
 
@@ -129,19 +144,31 @@ const featureModules = computed(() => {
     }
   ]
 
-  if (canManageRoles.value) {
+  if (authStore.isAdmin && !authStore.viewing) {
     items.push({
-      title: 'Phân cấp & Phân quyền nhân sự',
-      tag: 'Team & Roles',
-      path: '/roles',
-      stat: 'Quản lý truy cập',
+      title: 'Quản lý khách hàng',
+      tag: 'Admin',
+      path: '/admin/customers',
+      stat: 'Theo dõi toàn bộ khách hàng',
       icon: Users,
       iconBg: 'bg-slate-800 text-white',
-      description: 'Phân chia vai trò Quản lý và Nhân viên trực Page, kiểm soát quyền thao tác theo từng Fanpage.'
+      description: 'Xem số liệu từng khách hàng, bật / tắt trang được dùng, đặt giới hạn, khoá tài khoản hoặc xem như khách.'
+    })
+  } else if (authStore.isOwner) {
+    items.push({
+      title: 'Nhân viên của bạn',
+      tag: 'Team',
+      path: '/team',
+      stat: 'Tạo tài khoản nhân viên',
+      icon: Users,
+      iconBg: 'bg-slate-800 text-white',
+      description: 'Mời nhân viên làm việc chung trên dữ liệu của bạn và chọn trang mỗi người được dùng.'
     })
   }
 
-  return items
+  // Chỉ hiện các trang tài khoản này được dùng
+  const featureOf: Record<string, Feature> = { '/inbox': 'inbox', '/broadcasts': 'broadcasts', '/competitors': 'competitors', '/posts': 'posts', '/pages': 'pages', '/sites': 'sites' }
+  return items.filter((m) => !featureOf[m.path] || authStore.can(featureOf[m.path]!))
 })
 
 function getInitials(name: string) {
@@ -159,16 +186,23 @@ function goTo(path: string) {
 async function fetchOverviewData() {
   loadingStats.value = true
   try {
-    const [pagesRes, inboxRes] = await Promise.allSettled([
-      api.get<{ pages: FacebookPageItem[] }>('/pages'),
-      api.get<{ conversations: ConversationSummary[] }>('/inbox/conversations')
+    // Chỉ tải dữ liệu của các trang tài khoản được dùng (trang không được cấp sẽ báo 403)
+    const none = Promise.reject(new Error('no-access'))
+    none.catch(() => {})
+    const [pagesRes, inboxRes, sitesRes] = await Promise.allSettled([
+      authStore.can('pages') || authStore.can('inbox') ? api.get<{ pages: FacebookPageItem[] }>('/pages') : none,
+      authStore.can('inbox') ? api.get<{ conversations: ConversationSummary[] }>('/inbox/conversations') : none,
+      authStore.can('sites') ? api.get<{ sites: unknown[] }>('/storefront/sites') : none
     ])
 
     if (pagesRes.status === 'fulfilled') {
-      pages.value = pagesRes.value.data.pages || []
+      pages.value = (pagesRes.value as any).data.pages || []
     }
     if (inboxRes.status === 'fulfilled') {
-      conversations.value = inboxRes.value.data.conversations || []
+      conversations.value = (inboxRes.value as any).data.conversations || []
+    }
+    if (sitesRes.status === 'fulfilled') {
+      sitesCount.value = ((sitesRes.value as any).data.sites || []).length
     }
   } finally {
     loadingStats.value = false
@@ -331,6 +365,7 @@ onMounted(fetchOverviewData)
           </span>
 
           <button
+            v-if="authStore.can('inbox') && !authStore.viewing"
             @click="handleQuickSync"
             :disabled="syncingAll"
             class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800 disabled:opacity-60 cursor-pointer"
@@ -351,6 +386,22 @@ onMounted(fetchOverviewData)
 
       <!-- Main Dashboard Content -->
       <main class="mx-auto w-full max-w-6xl space-y-6 px-4 py-6 sm:px-8">
+        <p v-if="deniedNotice" data-testid="denied-notice" class="rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800 ring-1 ring-amber-200">
+          Tài khoản của bạn chưa được cấp quyền vào trang đó. Hãy liên hệ admin (hoặc chủ tài khoản) nếu bạn cần dùng.
+        </p>
+
+        <!-- Khách hàng mới: nhập dữ liệu đầu tiên -->
+        <section v-if="showOnboarding" data-testid="onboarding" class="rounded-2xl border border-emerald-200 bg-white p-5 shadow-2xs">
+          <div class="flex items-center gap-2 text-sm font-extrabold text-emerald-800"><Rocket class="h-4 w-4" /> Bắt đầu với tài khoản mới của bạn</div>
+          <p class="mt-1 text-xs text-slate-500">Tài khoản của bạn là một không gian dữ liệu riêng và đang trống. Hãy nhập dữ liệu của bạn để bắt đầu:</p>
+          <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <button v-for="s in onboardingSteps" :key="s.key" type="button" class="flex items-start gap-3 rounded-xl border p-4 text-left transition hover:border-emerald-300 hover:shadow-sm" :class="s.done ? 'border-emerald-200 bg-emerald-50/50' : 'border-slate-200'" :data-step="s.key" @click="goTo(s.path)">
+              <span class="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold" :class="s.done ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-500'">{{ s.done ? '✓' : '•' }}</span>
+              <span><span class="block text-sm font-bold text-slate-900">{{ s.title }}</span><span class="block text-xs text-slate-500">{{ s.desc }}</span></span>
+            </button>
+          </div>
+        </section>
+
         <!-- Compact & Balanced Hero Banner -->
         <section class="relative overflow-hidden rounded-2xl bg-gradient-to-r from-emerald-800 via-emerald-700 to-teal-700 p-6 sm:p-7 text-white shadow-sm">
           <div class="pointer-events-none absolute -right-10 -top-10 h-48 w-48 rounded-full bg-white/10 blur-2xl"></div>
@@ -371,6 +422,7 @@ onMounted(fetchOverviewData)
 
             <div class="flex flex-wrap items-center gap-2.5 shrink-0">
               <button
+                v-if="authStore.can('inbox')"
                 @click="goTo('/inbox')"
                 class="inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-white px-4 py-2.5 text-xs font-bold text-emerald-800 shadow-xs transition hover:bg-emerald-50 cursor-pointer"
               >
@@ -379,6 +431,7 @@ onMounted(fetchOverviewData)
               </button>
 
               <button
+                v-if="authStore.can('broadcasts')"
                 @click="goTo('/broadcasts')"
                 class="inline-flex items-center gap-2 whitespace-nowrap rounded-xl bg-emerald-950/35 px-4 py-2.5 text-xs font-semibold text-white ring-1 ring-white/25 transition hover:bg-emerald-950/50 cursor-pointer"
               >

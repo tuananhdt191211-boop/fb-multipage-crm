@@ -377,8 +377,12 @@ func (h *StorefrontHandler) CreateSite(c *gin.Context) {
 
 	var count int64
 	h.DB.Model(&models.Storefront{}).Where("user_id = ?", uid).Count(&count)
-	if count >= maxSitesPerUser {
-		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("Bạn đã đạt giới hạn %d website.", maxSitesPerUser)})
+	limit := int64(maxSitesPerUser)
+	if t := tenantOf(c); t.MaxSites > 0 && int64(t.MaxSites) < limit {
+		limit = int64(t.MaxSites) // giới hạn riêng do admin đặt cho khách hàng này
+	}
+	if count >= limit {
+		c.JSON(http.StatusForbidden, gin.H{"error": fmt.Sprintf("Bạn đã đạt giới hạn %d website.", limit), "code": "limit_reached"})
 		return
 	}
 

@@ -71,7 +71,7 @@ func (h *FacebookPageHandler) exchangeToLongLivedUserToken(shortToken string) st
 
 func (h *FacebookPageHandler) ListPages(c *gin.Context) {
 	var pages []models.FacebookPage
-	if err := h.DB.Order("created_at DESC").Find(&pages).Error; err != nil {
+	if err := h.DB.Where("workspace_id = ?", wsID(c)).Order("created_at DESC").Find(&pages).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tải danh sách Fanpage"})
 		return
 	}
@@ -86,7 +86,25 @@ type connectManualPageReq struct {
 	AccessToken string `json:"access_token" binding:"required"`
 }
 
+// pageLimitReached: khách hàng đã dùng hết số Fanpage được cấp (0 = không giới hạn)
+func (h *FacebookPageHandler) pageLimitReached(ws int64, max int, adding int64) bool {
+	if max <= 0 {
+		return false
+	}
+	var n int64
+	h.DB.Model(&models.FacebookPage{}).Where("workspace_id = ?", ws).Count(&n)
+	return n+adding > int64(max)
+}
+
+const msgPageTaken = "Fanpage này đã được kết nối bởi một tài khoản khác."
+
+func msgPageLimit(max int) string {
+	return fmt.Sprintf("Tài khoản của bạn chỉ được kết nối tối đa %d Fanpage. Hãy liên hệ admin để nâng giới hạn.", max)
+}
+
 func (h *FacebookPageHandler) ConnectPage(c *gin.Context) {
+	ws := wsID(c)
+	tn := tenantOf(c)
 	var req connectManualPageReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng nhập đầy đủ Page ID, Tên Page và Page Access Token"})
@@ -110,6 +128,11 @@ func (h *FacebookPageHandler) ConnectPage(c *gin.Context) {
 
 	var existing models.FacebookPage
 	if h.DB.Where("page_id = ?", pageID).First(&existing).Error == nil {
+		if existing.WorkspaceID != 0 && int64(existing.WorkspaceID) != ws {
+			c.JSON(http.StatusConflict, gin.H{"error": msgPageTaken})
+			return
+		}
+		existing.WorkspaceID = uint(ws)
 		existing.Name = name
 		existing.Category = category
 		if avatar != "" {
@@ -125,7 +148,12 @@ func (h *FacebookPageHandler) ConnectPage(c *gin.Context) {
 		return
 	}
 
+	if h.pageLimitReached(ws, tn.MaxPages, 1) {
+		c.JSON(http.StatusForbidden, gin.H{"error": msgPageLimit(tn.MaxPages), "code": "limit_reached"})
+		return
+	}
 	newPage := models.FacebookPage{
+		WorkspaceID:        uint(ws),
 		PageID:             pageID,
 		Name:               name,
 		Category:           category,
@@ -145,6 +173,8 @@ type syncGraphPagesReq struct {
 }
 
 func (h *FacebookPageHandler) SyncFromFacebook(c *gin.Context) {
+	ws := wsID(c)
+	tn := tenantOf(c)
 	var req syncGraphPagesReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Vui lòng nhập User Access Token"})
@@ -159,6 +189,8 @@ func (h *FacebookPageHandler) SyncFromFacebook(c *gin.Context) {
 
 	syncedCount := 0
 	skippedNoToken := 0
+	skippedTaken := 0
+	skippedLimit := 0
 
 	// Lặp qua toàn bộ các trang paging.next để lấy sạch 100% Fanpage trong Via
 	for nextURL != "" {
@@ -224,6 +256,11 @@ func (h *FacebookPageHandler) SyncFromFacebook(c *gin.Context) {
 
 			var page models.FacebookPage
 			if h.DB.Where("page_id = ?", item.ID).First(&page).Error == nil {
+				if page.WorkspaceID != 0 && int64(page.WorkspaceID) != ws {
+					skippedTaken++ // Fanpage đang thuộc về tài khoản khác
+					continue
+				}
+				page.WorkspaceID = uint(ws)
 				page.Name = item.Name
 				page.Category = item.Category
 				page.AvatarURL = avatar
@@ -231,7 +268,12 @@ func (h *FacebookPageHandler) SyncFromFacebook(c *gin.Context) {
 				page.IsConnected = true
 				_ = h.DB.Save(&page).Error
 			} else {
+				if h.pageLimitReached(ws, tn.MaxPages, 1) {
+					skippedLimit++
+					continue
+				}
 				_ = h.DB.Create(&models.FacebookPage{
+					WorkspaceID:        uint(ws),
 					PageID:             item.ID,
 					Name:               item.Name,
 					Category:           item.Category,
@@ -255,6 +297,13 @@ func (h *FacebookPageHandler) SyncFromFacebook(c *gin.Context) {
 		msg += fmt.Sprintf(" (Bỏ qua %d Page do Via chưa có quyền quản lý tin nhắn/token)", skippedNoToken)
 	}
 
+	if skippedTaken > 0 {
+		msg += fmt.Sprintf(" (Bỏ qua %d Page đã được tài khoản khác kết nối)", skippedTaken)
+	}
+	if skippedLimit > 0 {
+		msg += fmt.Sprintf(" (Bỏ qua %d Page vì đã đạt giới hạn %d Fanpage của tài khoản)", skippedLimit, tn.MaxPages)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message": msg,
 		"synced":  syncedCount,
@@ -268,7 +317,7 @@ func (h *FacebookPageHandler) TogglePage(c *gin.Context) {
 		return
 	}
 	var page models.FacebookPage
-	if err := h.DB.First(&page, id).Error; err != nil {
+	if err := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).First(&page).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy Fanpage"})
 		return
 	}
@@ -286,7 +335,7 @@ func (h *FacebookPageHandler) DisconnectPage(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID không hợp lệ"})
 		return
 	}
-	if err := h.DB.Delete(&models.FacebookPage{}, id).Error; err != nil {
+	if err := h.DB.Where("workspace_id = ?", wsID(c)).Delete(&models.FacebookPage{}, id).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể gỡ Fanpage"})
 		return
 	}

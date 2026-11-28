@@ -85,6 +85,9 @@ func (h *InboxHandler) startAutoSyncWorker() {
 			continue
 		}
 		for _, page := range pages {
+			if !inboxActive(int64(page.WorkspaceID), 2*time.Minute) {
+				continue // khách hàng này không đang xem hộp thư: không tốn lượt gọi Facebook
+			}
 			if page.WebhookSubscribed && time.Since(lastSync[page.PageID]) < webhookPageEvery {
 				continue
 			}
@@ -99,7 +102,7 @@ func (h *InboxHandler) startAutoSyncWorker() {
 // bg=1: tab đang ẩn / người dùng đã rảnh -> không tính là "đang xem", nên không bật đồng bộ nền.
 func (h *InboxHandler) InboxRev(c *gin.Context) {
 	if c.Query("bg") != "1" {
-		markInboxUse()
+		markInboxUse(wsID(c))
 	}
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, gin.H{"rev": inboxrev.Current()})
@@ -123,11 +126,12 @@ func sanitizeAvatarURL(raw string) string {
 
 // ListConversations trả về danh sách hội thoại đã gộp từ tất cả Page đang bật (kèm trạng thái chăm sóc khách)
 func (h *InboxHandler) ListConversations(c *gin.Context) {
-	markInboxUse() // đang có người xem hộp thư -> bật đồng bộ nền
+	ws := wsID(c)
+	markInboxUse(ws) // đang có người xem hộp thư -> bật đồng bộ nền
 	pageID := strings.TrimSpace(c.Query("page_id"))
 	search := strings.TrimSpace(c.Query("q"))
 
-	query := h.DB.Model(&conversationWithCRM{})
+	query := h.DB.Model(&conversationWithCRM{}).Where("workspace_id = ?", ws)
 	if pageID != "" && pageID != "all" {
 		query = query.Where("page_id = ?", pageID)
 	}
@@ -153,7 +157,7 @@ func (h *InboxHandler) ListConversations(c *gin.Context) {
 	}
 
 	var pages []models.FacebookPage
-	_ = h.DB.Where("is_connected = ?", true).Order("name ASC").Find(&pages).Error
+	_ = h.DB.Where("is_connected = ? AND workspace_id = ?", true, ws).Order("name ASC").Find(&pages).Error
 	for i := range pages {
 		pages[i].AvatarURL = sanitizeAvatarURL(pages[i].AvatarURL)
 	}
@@ -505,6 +509,7 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 				CustomerPSID:    customerID,
 				CustomerName:    customerName,
 				CustomerAvatar:  "",
+				WorkspaceID:     page.WorkspaceID,
 				LastMessage:     lastMsgText,
 				LastMessageTime: updatedAt,
 				UnreadCount:     thread.UnreadCount,
@@ -615,7 +620,7 @@ func (h *InboxHandler) syncSinglePageConversations(page models.FacebookPage, lim
 func (h *InboxHandler) SyncMessages(c *gin.Context) {
 	targetPageID := strings.TrimSpace(c.Query("page_id"))
 
-	query := h.DB.Where("is_connected = ?", true)
+	query := h.DB.Where("is_connected = ? AND workspace_id = ?", true, wsID(c))
 	if targetPageID != "" && targetPageID != "all" {
 		query = query.Where("page_id = ?", targetPageID)
 	}
@@ -652,7 +657,7 @@ func (h *InboxHandler) SyncMessages(c *gin.Context) {
 
 // GetMessages lấy lịch sử tin nhắn của một hội thoại và đánh dấu đã đọc
 func (h *InboxHandler) GetMessages(c *gin.Context) {
-	markInboxUse()
+	markInboxUse(wsID(c))
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil || id <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ID hội thoại không hợp lệ"})
@@ -660,7 +665,7 @@ func (h *InboxHandler) GetMessages(c *gin.Context) {
 	}
 
 	var conv conversationWithCRM
-	convRes := h.DB.Where("id = ?", id).Limit(1).Find(&conv)
+	convRes := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).Limit(1).Find(&conv)
 	if convRes.Error != nil || convRes.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy hội thoại"})
 		return
@@ -719,14 +724,14 @@ func (h *InboxHandler) SendMessage(c *gin.Context) {
 	}
 
 	var conv models.Conversation
-	convRes := h.DB.Where("id = ?", id).Limit(1).Find(&conv)
+	convRes := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).Limit(1).Find(&conv)
 	if convRes.Error != nil || convRes.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy hội thoại"})
 		return
 	}
 
 	var page models.FacebookPage
-	pageRes := h.DB.Where("page_id = ?", conv.PageID).Limit(1).Find(&page)
+	pageRes := h.DB.Where("page_id = ? AND workspace_id = ?", conv.PageID, wsID(c)).Limit(1).Find(&page)
 	if pageRes.Error != nil || pageRes.RowsAffected == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy Fanpage quản lý hội thoại này"})
 		return
@@ -910,7 +915,7 @@ func (h *InboxHandler) UpdateConversationCRM(c *gin.Context) {
 	}
 
 	var conv conversationWithCRM
-	if err := h.DB.First(&conv, id).Error; err != nil {
+	if err := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).First(&conv).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy hội thoại"})
 		return
 	}

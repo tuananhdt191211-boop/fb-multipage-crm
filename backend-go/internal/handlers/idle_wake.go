@@ -5,6 +5,7 @@ package handlers
 // làm hết hạn mức gói miễn phí. Giờ: khi rảnh thì ngủ dài, khi có việc thì được đánh thức ngay.
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -48,7 +49,23 @@ var (
 	lastWebhookMsg atomic.Int64
 )
 
-func markInboxUse()   { lastInboxUse.Store(time.Now().Unix()) }
+// Mỗi khách hàng (workspace) có mốc "đang xem hộp thư" riêng: đồng bộ nền chỉ chạy cho khách đang xem
+var inboxUseByWS sync.Map // workspace id (int64) -> unix giây
+
+func markInboxUse(ws int64) {
+	now := time.Now().Unix()
+	lastInboxUse.Store(now)
+	inboxUseByWS.Store(ws, now)
+}
+
+func inboxActive(ws int64, d time.Duration) bool {
+	v, ok := inboxUseByWS.Load(ws)
+	if !ok {
+		return false
+	}
+	return time.Since(time.Unix(v.(int64), 0)) < d
+}
+
 func markWebhookMsg() { lastWebhookMsg.Store(time.Now().Unix()) }
 
 func within(ts *atomic.Int64, d time.Duration) bool {

@@ -319,12 +319,16 @@ func (h *AIHandler) callUniversalChatAI(systemPrompt, userPrompt string, jsonMod
 // ListAllPageSettings trả về danh sách nhãn sản phẩm & màu sắc của tất cả Fanpage
 func (h *AIHandler) ListAllPageSettings(c *gin.Context) {
 	var settings []models.PageAISetting
-	_ = h.DB.Find(&settings).Error
+	_ = h.DB.Where("page_id IN (?)", wsPageIDs(h.DB, wsID(c))).Find(&settings).Error
 	c.JSON(http.StatusOK, gin.H{"settings": settings})
 }
 
 func (h *AIHandler) GetPageSetting(c *gin.Context) {
 	pageID := strings.TrimSpace(c.Param("page_id"))
+	if _, ok := ownedPage(h.DB, wsID(c), pageID); !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy Fanpage"})
+		return
+	}
 	var setting models.PageAISetting
 	res := h.DB.Where("page_id = ?", pageID).Limit(1).Find(&setting)
 	if res.Error != nil || res.RowsAffected == 0 {
@@ -352,6 +356,10 @@ type updateAISettingReq struct {
 
 func (h *AIHandler) SavePageSetting(c *gin.Context) {
 	pageID := strings.TrimSpace(c.Param("page_id"))
+	if _, ok := ownedPage(h.DB, wsID(c), pageID); !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy Fanpage"})
+		return
+	}
 	var req updateAISettingReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Dữ liệu cấu hình AI không hợp lệ"})
@@ -462,7 +470,7 @@ func (h *AIHandler) SuggestReply(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	var conv models.Conversation
-	if err := h.DB.First(&conv, convID).Error; err != nil {
+	if err := h.DB.Where("id = ? AND workspace_id = ?", convID, wsID(c)).First(&conv).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy hội thoại"})
 		return
 	}

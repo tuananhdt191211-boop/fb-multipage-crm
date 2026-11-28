@@ -4,6 +4,7 @@ import "time"
 
 type ScheduledPost struct {
 	ID             uint      `gorm:"primaryKey" json:"id"`
+	WorkspaceID    uint      `gorm:"index;default:0" json:"workspace_id"` // khách hàng sở hữu bài đăng
 	Content        string    `gorm:"type:text;not null" json:"content"`
 	MediaType      string    `gorm:"size:20;default:'none'" json:"media_type"` // none | image | video
 	MediaURL       string    `gorm:"type:text" json:"media_url"`

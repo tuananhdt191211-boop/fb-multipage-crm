@@ -31,6 +31,7 @@ import {
 import { api } from '../lib/api'
 import { uiLocaleTag } from '../lib/uiI18n'
 import AIConfigModal from '../components/AIConfigModal.vue'
+import { useAuthStore } from '../stores/auth.stores'
 import type { FacebookPageItem } from '../types/page'
 
 interface ConversationItem {
@@ -97,6 +98,7 @@ const router = useRouter()
 const showMobileDrawer = ref(false)
 const rightPanelTab = ref<'crm' | 'templates' | 'ai'>('crm')
 const showAIConfig = ref(false)
+const authStore = useAuthStore() // khoá AI dùng chung của hệ thống: chỉ admin chỉnh
 
 const pages = ref<FacebookPageItem[]>([])
 const conversations = ref<ConversationItem[]>([])
@@ -1451,6 +1453,7 @@ onUnmounted(() => {
 
       <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
         <button
+          v-if="authStore.isAdmin && !authStore.viewing"
           @click="showAIConfig = true"
           class="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800 cursor-pointer"
           title="Cài đặt API Key AI"

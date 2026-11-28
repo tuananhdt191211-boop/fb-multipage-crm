@@ -46,6 +46,9 @@ func buildCompetitorHTTPClient() *http.Client {
 }
 
 func NewCompetitorHandler(db *gorm.DB, cfg *config.Config) *CompetitorHandler {
+	// Mỗi khách hàng có danh sách đối thủ riêng: khoá duy nhất theo (workspace_id, page_id) / (workspace_id, fb_post_id)
+	_ = db.Exec(`DROP INDEX IF EXISTS idx_competitor_pages_page_id`).Error
+	_ = db.Exec(`DROP INDEX IF EXISTS idx_competitor_posts_fb_post_id`).Error
 	_ = db.AutoMigrate(&models.CompetitorPage{}, &models.CompetitorPost{})
 	return &CompetitorHandler{
 		DB:         db,
@@ -61,9 +64,10 @@ func (h *CompetitorHandler) encKey() string {
 	return "default-dev-master-key-change-in-prod"
 }
 
-func (h *CompetitorHandler) getAnyConnectedPageToken() string {
+// getAnyConnectedPageToken: token của một Fanpage ĐANG KẾT NỐI của đúng khách hàng này (không dùng Fanpage của khách khác)
+func (h *CompetitorHandler) getAnyConnectedPageToken(ws uint) string {
 	var page models.FacebookPage
-	if err := h.DB.Where("is_connected = ? AND encrypted_page_token <> ''", true).First(&page).Error; err != nil {
+	if err := h.DB.Where("is_connected = ? AND workspace_id = ? AND encrypted_page_token <> ''", true, ws).First(&page).Error; err != nil {
 		return ""
 	}
 	tok, err := security.DecryptSecret(page.EncryptedPageToken, h.encKey())
@@ -203,11 +207,12 @@ func (h *CompetitorHandler) resolveYouTubeChannel(identifier, pageURL string) (s
 
 // ListCompetitors trả về danh sách kênh đối thủ (FB, YouTube, TikTok) & các bài/video đã thu thập
 func (h *CompetitorHandler) ListCompetitors(c *gin.Context) {
+	ws := wsID(c)
 	var competitors []models.CompetitorPage
-	_ = h.DB.Order("created_at DESC").Find(&competitors).Error
+	_ = h.DB.Where("workspace_id = ?", ws).Order("created_at DESC").Find(&competitors).Error
 
 	var posts []models.CompetitorPost
-	query := h.DB.Order("published_at DESC, id DESC").Limit(300)
+	query := h.DB.Where("workspace_id = ?", ws).Order("published_at DESC, id DESC").Limit(300)
 	if compID := strings.TrimSpace(c.Query("competitor_page_id")); compID != "" && compID != "all" {
 		query = query.Where("competitor_page_id = ?", compID)
 	}
@@ -265,7 +270,7 @@ func (h *CompetitorHandler) AddCompetitor(c *gin.Context) {
 		}
 
 	case "facebook":
-		if token := h.getAnyConnectedPageToken(); token != "" {
+		if token := h.getAnyConnectedPageToken(uint(wsID(c))); token != "" {
 			apiURL := fmt.Sprintf(
 				"https://graph.facebook.com/v21.0/%s?fields=id,name,category,link,picture.type(large)&access_token=%s",
 				url.PathEscape(identifier),
@@ -308,6 +313,7 @@ func (h *CompetitorHandler) AddCompetitor(c *gin.Context) {
 
 	uniqueKey := fmt.Sprintf("%s:%s", platform, resolvedID)
 	comp := models.CompetitorPage{
+		WorkspaceID: uint(wsID(c)),
 		Platform:  platform,
 		PageID:    uniqueKey,
 		Name:      resolvedName,
@@ -318,7 +324,7 @@ func (h *CompetitorHandler) AddCompetitor(c *gin.Context) {
 	}
 
 	if err := h.DB.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "page_id"}},
+		Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "page_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"platform", "name", "page_url", "avatar_url", "category", "notes", "updated_at"}),
 	}).Create(&comp).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể lưu kênh đối thủ"})
@@ -340,7 +346,7 @@ func (h *CompetitorHandler) SyncCompetitorPosts(c *gin.Context) {
 	}
 
 	var comp models.CompetitorPage
-	if err := h.DB.First(&comp, id).Error; err != nil {
+	if err := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).First(&comp).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy kênh đối thủ"})
 		return
 	}
@@ -438,6 +444,7 @@ func (h *CompetitorHandler) syncYouTubeFeed(c *gin.Context, comp *models.Competi
 		}
 
 		post := models.CompetitorPost{
+			WorkspaceID: comp.WorkspaceID,
 			Platform:         "youtube",
 			CompetitorPageID: comp.PageID,
 			CompetitorName:   comp.Name,
@@ -451,7 +458,7 @@ func (h *CompetitorHandler) syncYouTubeFeed(c *gin.Context, comp *models.Competi
 		}
 
 		if err := h.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "fb_post_id"}},
+			Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "views_count", "likes_count", "updated_at"}),
 		}).Create(&post).Error; err == nil {
 			savedCount++
@@ -579,6 +586,7 @@ func (h *CompetitorHandler) fetchTikTokChannelVideosPaginated(comp *models.Compe
 			}
 
 			post := models.CompetitorPost{
+				WorkspaceID: comp.WorkspaceID,
 				Platform:         "tiktok",
 				CompetitorPageID: comp.PageID,
 				CompetitorName:   comp.Name,
@@ -594,7 +602,7 @@ func (h *CompetitorHandler) fetchTikTokChannelVideosPaginated(comp *models.Compe
 			}
 
 			if err := h.DB.Clauses(clause.OnConflict{
-				Columns:   []clause.Column{{Name: "fb_post_id"}},
+				Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 				DoUpdates: clause.AssignmentColumns([]string{"competitor_name", "content", "full_picture", "views_count", "likes_count", "comments_count", "shares_count", "updated_at"}),
 			}).Create(&post).Error; err == nil {
 				savedCount++
@@ -684,6 +692,7 @@ func (h *CompetitorHandler) syncTikTokProfile(c *gin.Context, comp *models.Compe
 								comp.Name = oData.AuthorName
 							}
 							post := models.CompetitorPost{
+								WorkspaceID: comp.WorkspaceID,
 								Platform:         "tiktok",
 								CompetitorPageID: comp.PageID,
 								CompetitorName:   comp.Name,
@@ -694,7 +703,7 @@ func (h *CompetitorHandler) syncTikTokProfile(c *gin.Context, comp *models.Compe
 								PublishedAt:      time.Now(),
 							}
 							if err := h.DB.Clauses(clause.OnConflict{
-								Columns:   []clause.Column{{Name: "fb_post_id"}},
+								Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 								DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "updated_at"}),
 							}).Create(&post).Error; err == nil {
 								savedCount++
@@ -761,6 +770,7 @@ func (h *CompetitorHandler) saveTikTokItems(comp *models.CompetitorPage, usernam
 		}
 
 		post := models.CompetitorPost{
+			WorkspaceID: comp.WorkspaceID,
 			Platform:         "tiktok",
 			CompetitorPageID: comp.PageID,
 			CompetitorName:   comp.Name,
@@ -776,7 +786,7 @@ func (h *CompetitorHandler) saveTikTokItems(comp *models.CompetitorPage, usernam
 		}
 
 		if err := h.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "fb_post_id"}},
+			Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"content", "views_count", "likes_count", "comments_count", "shares_count", "updated_at"}),
 		}).Create(&post).Error; err == nil {
 			count++
@@ -787,9 +797,9 @@ func (h *CompetitorHandler) saveTikTokItems(comp *models.CompetitorPage, usernam
 
 func (h *CompetitorHandler) syncFacebookPage(c *gin.Context, comp *models.CompetitorPage, pageID string) {
 	// Ưu tiên token của đúng Page đó (Page đã gộp); token Page khác không đọc được bài
-	token := h.pageTokenFor(pageID)
+	token := h.pageTokenFor(comp.WorkspaceID, pageID)
 	if token == "" {
-		token = h.getAnyConnectedPageToken()
+		token = h.getAnyConnectedPageToken(comp.WorkspaceID)
 	}
 	if token == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Cần kết nối ít nhất 1 Fanpage của bạn trước để lấy token"})
@@ -855,6 +865,7 @@ func (h *CompetitorHandler) syncFacebookPage(c *gin.Context, comp *models.Compet
 		}
 
 		post := models.CompetitorPost{
+			WorkspaceID: comp.WorkspaceID,
 			Platform:         "facebook",
 			CompetitorPageID: comp.PageID,
 			CompetitorName:   comp.Name,
@@ -869,7 +880,7 @@ func (h *CompetitorHandler) syncFacebookPage(c *gin.Context, comp *models.Compet
 		}
 
 		if err := h.DB.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "fb_post_id"}},
+			Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "likes_count", "comments_count", "shares_count", "updated_at"}),
 		}).Create(&post).Error; err == nil {
 			savedCount++
@@ -903,7 +914,7 @@ func (h *CompetitorHandler) CreateManualCompetitorPost(c *gin.Context) {
 	}
 
 	var comp models.CompetitorPage
-	if err := h.DB.Where("page_id = ?", req.CompetitorPageID).First(&comp).Error; err != nil {
+	if err := h.DB.Where("page_id = ? AND workspace_id = ?", req.CompetitorPageID, wsID(c)).First(&comp).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy kênh đối thủ"})
 		return
 	}
@@ -941,6 +952,7 @@ func (h *CompetitorHandler) CreateManualCompetitorPost(c *gin.Context) {
 	}
 
 	post := models.CompetitorPost{
+		WorkspaceID: comp.WorkspaceID,
 		Platform:         comp.Platform,
 		CompetitorPageID: comp.PageID,
 		CompetitorName:   comp.Name,
@@ -979,7 +991,7 @@ func (h *CompetitorHandler) AnalyzeAndRemixPost(c *gin.Context) {
 	}
 
 	var post models.CompetitorPost
-	if err := h.DB.First(&post, id).Error; err != nil {
+	if err := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).First(&post).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy nội dung đối thủ"})
 		return
 	}
@@ -1096,6 +1108,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 		platform = "all"
 	}
 
+	ws := uint(wsID(c))
 	savedCount := 0
 	kwLower := strings.ToLower(keyword)
 
@@ -1141,6 +1154,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 								author = "YouTube Search"
 							}
 							post := models.CompetitorPost{
+								WorkspaceID: ws,
 								Platform:         "youtube",
 								CompetitorPageID: "kw_yt_" + keyword,
 								CompetitorName:   fmt.Sprintf("%s (Từ khóa: %s)", author, keyword),
@@ -1151,7 +1165,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 								PublishedAt:      time.Now(),
 							}
 							if err := h.DB.Clauses(clause.OnConflict{
-								Columns:   []clause.Column{{Name: "fb_post_id"}},
+								Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 								DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "updated_at"}),
 							}).Create(&post).Error; err == nil {
 								savedCount++
@@ -1220,6 +1234,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 					}
 
 					post := models.CompetitorPost{
+						WorkspaceID: ws,
 						Platform:         "tiktok",
 						CompetitorPageID: "kw_tt_" + keyword,
 						CompetitorName:   fmt.Sprintf("%s (Từ khóa: %s)", authorName, keyword),
@@ -1235,7 +1250,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 					}
 
 					if err := h.DB.Clauses(clause.OnConflict{
-						Columns:   []clause.Column{{Name: "fb_post_id"}},
+						Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 						DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "views_count", "likes_count", "comments_count", "shares_count", "updated_at"}),
 					}).Create(&post).Error; err == nil {
 						savedCount++
@@ -1287,6 +1302,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 									author = "@" + user
 								}
 								post := models.CompetitorPost{
+									WorkspaceID: ws,
 									Platform:         "tiktok",
 									CompetitorPageID: "kw_tt_" + keyword,
 									CompetitorName:   fmt.Sprintf("%s (Từ khóa: %s)", author, keyword),
@@ -1297,7 +1313,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 									PublishedAt:      time.Now(),
 								}
 								if err := h.DB.Clauses(clause.OnConflict{
-									Columns:   []clause.Column{{Name: "fb_post_id"}},
+									Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 									DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "updated_at"}),
 								}).Create(&post).Error; err == nil {
 									savedCount++
@@ -1318,12 +1334,12 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 	fbMatchedCount := 0
 	if platform == "all" || platform == "facebook" {
 		var existingFB []models.CompetitorPost
-		_ = h.DB.Where("platform = ? AND LOWER(content) LIKE ?", "facebook", "%"+kwLower+"%").Find(&existingFB).Error
+		_ = h.DB.Where("workspace_id = ? AND platform = ? AND LOWER(content) LIKE ?", ws, "facebook", "%"+kwLower+"%").Find(&existingFB).Error
 		fbMatchedCount = len(existingFB)
 
-		if token := h.getAnyConnectedPageToken(); token != "" {
+		if token := h.getAnyConnectedPageToken(ws); token != "" {
 			var myPages []models.FacebookPage
-			_ = h.DB.Where("is_connected = ?", true).Limit(10).Find(&myPages).Error
+			_ = h.DB.Where("is_connected = ? AND workspace_id = ?", true, ws).Limit(10).Find(&myPages).Error
 			for _, p := range myPages {
 				apiURL := fmt.Sprintf(
 					"https://graph.facebook.com/v21.0/%s/posts?fields=id,message,created_time,permalink_url,full_picture,shares,likes.summary(true),comments.summary(true)&limit=10&access_token=%s",
@@ -1369,6 +1385,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 							pubTime = t
 						}
 						post := models.CompetitorPost{
+							WorkspaceID: ws,
 							Platform:         "facebook",
 							CompetitorPageID: "fb_page_" + p.PageID,
 							CompetitorName:   p.Name,
@@ -1382,7 +1399,7 @@ func (h *CompetitorHandler) SearchByKeyword(c *gin.Context) {
 							PublishedAt:      pubTime,
 						}
 						if err := h.DB.Clauses(clause.OnConflict{
-							Columns:   []clause.Column{{Name: "fb_post_id"}},
+							Columns:   []clause.Column{{Name: "workspace_id"}, {Name: "fb_post_id"}},
 							DoUpdates: clause.AssignmentColumns([]string{"content", "full_picture", "likes_count", "comments_count", "shares_count", "updated_at"}),
 						}).Create(&post).Error; err == nil {
 							savedCount++
@@ -1420,8 +1437,8 @@ func (h *CompetitorHandler) DeleteCompetitor(c *gin.Context) {
 		return
 	}
 	var comp models.CompetitorPage
-	if err := h.DB.First(&comp, id).Error; err == nil {
-		_ = h.DB.Where("competitor_page_id = ?", comp.PageID).Delete(&models.CompetitorPost{}).Error
+	if err := h.DB.Where("id = ? AND workspace_id = ?", id, wsID(c)).First(&comp).Error; err == nil {
+		_ = h.DB.Where("competitor_page_id = ? AND workspace_id = ?", comp.PageID, comp.WorkspaceID).Delete(&models.CompetitorPost{}).Error
 		_ = h.DB.Delete(&comp).Error
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Đã xóa kênh đối thủ"})

@@ -1,10 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { api } from './../lib/api'
-import type { AuthResponse, LoginPayload, RegisterPayload, User } from './../types/auth'
+import type { AuthResponse, Feature, LoginPayload, RegisterPayload, Tenant, User } from './../types/auth'
 
 const TOKEN_KEY = 'access_token'
 const USER_KEY = 'auth_user'
+const TENANT_KEY = 'auth_tenant'
+const VIEW_AS_KEY = 'pp_view_as' // id khách hàng mà admin đang xem như (chỉ đọc); api.ts gắn vào header X-Workspace
+const VIEW_AS_NAME_KEY = 'pp_view_as_name'
 const DEFAULT_API_BASE_URL = 'https://fb-crm-backend.onrender.com/api/v1'
 
 function normalizeApiBaseUrl(raw?: string): string {
@@ -42,16 +45,34 @@ function loadStoredUser(): User | null {
   }
 }
 
+function loadStoredTenant(): Tenant | null {
+  try {
+    const raw = localStorage.getItem(TENANT_KEY)
+    return raw ? (JSON.parse(raw) as Tenant) : null
+  } catch {
+    return null
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem(TOKEN_KEY))
   const user = ref<User | null>(loadStoredUser())
+  const tenant = ref<Tenant | null>(loadStoredTenant())
+  const viewAsId = ref<number>(Number(localStorage.getItem(VIEW_AS_KEY)) || 0)
+  const viewAsName = ref<string>(localStorage.getItem(VIEW_AS_NAME_KEY) || '')
   const loading = ref(false)
   const error = ref<string | null>(null)
 
   const isAuthenticated = computed(() => Boolean(token.value))
   const isAdmin = computed(() => user.value?.system_role === 'admin')
-  const isManager = computed(() => user.value?.system_role === 'manager')
-  const canManageRoles = computed(() => isAdmin.value || isManager.value)
+  const isStaff = computed(() => user.value?.system_role === 'staff')
+  // Chủ không gian dữ liệu (khách hàng, hoặc admin trong không gian của mình): được quản lý nhân viên, kết nối Fanpage...
+  const isOwner = computed(() => (tenant.value ? tenant.value.is_owner || tenant.value.viewing : !isStaff.value))
+  const viewing = computed(() => Boolean(tenant.value?.viewing))
+  // Trang được dùng; chưa tải xong (chưa biết) thì tạm cho phép — máy chủ vẫn kiểm tra thật
+  function can(feature: Feature): boolean {
+    return tenant.value ? tenant.value.features.includes(feature) : true
+  }
 
   function setSession(newToken: string, newUser?: User | null) {
     token.value = newToken
@@ -65,8 +86,14 @@ export const useAuthStore = defineStore('auth', () => {
   function clearSession() {
     token.value = null
     user.value = null
+    tenant.value = null
+    viewAsId.value = 0
+    viewAsName.value = ''
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+    localStorage.removeItem(TENANT_KEY)
+    localStorage.removeItem(VIEW_AS_KEY)
+    localStorage.removeItem(VIEW_AS_NAME_KEY)
   }
 
   async function login(payload: LoginPayload) {
@@ -103,14 +130,40 @@ export const useAuthStore = defineStore('auth', () => {
   async function fetchMe() {
     if (!token.value) return false
     try {
-      const { data } = await api.get<{ user: User }>('/auth/me')
+      const { data } = await api.get<{ user: User; tenant?: Tenant }>('/auth/me')
       user.value = data.user
       localStorage.setItem(USER_KEY, JSON.stringify(data.user))
+      tenant.value = data.tenant || null
+      if (data.tenant) localStorage.setItem(TENANT_KEY, JSON.stringify(data.tenant))
+      else localStorage.removeItem(TENANT_KEY)
       return true
-    } catch {
-      clearSession()
-      return false
+    } catch (err: any) {
+      const status = err?.response?.status
+      // Khách hàng đang xem không tồn tại / không xem được: bỏ chế độ xem thay vì đăng xuất admin
+      if (viewAsId.value && status && status !== 401) {
+        stopViewAs()
+        return fetchMe()
+      }
+      // Chỉ đăng xuất khi máy chủ báo phiên không hợp lệ; lỗi mạng / bảo trì thì giữ phiên
+      if (status === 401) clearSession()
+      return status === 401 ? false : Boolean(user.value)
     }
+  }
+
+  // Admin xem như khách hàng (chỉ đọc)
+  async function startViewAs(id: number, name: string) {
+    viewAsId.value = id
+    viewAsName.value = name
+    localStorage.setItem(VIEW_AS_KEY, String(id))
+    localStorage.setItem(VIEW_AS_NAME_KEY, name)
+    return fetchMe()
+  }
+
+  function stopViewAs() {
+    viewAsId.value = 0
+    viewAsName.value = ''
+    localStorage.removeItem(VIEW_AS_KEY)
+    localStorage.removeItem(VIEW_AS_NAME_KEY)
   }
 
   async function handleOAuthCallback(oauthToken: string) {
@@ -133,12 +186,19 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     token,
     user,
+    tenant,
+    viewAsId,
+    viewAsName,
     loading,
     error,
     isAuthenticated,
     isAdmin,
-    isManager,
-    canManageRoles,
+    isStaff,
+    isOwner,
+    viewing,
+    can,
+    startViewAs,
+    stopViewAs,
     login,
     register,
     fetchMe,

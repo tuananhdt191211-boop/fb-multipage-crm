@@ -12,6 +12,7 @@ import (
 	"fb-multipage-crm/internal/handlers"
 	"fb-multipage-crm/internal/inboxrev"
 	"fb-multipage-crm/internal/middleware"
+	"fb-multipage-crm/internal/models"
 	"fb-multipage-crm/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -101,9 +102,15 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 
 	inboxHandler := handlers.NewInboxHandler(db, cfg)
 	competitorHandler := handlers.NewCompetitorHandler(db, cfg)
-	roleHandler := handlers.NewRoleHandler(db)
+	customerHandler := handlers.NewCustomerHandler(db)
 	webhookHandler := handlers.NewWebhookHandler(db, cfg, aiHandler)
 	broadcastHandler := handlers.NewBroadcastHandler(db, cfg)
+
+	// Phân quyền theo khách hàng: chuẩn hoá vai trò, giao dữ liệu dùng chung trước đây cho admin (idempotent)
+	handlers.MigrateTenancy(db)
+	jwt := middleware.JWTAuth(cfg.JWTSecret)
+	tenant := middleware.Tenancy(db, true)         // dùng được header X-Workspace (admin xem như khách, chỉ đọc)
+	tenantNoView := middleware.Tenancy(db, false) // route quản trị: không "xem như khách"
 
 	r := gin.Default()
 	// Tự động chuẩn hóa URL nếu Frontend gửi thừa dấu '/' (ví dụ /api/v1//auth/register)
@@ -141,23 +148,23 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	r.POST("/api/v1/storefront/public/orders/:code/confirm", storefrontHandler.ConfirmIntlPayment)
 	r.GET("/api/v1/inbox/avatar-check/:page_id/:psid", inboxHandler.CheckCustomerAvatar)
 
-	storefrontGroup := r.Group("/api/v1/storefront", middleware.JWTAuth(cfg.JWTSecret))
+	storefrontGroup := r.Group("/api/v1/storefront", jwt, tenant, middleware.RequireFeature(models.FeatureSites))
 	{
 		storefrontGroup.GET("", storefrontHandler.GetMyStorefront)
 		storefrontGroup.PUT("/draft", storefrontHandler.SaveDraft)
 		storefrontGroup.POST("/publish", storefrontHandler.Publish)
 		// Multi-site: mỗi tài khoản nhiều website
 		storefrontGroup.GET("/sites", storefrontHandler.ListSites)
-		storefrontGroup.POST("/sites", storefrontHandler.CreateSite)
+		storefrontGroup.POST("/sites", middleware.OwnerOnly(), storefrontHandler.CreateSite)
 		storefrontGroup.GET("/sites/:id", storefrontHandler.GetSite)
 		storefrontGroup.PUT("/sites/:id/draft", storefrontHandler.SaveSiteDraft)
 		storefrontGroup.POST("/sites/:id/publish", storefrontHandler.PublishSite)
 		storefrontGroup.POST("/sites/:id/unpublish", storefrontHandler.UnpublishSite)
-		storefrontGroup.DELETE("/sites/:id", storefrontHandler.DeleteSite)
+		storefrontGroup.DELETE("/sites/:id", middleware.OwnerOnly(), storefrontHandler.DeleteSite)
 		storefrontGroup.POST("/sites/:id/translate", storefrontHandler.TranslateStrings)
 		storefrontGroup.GET("/sites/:id/domain", storefrontHandler.GetSiteDomain)
-		storefrontGroup.PUT("/sites/:id/domain", storefrontHandler.SetSiteDomain)
-		storefrontGroup.DELETE("/sites/:id/domain", storefrontHandler.RemoveSiteDomain)
+		storefrontGroup.PUT("/sites/:id/domain", middleware.OwnerOnly(), storefrontHandler.SetSiteDomain)
+		storefrontGroup.DELETE("/sites/:id/domain", middleware.OwnerOnly(), storefrontHandler.RemoveSiteDomain)
 		storefrontGroup.GET("/sites/:id/products", storefrontHandler.ListProducts)
 		storefrontGroup.POST("/sites/:id/products", storefrontHandler.CreateProduct)
 		storefrontGroup.POST("/sites/:id/products/import", storefrontHandler.ImportProduct)
@@ -179,7 +186,7 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		storefrontGroup.GET("/sites/:id/orders", storefrontHandler.ListOrders)
 		storefrontGroup.PATCH("/sites/:id/orders/:oid", storefrontHandler.UpdateOrderStatus)
 		storefrontGroup.GET("/sites/:id/payment-settings", storefrontHandler.GetPaymentSettings)
-		storefrontGroup.PUT("/sites/:id/payment-settings", storefrontHandler.SavePaymentSettings)
+		storefrontGroup.PUT("/sites/:id/payment-settings", middleware.OwnerOnly(), storefrontHandler.SavePaymentSettings)
 		storefrontGroup.GET("/sites/:id/subscribers", storefrontHandler.ListSiteSubscribers)
 	}
 
@@ -210,31 +217,45 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// Route yêu cầu đăng nhập (JWT)
-	authProtected := r.Group("/api/v1/auth", middleware.JWTAuth(cfg.JWTSecret))
+	authProtected := r.Group("/api/v1/auth", jwt)
 	{
-		authProtected.GET("/me", authHandler.Me)
+		authProtected.GET("/me", tenant, authHandler.Me)
 		authProtected.POST("/logout", authHandler.Logout)
 	}
 
-	// Route phân cấp bậc & phân quyền (Admin & Manager)
-	roles := r.Group("/api/v1/roles", middleware.JWTAuth(cfg.JWTSecret), middleware.RequireRoles(db, "admin", "manager"))
+	// Quản trị: admin theo dõi toàn bộ khách hàng (số liệu, khoá/mở, bật tắt trang, giới hạn)
+	adminGroup := r.Group("/api/v1/admin", jwt, tenantNoView, middleware.AdminOnly())
 	{
-		roles.GET("/users", roleHandler.ListUsers)
-		roles.PATCH("/users/:id/role", middleware.RequireRoles(db, "admin"), roleHandler.AssignRole)
-		roles.PATCH("/users/:id/permissions", roleHandler.AssignStaffPermissions)
+		adminGroup.GET("/overview", customerHandler.AdminOverview)
+		adminGroup.GET("/customers", customerHandler.ListCustomers)
+		adminGroup.POST("/customers", customerHandler.CreateCustomer)
+		adminGroup.GET("/customers/:id", customerHandler.GetCustomer)
+		adminGroup.PATCH("/customers/:id", customerHandler.UpdateCustomer)
+		adminGroup.POST("/customers/:id/password", customerHandler.SetCustomerPassword)
+	}
+
+	// Nhân viên của khách hàng (chỉ chủ tài khoản quản lý)
+	teamGroup := r.Group("/api/v1/team", jwt, tenant, middleware.OwnerOnly())
+	{
+		teamGroup.GET("", customerHandler.ListTeam)
+		teamGroup.POST("", customerHandler.CreateStaff)
+		teamGroup.PATCH("/:id", customerHandler.UpdateStaff)
+		teamGroup.POST("/:id/password", customerHandler.SetStaffPassword)
+		teamGroup.DELETE("/:id", customerHandler.DeleteStaff)
 	}
 
 	// Route gộp và quản lý Fanpage Facebook
-	pagesGroup := r.Group("/api/v1/pages", middleware.JWTAuth(cfg.JWTSecret))
+	pagesGroup := r.Group("/api/v1/pages", jwt, tenant)
+	pageWrite := []gin.HandlerFunc{middleware.RequireFeature(models.FeaturePages), middleware.OwnerOnly()}
 	{
-		pagesGroup.GET("", pageHandler.ListPages)
-		pagesGroup.POST("/connect", middleware.RequireRoles(db, "admin", "manager"), pageHandler.ConnectPage)
-		pagesGroup.POST("/sync", pageHandler.SyncFromFacebook)
-		pagesGroup.PATCH("/:id/toggle", pageHandler.TogglePage)
-		pagesGroup.DELETE("/:id", pageHandler.DisconnectPage)
+		pagesGroup.GET("", middleware.RequireFeature(models.FeaturePages, models.FeatureInbox, models.FeatureAI, models.FeaturePosts, models.FeatureBroadcasts, models.FeatureCompetitors), pageHandler.ListPages)
+		pagesGroup.POST("/connect", append(pageWrite, pageHandler.ConnectPage)...)
+		pagesGroup.POST("/sync", append(pageWrite, pageHandler.SyncFromFacebook)...)
+		pagesGroup.PATCH("/:id/toggle", append(pageWrite, pageHandler.TogglePage)...)
+		pagesGroup.DELETE("/:id", append(pageWrite, pageHandler.DisconnectPage)...)
 	}
 
-	inboxGroup := r.Group("/api/v1/inbox", middleware.JWTAuth(cfg.JWTSecret))
+	inboxGroup := r.Group("/api/v1/inbox", jwt, tenant, middleware.RequireFeature(models.FeatureInbox))
 	{
 		inboxGroup.GET("/rev", inboxHandler.InboxRev) // "có tin mới chưa?" — đọc từ RAM, không chạm database
 		inboxGroup.GET("/conversations", inboxHandler.ListConversations)
@@ -245,20 +266,22 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 		inboxGroup.PUT("/conversations/:id/crm", inboxHandler.UpdateConversationCRM)
 	}
 
-	aiGroup := r.Group("/api/v1/ai", middleware.JWTAuth(cfg.JWTSecret))
+	aiGroup := r.Group("/api/v1/ai", jwt, tenant)
+	aiUse := middleware.RequireFeature(models.FeatureAI, models.FeatureInbox)
 	{
-		aiGroup.GET("/settings", aiHandler.ListAllPageSettings)
-		aiGroup.GET("/settings/:page_id", aiHandler.GetPageSetting)
-		aiGroup.PUT("/settings/:page_id", aiHandler.SavePageSetting)
-		aiGroup.POST("/suggest/:conversation_id", aiHandler.SuggestReply)
-		aiGroup.POST("/generate-script", aiHandler.GenerateSalesScript)
-		aiGroup.GET("/config", aiHandler.GetGlobalAIConfig)
-		aiGroup.POST("/config", aiHandler.SaveGlobalAIConfig)
-		aiGroup.POST("/config/test", aiHandler.TestGlobalAIConfig)
+		aiGroup.GET("/settings", aiUse, aiHandler.ListAllPageSettings)
+		aiGroup.GET("/settings/:page_id", aiUse, aiHandler.GetPageSetting)
+		aiGroup.PUT("/settings/:page_id", aiUse, aiHandler.SavePageSetting)
+		aiGroup.POST("/suggest/:conversation_id", aiUse, aiHandler.SuggestReply)
+		aiGroup.POST("/generate-script", aiUse, aiHandler.GenerateSalesScript)
+		// Khoá AI dùng chung của hệ thống: chỉ admin
+		aiGroup.GET("/config", middleware.AdminOnly(), aiHandler.GetGlobalAIConfig)
+		aiGroup.POST("/config", middleware.AdminOnly(), aiHandler.SaveGlobalAIConfig)
+		aiGroup.POST("/config/test", middleware.AdminOnly(), aiHandler.TestGlobalAIConfig)
 	}
 
 	// Route tự động lên lịch & đăng bài đa Fanpage
-	postsGroup := r.Group("/api/v1/posts", middleware.JWTAuth(cfg.JWTSecret))
+	postsGroup := r.Group("/api/v1/posts", jwt, tenant, middleware.RequireFeature(models.FeaturePosts))
 	{
 		postsGroup.GET("", postHandler.ListScheduledPosts)
 		postsGroup.POST("", postHandler.CreateScheduledPost)
@@ -271,7 +294,7 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// Route nghiên cứu & bám kênh đối thủ
-	competitorsGroup := r.Group("/api/v1/competitors", middleware.JWTAuth(cfg.JWTSecret))
+	competitorsGroup := r.Group("/api/v1/competitors", jwt, tenant, middleware.RequireFeature(models.FeatureCompetitors))
 	{
 		competitorsGroup.GET("", competitorHandler.ListCompetitors)
 		competitorsGroup.GET("/search", competitorHandler.SearchByKeyword)
@@ -285,7 +308,7 @@ func buildRouter(cfg *config.Config, db *gorm.DB) *gin.Engine {
 	}
 
 	// Route chăm sóc khách cũ tự động (trong 24h & ngoài 24h, chống spam)
-	broadcastsGroup := r.Group("/api/v1/broadcasts", middleware.JWTAuth(cfg.JWTSecret))
+	broadcastsGroup := r.Group("/api/v1/broadcasts", jwt, tenant, middleware.RequireFeature(models.FeatureBroadcasts))
 	{
 		broadcastsGroup.GET("", broadcastHandler.ListCampaigns)
 		broadcastsGroup.GET("/diagnose", broadcastHandler.DiagnosePage)

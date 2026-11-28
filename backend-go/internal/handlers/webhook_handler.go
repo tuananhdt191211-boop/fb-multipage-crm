@@ -223,6 +223,7 @@ func (h *WebhookHandler) handleCustomerInteraction(
 			suffix = customerPSID[len(customerPSID)-4:]
 		}
 		conv = models.Conversation{
+			WorkspaceID:     page.WorkspaceID, // hội thoại thuộc về khách hàng sở hữu Fanpage
 			PageID:          page.PageID,
 			PageName:        page.Name,
 			ThreadID:        "t_" + customerPSID,

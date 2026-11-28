@@ -38,7 +38,7 @@ func corsMiddleware(cfg *config.Config) gin.HandlerFunc {
 		}
 
 		c.Header("Access-Control-Allow-Credentials", "true")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin, X-Customer-Token")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, Origin, X-Customer-Token, X-Workspace")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 
 		if c.Request.Method == http.MethodOptions {

@@ -37,6 +37,11 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
+  // Admin đang "xem như khách": các API dữ liệu trả về dữ liệu của khách đó (chỉ đọc). Khu quản trị không dùng header này.
+  const viewAs = localStorage.getItem('pp_view_as')
+  if (viewAs && token && !String(config.url || '').startsWith('/admin')) {
+    config.headers['X-Workspace'] = viewAs
+  }
   return config
 })
 

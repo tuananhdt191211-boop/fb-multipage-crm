@@ -632,7 +632,7 @@ func (h *BroadcastHandler) SendOptinRequests(c *gin.Context) {
 	}
 
 	var page models.FacebookPage
-	if err := h.DB.Where("page_id = ?", req.PageID).First(&page).Error; err != nil {
+	if err := h.DB.Where("page_id = ? AND workspace_id = ?", req.PageID, wsID(c)).First(&page).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy Page"})
 		return
 	}
@@ -718,8 +718,9 @@ func (h *BroadcastHandler) SendOptinRequests(c *gin.Context) {
 // ListSubscribers GET /api/v1/broadcasts/subscribers?page_id=...
 func (h *BroadcastHandler) ListSubscribers(c *gin.Context) {
 	pageID := strings.TrimSpace(c.Query("page_id"))
+	mine := wsPageIDs(h.DB, wsID(c))
 	base := func() *gorm.DB {
-		q := h.DB.Model(&MarketingSubscription{})
+		q := h.DB.Model(&MarketingSubscription{}).Where("page_id IN (?)", mine)
 		if pageID != "" {
 			q = q.Where("page_id = ?", pageID)
 		}
@@ -737,7 +738,7 @@ func (h *BroadcastHandler) ListSubscribers(c *gin.Context) {
 	_ = base().Order("updated_at DESC").Limit(200).Find(&list).Error
 
 	var pendingInvites int64
-	inv := h.DB.Model(&MarketingOptinRequest{}).Where("status = ? AND created_at >= ?", "sent", time.Now().Add(-optinResendCooldown))
+	inv := h.DB.Model(&MarketingOptinRequest{}).Where("page_id IN (?)", mine).Where("status = ? AND created_at >= ?", "sent", time.Now().Add(-optinResendCooldown))
 	if pageID != "" {
 		inv = inv.Where("page_id = ?", pageID)
 	}
@@ -763,7 +764,7 @@ func (h *BroadcastHandler) SyncSubscribers(c *gin.Context) {
 		return
 	}
 	var page models.FacebookPage
-	if err := h.DB.Where("page_id = ?", pageID).First(&page).Error; err != nil {
+	if err := h.DB.Where("page_id = ? AND workspace_id = ?", pageID, wsID(c)).First(&page).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy Page"})
 		return
 	}

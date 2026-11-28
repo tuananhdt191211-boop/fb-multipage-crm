@@ -177,7 +177,7 @@ func (h *StorefrontHandler) getOrCreateForUser(userID uint, requestHost string) 
 }
 
 func extractUserID(c *gin.Context) (uint, bool) {
-	for _, key := range []string{"user_id", "userID", "uid"} {
+	for _, key := range []string{"ws_id", "user_id", "userID", "uid"} { // ws_id: không gian dữ liệu (nhân viên dùng dữ liệu của khách hàng chủ)
 		if val, exists := c.Get(key); exists {
 			switch v := val.(type) {
 			case uint:

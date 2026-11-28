@@ -24,7 +24,7 @@ func (h *BroadcastHandler) DiagnosePage(c *gin.Context) {
 		return
 	}
 	var page models.FacebookPage
-	if err := h.DB.Where("page_id = ?", pageID).First(&page).Error; err != nil {
+	if err := h.DB.Where("page_id = ? AND workspace_id = ?", pageID, wsID(c)).First(&page).Error; err != nil {
 		c.JSON(http.StatusOK, gin.H{"buoc": "tìm page", "loi": "Không có Page này trong hệ thống"})
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"fb-multipage-crm/internal/config"
+	"fb-multipage-crm/internal/middleware"
 	"fb-multipage-crm/internal/models"
 	"fb-multipage-crm/internal/security"
 	"fb-multipage-crm/internal/utils"
@@ -121,12 +122,16 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		PasswordHash: hash,
 		AuthProvider: "local",
 		SystemRole:   h.resolveInitialRole(),
+		Features:     defaultFeatures(), // khách hàng mới được dùng đủ các trang; admin có thể tắt bớt
 		IsActive:     true,
 	}
 
 	if err := h.DB.Create(&user).Error; err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Email này đã được sử dụng."})
 		return
+	}
+	if user.SystemRole == models.RoleAdmin {
+		MigrateTenancy(h.DB) // admin đầu tiên nhận dữ liệu dùng chung có sẵn (nếu có)
 	}
 
 	token, err := utils.GenerateJWT(user.ID, user.SystemRole, h.Cfg.JWTSecret)
@@ -172,6 +177,9 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Không thể tạo phiên đăng nhập."})
 		return
 	}
+	now := time.Now()
+	_ = h.DB.Model(&models.User{}).Where("id = ?", user.ID).UpdateColumn("last_login_at", now).Error
+	user.LastLoginAt = &now
 
 	c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 }
@@ -183,7 +191,23 @@ func (h *AuthHandler) Me(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Tài khoản không tồn tại hoặc đã bị khóa."})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"user": user})
+	t, ok := middleware.TenantOf(c)
+	if !ok {
+		var status int
+		if t, status, _ = middleware.ResolveTenant(h.DB, user, 0); status != 0 {
+			t = middleware.Tenant{UserID: user.ID, WorkspaceID: user.ID, Features: map[string]bool{}}
+		}
+	}
+	var pages, sites, staff int64
+	h.DB.Model(&models.FacebookPage{}).Where("workspace_id = ?", t.WorkspaceID).Count(&pages)
+	h.DB.Model(&models.Storefront{}).Where("user_id = ?", t.WorkspaceID).Count(&sites)
+	h.DB.Model(&models.User{}).Where("owner_id = ?", t.WorkspaceID).Count(&staff)
+	c.JSON(http.StatusOK, gin.H{"user": user, "tenant": gin.H{
+		"workspace_id": t.WorkspaceID, "owner_name": t.OwnerName, "is_owner": t.IsOwner, "viewing": t.Viewing,
+		"features": t.FeatureList(),
+		"limits":   gin.H{"max_pages": t.MaxPages, "max_sites": t.MaxSites, "max_staff": t.MaxStaff},
+		"usage":    gin.H{"pages": pages, "sites": sites, "staff": staff},
+	}})
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
@@ -468,7 +492,8 @@ func (h *AuthHandler) finishSocialLogin(c *gin.Context, provider, providerID, em
 			AvatarURL:    avatar,
 			AuthProvider: provider,
 			ProviderID:   providerID,
-			SystemRole:   "user",
+			SystemRole:   models.RoleCustomer,
+			Features:     defaultFeatures(),
 			IsActive:     true,
 		}
 		if createErr := h.DB.Create(&user).Error; createErr != nil {
@@ -509,9 +534,9 @@ func (h *AuthHandler) resolveInitialRole() string {
 	var count int64
 	h.DB.Model(&models.User{}).Count(&count)
 	if count == 0 {
-		return "admin"
+		return models.RoleAdmin
 	}
-	return "staff"
+	return models.RoleCustomer // mỗi tài khoản mới là một khách hàng với dữ liệu trống
 }
 
 func (h *AuthHandler) verifyOAuthState(c *gin.Context) bool {

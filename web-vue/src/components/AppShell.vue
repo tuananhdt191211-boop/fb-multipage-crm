@@ -3,6 +3,7 @@
 // Trên điện thoại mỗi trang tự có thanh trên cùng riêng nên khung này không hiện.
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import type { Feature } from '../types/auth'
 import {
   CalendarClock,
   ChevronsLeft,
@@ -39,19 +40,23 @@ watch(collapsed, (v) => {
 
 const user = computed(() => (auth.user || {}) as Record<string, any>)
 const userName = computed(() => user.value.full_name || user.value.name || 'Quản trị viên')
-const role = computed(() => String(user.value.role || '').toLowerCase())
+const roleNames: Record<string, string> = { admin: 'Admin', customer: 'Khách hàng', staff: 'Nhân viên' }
+const role = computed(() => roleNames[String(user.value.system_role || '')] || '')
 
+// Chỉ hiện các trang tài khoản này được dùng; admin thêm mục Khách hàng, chủ tài khoản thêm mục Nhân viên
 const items = computed(() => {
-  const list = [
+  const all: { label: string; path: string; icon: any; feature?: Feature }[] = [
     { label: 'Tổng quan', path: '/', icon: LayoutDashboard },
-    { label: 'Hộp thư đa Page', path: '/inbox', icon: MessageSquare },
-    { label: 'CSKH tự động', path: '/broadcasts', icon: Send },
-    { label: 'Lên lịch đăng bài', path: '/posts', icon: CalendarClock },
-    { label: 'Phân tích đối thủ', path: '/competitors', icon: TrendingUp },
-    { label: 'Website bán hàng', path: '/sites', icon: Globe },
-    { label: 'Fanpage', path: '/pages', icon: Layers }
+    { label: 'Hộp thư đa Page', path: '/inbox', icon: MessageSquare, feature: 'inbox' },
+    { label: 'CSKH tự động', path: '/broadcasts', icon: Send, feature: 'broadcasts' },
+    { label: 'Lên lịch đăng bài', path: '/posts', icon: CalendarClock, feature: 'posts' },
+    { label: 'Phân tích đối thủ', path: '/competitors', icon: TrendingUp, feature: 'competitors' },
+    { label: 'Website bán hàng', path: '/sites', icon: Globe, feature: 'sites' },
+    { label: 'Fanpage', path: '/pages', icon: Layers, feature: 'pages' }
   ]
-  if (role.value === 'admin' || role.value === 'manager') list.push({ label: 'Phân quyền', path: '/roles', icon: Users })
+  const list = all.filter((i) => !i.feature || auth.can(i.feature))
+  if (auth.isAdmin && !auth.viewing) list.push({ label: 'Khách hàng', path: '/admin/customers', icon: Users })
+  else if (auth.isOwner) list.push({ label: 'Nhân viên', path: '/team', icon: Users })
   return list
 })
 
@@ -114,7 +119,7 @@ async function logout() {
           <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[11px] font-bold text-white">{{ initials(userName) }}</span>
           <span v-if="!collapsed" class="min-w-0 flex-1">
             <span class="block truncate text-xs font-bold text-slate-900">{{ userName }}</span>
-            <span class="block truncate text-[11px] uppercase text-slate-400">{{ role || 'admin' }}</span>
+            <span class="block truncate text-[11px] uppercase text-slate-400">{{ role }}</span>
           </span>
         </div>
         <UiLangSwitcher variant="sidebar" :collapsed="collapsed" />

@@ -293,6 +293,7 @@ func (h *BroadcastHandler) pullAllConversationsFromMeta(page models.FacebookPage
 				_ = h.DB.Save(&conv).Error
 			} else {
 				conv = models.Conversation{
+					WorkspaceID:     page.WorkspaceID,
 					PageID:          page.PageID,
 					PageName:        page.Name,
 					ThreadID:        threadID,
@@ -608,6 +609,11 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	// Chỉ được chạy chiến dịch trên Fanpage của chính mình
+	if _, ok := ownedPage(h.DB, wsID(c), req.PageID); !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Không tìm thấy Fanpage"})
+		return
+	}
 
 	var validTemplates []string
 	for _, t := range req.Templates {
@@ -800,7 +806,7 @@ func (h *BroadcastHandler) CreateCampaign(c *gin.Context) {
 // ListCampaigns GET /api/v1/broadcasts
 func (h *BroadcastHandler) ListCampaigns(c *gin.Context) {
 	var list []BroadcastCampaign
-	_ = h.DB.Order("created_at DESC").Limit(30).Find(&list).Error
+	_ = h.DB.Where("page_id IN (?)", wsPageIDs(h.DB, wsID(c))).Order("created_at DESC").Limit(30).Find(&list).Error
 	c.JSON(http.StatusOK, gin.H{"data": list})
 }
 
@@ -818,7 +824,7 @@ func (h *BroadcastHandler) ToggleStatus(c *gin.Context) {
 	if body.Status == "running" {
 		updates["pause_reason"] = ""
 	}
-	_ = h.DB.Model(&BroadcastCampaign{}).Where("id = ?", id).Updates(updates).Error
+	_ = h.DB.Model(&BroadcastCampaign{}).Where("id = ? AND page_id IN (?)", id, wsPageIDs(h.DB, wsID(c))).Updates(updates).Error
 	if body.Status == "running" {
 		broadcastWake.Wake()
 	}
